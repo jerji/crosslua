@@ -45,9 +45,12 @@ Prior art we build on:
 
 ### Phase 0 — Baseline (in progress)
 - [x] Clone + submodules, branch `lua-runtime`, upstream remote
-- [ ] PlatformIO build of `env:default`; record flash size, RAM (`.pio` size output), free heap
-- [ ] Decide LUA heap budget from measured numbers
-- [ ] Commit docs
+- [x] PlatformIO build of `env:default` (upstream b2b1e15, 2.0.0): **5,571,712 B firmware.bin = 85.0%
+  of the 6,553,600 B slot, 981,888 B (~959KB) free.** Static RAM 66,488 B of 327,680 B (20.3%) —
+  heap left at runtime is NOT yet measured (needs the device; see Phase 1 `system.heap()` logging).
+  Cold build 10m30s on 6 cores. Hypothesis "VM+bindings fit with no partition change" holds so far.
+- [ ] Decide LUA heap budget from measured on-device free heap (reader + WiFi active)
+- [x] Commit docs
 
 ### Phase 1 — VM in firmware
 - Vendor Lua 5.4.7 into `lib/lua/` (fetch script like Grimoire's `tools/fetch_lua.py`, or vendored)

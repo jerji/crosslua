@@ -20,12 +20,22 @@ tools/                   fetch_lua.py, luac size checks, SD packer
 
 ## Toolchain
 
-- PlatformIO Core 6.2.0, installed via `uv tool install platformio` (`/root/.local/bin/pio`;
+**GOTCHA — pin the pioarduino core.** Stock PlatformIO 6.2.0 breaks the build: the platform pins
+tool-scons 4.8.1, core 6.2.0 wants 4.11.1, they reinstall over each other and the build dies with
+`No module named 'SCons.Tool.FortranCommon'` (upstream: pioarduino/platform-espressif32#529). Fix, as
+in upstream CI:
+```
+uv tool install "pioarduino-core @ https://github.com/pioarduino/platformio-core/archive/refs/tags/v6.1.19.zip"
+pio pkg install -e default
+uv pip install --python ~/.platformio/penv/bin/python "pioarduino==6.1.19"   # nested core
+```
+
+- pioarduino-core 6.1.19, installed via `uv tool install` (see above) (`/root/.local/bin/pio`;
   add to PATH). Platform: pioarduino espressif32 55.03.311 (pulled by platformio.ini),
   board `esp32-c3-devkitm-1`, Arduino framework, 16MB flash.
 - Build: `pio run -e default` (X3/X4). Output: `.pio/build/default/firmware.bin`.
   Size: `pio run -e default -t size`.
-- Host: 2 cores, 4GB RAM, 29GB free. Full builds are slow (~10-20 min cold); use
+- Host: 6 cores, 8GB RAM. Cold build 10m30s with `pio run -e default -j 6`; warm rebuilds are incremental; use
   `build_cache_dir = .cache` (already configured) and background with nohup.
 - Lint: `pio check` (cppcheck) used by upstream CI; clang-format config in repo.
 

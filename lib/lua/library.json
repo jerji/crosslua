@@ -1,0 +1,6 @@
+{
+  "name": "lua",
+  "version": "5.4.7",
+  "description": "Lua 5.4.7 vendored for CrossLua (lua.c/luac.c removed, LUA_32BITS=1)",
+  "build": { "flags": ["-DLUA_USE_C89", "-Wno-error", "-w"] }
+}
