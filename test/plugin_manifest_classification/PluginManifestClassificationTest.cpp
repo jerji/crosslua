@@ -74,3 +74,13 @@ TEST(PluginManifestClassification, VersionsMustBeExactlyThreeDigitComponents) {
   }
   EXPECT_TRUE(PluginLocations::isNewerVersion("4294967295.0.0", "1.0.0"));  // UINT32_MAX still fits
 }
+
+TEST(PluginManifestClassification, LuaAppIsDiscoverableWithoutOtherMarkers) {
+  EXPECT_TRUE(PluginLocations::isDiscoverableEntry(false, false, false, false, true));
+  EXPECT_FALSE(PluginLocations::isDiscoverableEntry(true, false, false, false, true));
+}
+
+TEST(PluginManifestClassification, LuaKindAlwaysRunsRegardlessOfReadme) {
+  EXPECT_EQ(PluginLocations::pickerAction(PluginLocations::DeviceKind::Lua, true), PluginLocations::PickerAction::Lua);
+  EXPECT_EQ(PluginLocations::pickerAction(PluginLocations::DeviceKind::Lua, false), PluginLocations::PickerAction::Lua);
+}

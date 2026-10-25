@@ -52,7 +52,14 @@ Prior art we build on:
 - [ ] Decide LUA heap budget from measured on-device free heap (reader + WiFi active)
 - [x] Commit docs
 
-### Phase 1 — VM in firmware
+### Phase 1 — VM in firmware  (**code complete, awaiting on-device test**)
+Done: `src/lua/LuaVm` (budgeted allocator, coroutine runner, count-hook preemption, sandbox, bytecode rejected),
+`src/lua/LuaApi` (gfx/input/app/system/print over an abstract `Backend`), `LuaAppActivity` (+ firmware Backend),
+plugin-picker integration (Lua app = plugin folder with `main.lua`), `sd_card_contents/plugins/hello_lua`.
+Verified: 12 host tests (ASAN+UBSAN, incl. mutation-checked memory cap), upstream plugin tests 13/13, device build OK.
+**Measured: whole runtime = +134.5 KB flash (5,571,712 -> 5,709,440 B; 87.1% of slot, 844 KB free); static RAM unchanged.**
+Not yet verified: behaviour on the real device (heap numbers, refresh feel, input mapping, orientation).
+Original scope (kept for reference):
 - Vendor Lua 5.4.7 into `lib/lua/` (fetch script like Grimoire's `tools/fetch_lua.py`, or vendored)
 - Custom allocator with hard budget (`lua_newstate` + counting alloc); OOM => Lua error, not reboot
 - `LuaAppActivity`: loads `/apps/<name>/main.lua`, runs as coroutine stepped from `loop()`
@@ -99,6 +106,7 @@ App manifest/versioning, install via existing web file-transfer UI, docs, exampl
 - **Legal/ethics** of RF apps: passive/own-network testing only; documented in app READMEs.
 
 ## Open questions
-- Run VM on the main loop task vs own FreeRTOS task (stack cost vs responsiveness)
-- Coroutine-stepped vs blocking-with-yield API for `input.wait()`
+- ~~Run VM on the main loop task vs own FreeRTOS task~~ -> main loop, coroutine-stepped with a 25 ms slice per pass (decided in Phase 1)
+- ~~Coroutine-stepped vs blocking `input.wait()`~~ -> `input.wait()` yields the coroutine (works across pcall)
+- Orientation: apps currently get whatever orientation CrossPoint is set to; add `app.orientation()`?
 - Whether to bundle a minimal `/apps/` into releases or keep fully separate repo

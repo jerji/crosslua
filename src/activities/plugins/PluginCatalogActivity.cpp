@@ -40,6 +40,7 @@
 #include "util/PluginHttp.h"
 #include "util/PluginLocations.h"
 #include "util/PluginPickerLayout.h"
+#include "LuaAppActivity.h"
 #include "util/QrUtils.h"
 #include "util/StringUtils.h"
 
@@ -214,6 +215,8 @@ std::vector<PluginRef> discoverPlugins() {
     // manifest.json first, then device.json overrides (on-device authority).
     if (e.hasManifest) readPluginMetadata(e.dir + "/manifest.json", ref);
     if (e.hasDevice) readPluginMetadata(ref.manifestPath, ref, true);
+    // CrossLua: a folder with main.lua is an on-device Lua app (unless it is a catalog).
+    if (e.hasLua && ref.deviceKind == PluginLocations::DeviceKind::None) ref.deviceKind = PluginLocations::DeviceKind::Lua;
     plugins.push_back(std::move(ref));
   }
   std::sort(plugins.begin(), plugins.end(), [](const PluginRef& lhs, const PluginRef& rhs) {
@@ -1371,6 +1374,17 @@ void PluginCatalogActivity::activateIndex(const int index) {
       startActivityForResult(std::move(viewer), [](const ActivityResult&) {});
       return;
     }
+    if (action == PluginLocations::PickerAction::Lua) {
+      auto luaApp = makeUniqueNoThrow<LuaAppActivity>(renderer, mappedInput, plugin.name, plugin.dir);
+      if (!luaApp) {
+        LOG_ERR("PCAT", "OOM: Lua app");
+        return;
+      }
+      app.clearTapFlash();
+      pickerReturnName = plugin.name;
+      startActivityForResult(std::move(luaApp), [this](const ActivityResult&) { enterPluginPicker(); });
+      return;
+    }
     if (action != PluginLocations::PickerAction::Catalog) return;
     app.clearTapFlash();  // the row leaves this screen
     pickerReturnName = plugin.name;
@@ -1701,6 +1715,9 @@ void PluginCatalogActivity::rebuildRowItems() {
           break;
         case PluginLocations::DeviceKind::Background:
           addRow(plugin.title.c_str(), subtitle, plugin.readmePath.empty() ? nullptr : ">");
+          break;
+        case PluginLocations::DeviceKind::Lua:
+          addRow(plugin.title.c_str(), subtitle ? subtitle : "Lua app", ">");
           break;
       }
     }

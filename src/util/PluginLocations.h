@@ -26,12 +26,12 @@ inline bool shouldReuseInstalledBundleDir(const std::string& destDir, const std:
   return !subdir.empty() && subdir.find('/') == std::string::npos && isPluginRoot(destDir);
 }
 
-enum class DeviceKind { None, Catalog, Background };
-enum class PickerAction { None, Catalog, Readme };
+enum class DeviceKind { None, Catalog, Background, Lua };
+enum class PickerAction { None, Catalog, Readme, Lua };
 
 constexpr bool isDiscoverableEntry(const bool quarantined, const bool hasPluginJs, const bool hasDevice,
-                                   const bool hasManifest) {
-  return !quarantined && (hasPluginJs || hasDevice || hasManifest);
+                                   const bool hasManifest, const bool hasLua = false) {
+  return !quarantined && (hasPluginJs || hasDevice || hasManifest || hasLua);
 }
 
 constexpr DeviceKind classifyDeviceManifest(const bool hasBrowseUrl, const bool hasEvents) {
@@ -43,6 +43,7 @@ constexpr DeviceKind classifyDeviceManifest(const bool hasBrowseUrl, const bool 
 // A catalog opens; any other plugin with a README shows it (web-only plugins
 // included, so their setup notes are readable on the device).
 constexpr PickerAction pickerAction(const DeviceKind kind, const bool hasReadme) {
+  if (kind == DeviceKind::Lua) return PickerAction::Lua;  // CrossLua: <plugin>/main.lua runs on-device
   if (kind == DeviceKind::Catalog) return PickerAction::Catalog;
   return hasReadme ? PickerAction::Readme : PickerAction::None;
 }
@@ -84,6 +85,7 @@ struct Entry {
   bool hasPluginJs = false;  // browser-side plugin (plugin.js)
   bool hasDevice = false;    // on-device catalog manifest (device.json)
   bool hasManifest = false;  // web UI card metadata (manifest.json)
+  bool hasLua = false;       // on-device Lua app (main.lua) — CrossLua
 };
 
 // Returns installed plugins only while the global Plugin System is enabled.

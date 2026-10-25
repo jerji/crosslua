@@ -31,7 +31,8 @@ std::vector<Entry> scanPluginsOnDisk() {
       e.hasPluginJs = Storage.exists((e.dir + "/plugin.js").c_str());
       e.hasDevice = Storage.exists((e.dir + "/device.json").c_str());
       e.hasManifest = Storage.exists((e.dir + "/manifest.json").c_str());
-      if (e.hasPluginJs || e.hasDevice || e.hasManifest) plugins.push_back(std::move(e));
+      e.hasLua = Storage.exists((e.dir + "/main.lua").c_str());
+      if (e.hasPluginJs || e.hasDevice || e.hasManifest || e.hasLua) plugins.push_back(std::move(e));
     }
   }
   return plugins;
@@ -43,7 +44,7 @@ std::vector<Entry> scanPlugins() {
   plugins.erase(std::remove_if(plugins.begin(), plugins.end(),
                                [](const Entry& entry) {
                                  return !isDiscoverableEntry(isPluginQuarantined(entry.dir), entry.hasPluginJs,
-                                                             entry.hasDevice, entry.hasManifest);
+                                                             entry.hasDevice, entry.hasManifest, entry.hasLua);
                                }),
                 plugins.end());
   return plugins;
@@ -59,7 +60,7 @@ bool anyPluginInstalledOnDisk() {
       if (entry.getName(name, sizeof(name)) == 0 || name[0] == '.') continue;
       const std::string dir = std::string(ROOTS[r]) + "/" + name;
       if (Storage.exists((dir + "/plugin.js").c_str()) || Storage.exists((dir + "/device.json").c_str()) ||
-          Storage.exists((dir + "/manifest.json").c_str())) {
+          Storage.exists((dir + "/manifest.json").c_str()) || Storage.exists((dir + "/main.lua").c_str())) {
         return true;
       }
     }
