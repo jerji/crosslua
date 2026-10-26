@@ -189,6 +189,32 @@ int app_exit(lua_State* L) {
   lua_pushboolean(L, 0);
   return lua_yield(L, 2);  // park forever; host tears the VM down
 }
+// app.open_book(path) -> false, err | (never returns). Hands the file to the reader, which replaces this app.
+// Only sd: / data: paths (the app's own folder is code, not a book).
+int app_open_book(lua_State* L) {
+  const char* spec = luaL_checkstring(L, 1);
+  if (strncmp(spec, "sd:", 3) != 0 && strncmp(spec, "data:", 5) != 0) {
+    lua_pushboolean(L, 0);
+    lua_pushstring(L, "open_book needs an sd: or data: path");
+    return 2;
+  }
+  char path[MAX_PATH_LEN + 80];
+  Scope sc;
+  const char* err = nullptr;
+  if (!resolvePath(be(L), spec, path, sizeof(path), &sc, &err)) {
+    lua_pushboolean(L, 0);
+    lua_pushstring(L, err);
+    return 2;
+  }
+  if (be(L).fsSize(path) < 0 || !be(L).openBook(path)) {
+    lua_pushboolean(L, 0);
+    lua_pushstring(L, "no such file");
+    return 2;
+  }
+  lua_pushinteger(L, -1);   // park forever: the host switches to the reader and tears this VM down
+  lua_pushboolean(L, 0);
+  return lua_yield(L, 2);
+}
 int app_name(lua_State* L) {
   lua_pushstring(L, be(L).appName());
   return 1;
@@ -290,7 +316,7 @@ void registerApi(LuaVm& vm, Backend& backend) {
                                  {"present", gfx_present}, {nullptr, nullptr}};
   static const luaL_Reg input[] = {{"poll", input_poll}, {"wait", input_wait}, {nullptr, nullptr}};
   static const luaL_Reg app[] = {{"sleep", app_sleep}, {"exit", app_exit}, {"name", app_name},
-                                 {"dir", app_dir},     {nullptr, nullptr}};
+                                 {"dir", app_dir},     {"open_book", app_open_book}, {nullptr, nullptr}};
   static const luaL_Reg sys[] = {{"millis", sys_millis}, {"heap", sys_heap},       {"lua_mem", sys_lua_mem},
                                  {"battery", sys_battery}, {nullptr, nullptr}};
   regTable(L, c, "gfx", gfx);
@@ -307,6 +333,7 @@ void registerApi(LuaVm& vm, Backend& backend) {
   registerFs(L, c);
   registerJson(L, c);
   registerNet(L, c);
+  registerZip(L, c);
   registerRequire(L, c);
 
   lua_pushlightuserdata(L, c);

@@ -107,6 +107,20 @@ class Backend {
   // Blocking (the device's own screens do the same). true = a response arrived (res.status set), false = res.error set.
   virtual bool httpRequest(const HttpRequest& req, HttpResult& res) = 0;
   virtual size_t largestFreeBlock() = 0;
+
+  // --- library: sd: scope, zip, open_book (see LuaZip.cpp / LuaFs.cpp) ------------------------------------------
+  virtual bool libraryAllowed() = 0;  // the app's manifest declares "library" (read-only access to the SD card)
+  struct ZipEntryInfo {
+    char name[96];
+    uint32_t size;  // uncompressed bytes
+  };
+  // Fills up to maxEntries entries; *total = entries in the archive. Returns the number filled, or -1 with err set.
+  virtual int zipList(const char* path, ZipEntryInfo* out, int maxEntries, int* total, char* err, size_t errCap) = 0;
+  // Inflates one entry into a malloc'd buffer (caller free()s). Refuses entries over maxBytes.
+  virtual bool zipRead(const char* path, const char* name, size_t maxBytes, char** data, size_t* len, char* err,
+                       size_t errCap) = 0;
+  // Ask the host to open `absPath` in the reader (replaces the app). false = no such file.
+  virtual bool openBook(const char* absPath) = 0;
 };
 
 // Registers print + gfx/input/app/system tables into vm.state(). Call after open(), before load().

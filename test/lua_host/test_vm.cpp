@@ -88,7 +88,8 @@ struct MockBackend : Backend {
     auto f = files.find(p);
     if (f != files.end()) return (int64_t)f->second.size();
     if (dirs.count(p)) return -2;
-    std::string pre = std::string(p) + "/";  // like FAT: a folder that holds files exists
+    std::string pre = std::string(p);  // like FAT: a folder that holds files exists
+    if (pre.empty() || pre.back() != '/') pre += "/";
     auto it = files.lower_bound(pre);
     return (it != files.end() && it->first.rfind(pre, 0) == 0) ? -2 : -1;
   }
@@ -144,6 +145,43 @@ struct MockBackend : Backend {
     res.bodyLen = res.bytes = f.body.size();
     return true;
   }
+  // ---- library mock: fake zips (path -> entries), sd: permission, open_book ------------------------------------
+  bool library = true;
+  std::map<std::string, std::vector<std::pair<std::string, std::string>>> zips;
+  std::string openedBook;
+  bool libraryAllowed() override { return library; }
+  int zipList(const char* path, ZipEntryInfo* out, int maxEntries, int* total, char* err, size_t errCap) override {
+    auto it = zips.find(path);
+    if (it == zips.end()) { snprintf(err, errCap, "cannot open zip (missing, not a zip, or damaged)"); return -1; }
+    *total = (int)it->second.size();
+    int n = 0;
+    for (auto& e : it->second) {
+      if (n >= maxEntries) break;
+      snprintf(out[n].name, sizeof(out[n].name), "%s", e.first.c_str());
+      out[n].size = (uint32_t)e.second.size();
+      n++;
+    }
+    return n;
+  }
+  bool zipRead(const char* path, const char* name, size_t maxBytes, char** data, size_t* len, char* err, size_t errCap) override {
+    auto it = zips.find(path);
+    if (it == zips.end()) { snprintf(err, errCap, "cannot open zip (missing, not a zip, or damaged)"); return false; }
+    for (auto& e : it->second) {
+      if (e.first != name) continue;
+      if (e.second.size() > maxBytes) { snprintf(err, errCap, "entry is %zu bytes, over max_bytes (%zu)", e.second.size(), maxBytes); return false; }
+      *data = (char*)malloc(e.second.size() ? e.second.size() : 1);  // malloc'd like the firmware; the binding frees it
+      memcpy(*data, e.second.data(), e.second.size());
+      *len = e.second.size();
+      return true;
+    }
+    snprintf(err, errCap, "no such entry");
+    return false;
+  }
+  bool openBook(const char* absPath) override {
+    if (!files.count(absPath)) return false;
+    openedBook = absPath;
+    return true;
+  }
   int64_t epoch = 0;  // 0 = clock not trusted
   int64_t epochNow() override { return epoch ? epoch + now / 1000 : 0; }  // epoch = clock at app start; advances with mock millis
   bool localDate(int64_t e, int out[8]) override {
@@ -177,7 +215,8 @@ struct MockBackend : Backend {
   bool fsListBegin(const char* p) override {
     listing.clear();
     listPos = 0;
-    std::string pre = std::string(p) + "/";
+    std::string pre = std::string(p);
+    if (pre.empty() || pre.back() != '/') pre += "/";
     std::set<std::string> seen;
     for (auto& f : files)
       if (f.first.rfind(pre, 0) == 0) {
@@ -1093,6 +1132,154 @@ int main() {
     CHECK(run(vm, be) == Status::Finished);
     CHECK(be.logs.size() == 1 && be.logs[0] == "false\tnot enough free RAM for WiFi + TLS (free 80K, need 96K): this app is too big for network use");
     CHECK(!be.wifiAsked);
+  }
+  {
+    TEST("sd: scope: needs the library permission, read-only, hidden paths do not exist, no escapes");
+    MockBackend be;
+    be.files["/Books/a.epub"] = "PK-fake";
+    be.files["/Books/b.txt"] = "hello";
+    be.files["/Books/.hidden/x"] = "secret";
+    be.files["/.crosspoint/wifi.json"] = "{\"pw\":\"hunter2\"}";
+    be.files["/.crosslua/data/other/secret"] = "other app data";
+    be.files["/top.txt"] = "t";
+    const char* script = R"LUA(
+      local function show(...) print(...) end
+      local l = fs.list("sd:"); if l then table.sort(l) end; show(l and table.concat(l, ","))
+      l = fs.list("sd:Books"); show(l and table.concat(l, ","))
+      show(fs.read("sd:Books/b.txt")); show(fs.read("sd:Books/a.epub", 0, 2)); show(fs.size("sd:Books/b.txt"))
+      show(fs.read("sd:.crosspoint/wifi.json")); show(fs.read("sd:Books/.hidden/x"))
+      show(fs.list("sd:.crosslua")); show(fs.read("sd:.crosslua/data/other/secret"))
+      show(fs.exists("sd:.crosspoint/wifi.json"))
+      show(fs.write("sd:Books/x.txt", "a")); show(fs.append("sd:top.txt", "a")); show(fs.remove("sd:Books/b.txt")); show(fs.mkdir("sd:New"))
+      show(fs.write_at("sd:top.txt", 0, "z"))
+      show(fs.read("sd:../x")); show(fs.read("sd:/etc/passwd")); show(fs.read("sd:Books/../.crosspoint/wifi.json")); show(fs.read("sd:Books//b.txt"))
+    )LUA";
+    for (int allowed = 0; allowed < 2; allowed++) {
+      be.library = allowed;
+      be.logs.clear();
+      LuaVm vm;
+      CHECK(vm.open(256 * 1024));
+      registerApi(vm, be);
+      CHECK(vm.load("t", script, strlen(script)));
+      CHECK(run(vm, be, 100000) == Status::Finished);
+      if (!allowed) {
+        CHECK(be.logs.size() >= 10);
+        for (auto& l : be.logs) CHECK(l.find("hunter2") == std::string::npos && l.find("other app data") == std::string::npos && l.find("secret") == std::string::npos);
+        if (!be.logs.empty()) CHECK(be.logs[0] == "nil");     // fs.list("sd:") -> nil, err ... first print shows only the list
+        for (auto& l : be.logs) CHECK(l.find("library access not permitted") != std::string::npos || l == "nil" || l == "false" || l.find("read-only") != std::string::npos);
+      } else {
+        const char* want[] = {
+            "Books/,top.txt", "a.epub,b.txt", "hello", "PK", "5",
+            "nil\thidden files and folders are not accessible", "nil\thidden files and folders are not accessible",
+            "nil\thidden files and folders are not accessible", "nil\thidden files and folders are not accessible",
+            "false",   // fs.exists() on a hidden path: plain false, indistinguishable from "missing"
+            "nil\tread-only location (write to 'data:...')", "nil\tread-only location (write to 'data:...')", "nil\tread-only location (write to 'data:...')",
+            "nil\tread-only location (write to 'data:...')", "nil\tread-only location (write to 'data:...')",
+            "nil\t'.' and '..' are not allowed", "nil\tabsolute paths are not allowed",
+            "nil\t'.' and '..' are not allowed", "nil\tempty path component",
+        };
+        const size_t n = sizeof(want) / sizeof(want[0]);
+        for (size_t i = 0; i < n; i++) {
+          CHECK(i < be.logs.size() && be.logs[i] == want[i]);
+          if (i < be.logs.size() && be.logs[i] != want[i]) printf("    [%zu] got '%s' want '%s'\n", i, be.logs[i].c_str(), want[i]);
+        }
+      }
+    }
+    // nothing the app did changed the card
+    CHECK(be.files["/Books/b.txt"] == "hello" && be.files["/top.txt"] == "t" && !be.files.count("/Books/x.txt"));
+  }
+  {
+    TEST("zip: list/read limits, errors, scopes, and an oversized entry cannot leak or crash (ASAN/LSAN)");
+    MockBackend be;
+    be.zips["/Books/a.epub"] = {{"mimetype", "application/epub+zip"}, {"META-INF/container.xml", "<container/>"},
+                                {"content.opf", std::string(5000, 'o')}, {"big.bin", std::string(70000, 'b')},
+                                {"mid.bin", std::string(30000, 'm')}};
+    be.zips["/.crosslua/data/test/d.zip"] = {{"x.txt", "from data"}};
+    be.files["/Books/plain.txt"] = "not a zip";
+    LuaVm vm;
+    CHECK(vm.open(80 * 1024));  // tight on purpose
+    registerApi(vm, be);
+    const char* script = R"LUA(
+      local l, total = zip.list("sd:Books/a.epub"); print(#l, total, l[1].name, l[1].size, l[3].name, l[3].size)
+      l, total = zip.list("sd:Books/a.epub", 2); print(#l, total)
+      print(zip.list("sd:Books/a.epub", 0)); print(zip.list("sd:Books/a.epub", 500))
+      print(zip.read("sd:Books/a.epub", "mimetype"))
+      print(#zip.read("sd:Books/a.epub", "content.opf"))
+      print(zip.read("sd:Books/a.epub", "big.bin"))
+      print(zip.read("sd:Books/a.epub", "big.bin", 70000))
+      print(zip.read("sd:Books/a.epub", "nope.txt"))
+      print(zip.read("sd:Books/a.epub", ""))
+      print(zip.read("sd:Books/a.epub", ("x"):rep(300)))
+      print(zip.read("sd:Books/plain.txt", "x"))
+      print(zip.list("sd:Books/missing.epub"))
+      print(zip.read("data:d.zip", "x.txt"))
+      print(zip.read("sd:.crosspoint/x.zip", "x"))
+      print(zip.read("app:../x.zip", "x"))
+      print(zip.read("sd:Books/a.epub", "mid.bin", 65536) == nil)   -- 30 KB inflated into an 80 KB heap: must fail cleanly or work, never crash
+      print("alive", #string.rep("y", 50))
+    )LUA";
+    CHECK(vm.load("t", script, strlen(script)));
+    CHECK(run(vm, be, 100000) == Status::Finished);
+    CHECK(be.logs.size() >= 17);
+    if (be.logs.size() >= 17) {
+      CHECK(be.logs[0] == "5\t5\tmimetype\t20\tcontent.opf\t5000");
+      CHECK(be.logs[1] == "2\t5");
+      CHECK(be.logs[2] == "nil\tmax must be 1..128" && be.logs[3] == "nil\tmax must be 1..128");
+      CHECK(be.logs[4] == "application/epub+zip");
+      CHECK(be.logs[5] == "5000");
+      CHECK(be.logs[6] == "nil\tentry is 70000 bytes, over max_bytes (32768)");
+      CHECK(be.logs[7] == "nil\tmax_bytes must be 1..65536");
+      CHECK(be.logs[8] == "nil\tno such entry");
+      CHECK(be.logs[9] == "nil\tbad entry name" && be.logs[10] == "nil\tbad entry name");
+      CHECK(be.logs[11].find("nil\tcannot open zip") == 0 && be.logs[12].find("nil\tcannot open zip") == 0);
+      CHECK(be.logs[13] == "from data");
+      CHECK(be.logs[14].find("nil\thidden") == 0);
+      CHECK(be.logs[15].find("nil\t'.' and '..'") == 0);
+      CHECK(be.logs[16] == "true" || be.logs[16] == "false");
+    }
+    CHECK(be.logs.back() == "alive\t50");
+    be.library = false;  // sd: zips need the permission; data: ones do not
+    LuaVm vm2;
+    CHECK(vm2.open(80 * 1024));
+    registerApi(vm2, be);
+    be.logs.clear();
+    const char* s2 = "print(zip.read('sd:Books/a.epub', 'mimetype'))\nprint(zip.read('data:d.zip', 'x.txt'))";
+    CHECK(vm2.load("t", s2, strlen(s2)));
+    CHECK(run(vm2, be) == Status::Finished);
+    CHECK(be.logs.size() == 2 && be.logs[0].find("nil\tlibrary access not permitted") == 0 && be.logs[1] == "from data");
+  }
+  {
+    TEST("app.open_book: sd:/data: files only, permission, parks the app and hands the path to the host");
+    const char* cases[] = {"sd:Books/a.epub", "sd:Books/missing.epub", "app:main.lua", "sd:.crosspoint/x.epub", "data:dl/b.epub", "main.lua", "http://x/y.epub"};
+    const char* wantLog[] = {"", "false\tno such file", "false\topen_book needs an sd: or data: path", "false\thidden files and folders are not accessible", "", "false\topen_book needs an sd: or data: path", "false\topen_book needs an sd: or data: path"};
+    const char* wantOpen[] = {"/Books/a.epub", "", "", "", "/.crosslua/data/test/dl/b.epub", "", ""};
+    for (int i = 0; i < 7; i++) {
+      MockBackend be;
+      be.files["/Books/a.epub"] = "PK";
+      be.files["/.crosslua/data/test/dl/b.epub"] = "PK";
+      LuaVm vm;
+      CHECK(vm.open(128 * 1024));
+      registerApi(vm, be);
+      std::string script = std::string("print(app.open_book('") + cases[i] + "'))\nprint('after')";
+      CHECK(vm.load("t", script.data(), script.size()));
+      Status st = run(vm, be);
+      CHECK(be.openedBook == wantOpen[i]);
+      if (wantOpen[i][0]) {
+        CHECK(st == Status::Waiting && vm.timeoutMs() == -1 && !vm.wakesOnEvent() && be.logs.empty());  // parked, 'after' never runs
+      } else {
+        CHECK(st == Status::Finished && be.logs.size() == 2 && be.logs[0] == wantLog[i] && be.logs[1] == "after");
+      }
+    }
+    MockBackend be;   // permission: sd: path without "library"
+    be.library = false;
+    be.files["/Books/a.epub"] = "PK";
+    LuaVm vm;
+    CHECK(vm.open(128 * 1024));
+    registerApi(vm, be);
+    const char* s3 = "print(app.open_book('sd:Books/a.epub'))";
+    CHECK(vm.load("t", s3, strlen(s3)));
+    CHECK(run(vm, be) == Status::Finished);
+    CHECK(be.openedBook.empty() && be.logs.size() == 1 && be.logs[0].find("false\tlibrary access not permitted") == 0);
   }
   {
     TEST("study_lua deck.lua: Anki HTML, entities, cloze, comment lines");

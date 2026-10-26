@@ -8,6 +8,7 @@
 #include <TrustedTime.h>
 #include <ArduinoJson.h>
 #include <WiFi.h>
+#include <ZipFile.h>
 
 #include <algorithm>
 #include <cstring>
@@ -16,6 +17,7 @@
 
 #include "MappedInputManager.h"
 #include "SilentRestart.h"
+#include "activities/ActivityManager.h"
 #include "activities/network/WifiSelectionActivity.h"
 #include "fontIds.h"
 #include "network/HttpDownloader.h"
@@ -55,6 +57,7 @@ class LuaAppActivity::Backend final : public crosslua::Backend {
   std::deque<const char*> events;  // string literals only (see collectInput)
   bool exitRequested = false;
   bool wifiConnectRequested = false;  // set by wifi.connect(); the activity launches the system WiFi UI
+  std::string openBookPath;           // set by app.open_book(); the activity hands it to the reader
 
   int width() override { return r_.getScreenWidth(); }
   int height() override { return r_.getScreenHeight(); }
@@ -141,6 +144,82 @@ class LuaAppActivity::Backend final : public crosslua::Backend {
     WiFi.mode(WIFI_OFF);
   }
   size_t largestFreeBlock() override { return HalMemory::getInternalHeap().largestBlockBytes; }
+
+  // --- library: sd: scope, zip, open_book --------------------------------------------------------------------------
+  // "permissions": ["library"] = read-only access to the SD card outside the app folder (never hidden paths).
+  bool libraryAllowed() override { return lib_; }
+  // Inflating needs ~45 KB transient (ZipFile's own docs warn about it): refuse instead of aborting mid-way.
+  static constexpr size_t ZIP_RESERVE = 48 * 1024;
+  int zipList(const char* path, crosslua::Backend::ZipEntryInfo* out, int maxEntries, int* total, char* err,
+              size_t errCap) override {
+    const std::string p(path);
+    ZipFile zip(p);
+    int n = 0;
+    *total = 0;
+    const bool ok = zip.enumerateFileEntries([&](std::string_view name, uint32_t, uint32_t) {
+      (*total)++;
+      if (n < maxEntries && name.size() < sizeof(out[0].name)) {
+        memcpy(out[n].name, name.data(), name.size());
+        out[n].name[name.size()] = '\0';
+        out[n].size = 0;
+        n++;
+      }
+    });
+    if (!ok) {
+      snprintf(err, errCap, "cannot open zip (missing, not a zip, or damaged)");
+      return -1;
+    }
+    if (zip.open()) {
+      for (int i = 0; i < n; i++) {
+        size_t sz = 0;
+        if (zip.getInflatedFileSize(out[i].name, &sz)) out[i].size = static_cast<uint32_t>(sz);
+      }
+      zip.close();
+    }
+    return n;
+  }
+  bool zipRead(const char* path, const char* name, size_t maxBytes, char** data, size_t* len, char* err,
+               size_t errCap) override {
+    *data = nullptr;
+    *len = 0;
+    const std::string p(path);
+    ZipFile zip(p);
+    size_t sz = 0;
+    if (!zip.open()) {
+      snprintf(err, errCap, "cannot open zip (missing, not a zip, or damaged)");
+      return false;
+    }
+    const bool found = zip.getInflatedFileSize(name, &sz);
+    zip.close();
+    if (!found) {
+      snprintf(err, errCap, "no such entry");
+      return false;
+    }
+    if (sz > maxBytes) {
+      snprintf(err, errCap, "entry is %u bytes, over max_bytes (%u)", (unsigned)sz, (unsigned)maxBytes);
+      return false;
+    }
+    const auto h = HalMemory::getInternalHeap();
+    if (h.freeBytes < sz + ZIP_RESERVE || h.largestBlockBytes < sz + 4096) {
+      snprintf(err, errCap, "not enough free RAM to unzip (free %uK, need %uK)", (unsigned)(h.freeBytes / 1024),
+               (unsigned)((sz + ZIP_RESERVE) / 1024));
+      return false;
+    }
+    size_t got = 0;
+    uint8_t* d = zip.readFileToMemory(name, &got, false);
+    if (!d) {
+      snprintf(err, errCap, "cannot read entry (unsupported compression or damaged)");
+      return false;
+    }
+    *data = reinterpret_cast<char*>(d);  // malloc'd by ZipFile; the binding free()s it
+    *len = got;
+    return true;
+  }
+  bool openBook(const char* absPath) override {
+    if (!Storage.exists(absPath)) return false;
+    openBookPath = absPath;
+    return true;
+  }
 
   bool httpRequest(const crosslua::Backend::HttpRequest& rq, crosslua::Backend::HttpResult& rs) override {
     auto fail = [&](const char* fmt, auto... a) {
@@ -346,10 +425,12 @@ class LuaAppActivity::Backend final : public crosslua::Backend {
     if (deserializeJson(doc, json) != DeserializationError::Ok) return;
     for (JsonVariantConst p : doc["permissions"].as<JsonArrayConst>())
       if (p.is<const char*>() && !strcmp(p.as<const char*>(), "network")) net_ = true;
+      else if (p.is<const char*>() && !strcmp(p.as<const char*>(), "library")) lib_ = true;
   }
 
   MappedInputManager& in_;
   bool net_ = false;
+  bool lib_ = false;
   std::string dir_;
   std::string dataDir_;
   HalFile listDir_;
@@ -523,6 +604,13 @@ void LuaAppActivity::step() {
   using crosslua::Status;
   const uint32_t start = millis();
   while (millis() - start < SLICE_MS) {
+    if (!backend_->openBookPath.empty()) {  // app.open_book(): the reader replaces this app (like Home's "open recent")
+      std::string path = std::move(backend_->openBookPath);
+      LOG_INF(TAG, "open_book: %s", path.c_str());
+      leaving_ = true;
+      activityManager.goToReader(std::move(path));
+      return;
+    }
     if (backend_->exitRequested) return leave();
     switch (vm_->status()) {
       case Status::Preempted:

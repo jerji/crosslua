@@ -19,4 +19,5 @@ re-check them first when merging `upstream/master`.
 | `src/activities/plugins/LuaAppActivity.cpp` | uses `lib/TrustedTime` (`trustedtime::trustedNow()`) for `time.now()` — read-only use of an existing API |
 | `lib/hal/HalGPIO.{h,cpp}`, `src/main.cpp` | `#ifdef CROSSLUA_DEV`: `injectButton(idx, hold, delay)` / `CMD:BTN:<name>:<hold>:<delay>` arms a press for later so tests can reach a blocked main loop |
 | `src/activities/plugins/LuaAppActivity.cpp` | uses `WifiSelectionActivity`, `HttpDownloader`, `WifiPowerSaveGuard`, `silentRestart()` — all existing APIs, none modified |
+| `src/activities/plugins/LuaAppActivity.cpp` | also uses `ZipFile` (read-only) and `activityManager.goToReader()` — existing APIs |
 

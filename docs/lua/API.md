@@ -1,4 +1,4 @@
-# CrossLua app API (v0.4)
+# CrossLua app API (v0.5)
 
 An app is a plugin folder containing `main.lua`, in any plugin root
 (`/plugins`, `/.plugins`, `/.crosspoint/plugins`):
@@ -100,6 +100,25 @@ Circular requires and missing modules raise a clear error listing the places sea
 For day-granular scheduling use the local calendar date, not `now() // 86400` (that rolls over at UTC midnight).
 `study_lua/main.lua` has a `days_from_civil(y, m, d)` helper.
 
+## sd: scope, zip, app.open_book — the user's library (needs the `library` permission)
+```json
+{"title": "My library app", "permissions": ["library"]}
+```
+`sd:` is the SD card outside your sandbox: `fs.list("sd:")`, `fs.list("sd:Books")`, `fs.read("sd:Books/x.txt")` (also ranges), `fs.size`, `fs.exists`.
+**Read-only** (every write/remove/mkdir/write_at refuses), and **hidden paths do not exist**: any component starting with `.`
+(`.crosspoint` = settings and WiFi credentials, `.crosslua` = other apps' data) is refused, `fs.exists` says `false`, and
+`fs.list` omits dot-names. Without the permission every `sd:` call fails with `library access not permitted`. Clean relative
+paths only (no `..`, no leading `/`).
+
+| call | notes |
+|---|---|
+| `zip.list(path [, max=64])` → `{ {name, size}… }, total` \| nil, err | `path` is any fs path (`sd:Books/a.epub`, `data:x.zip`). `max` 1…128; `total` is the real entry count; `size` is the uncompressed size |
+| `zip.read(path, entry [, max_bytes=32768])` → string \| nil, err | inflates one entry. Refuses entries over `max_bytes` (hard cap 65536) and when free RAM is short (inflate needs ~48 KB transient, so call it with a small Lua heap) |
+| `app.open_book(path)` → false, err \| (never returns) | `sd:` or `data:` file only. Parks the app, frees its memory and opens the file in the reader, replacing the app — save your state first |
+
+Typical EPUB metadata read (2 small entries, no RAM to speak of): `zip.read(p, "META-INF/container.xml")` → `full-path` of the OPF →
+`zip.read(p, opf)` → title / author / subjects; the first spine page is the book's title page.
+
 ## wifi / http — network (needs a permission)
 An app must declare it in `manifest.json`, or every call below fails with a clear error (and `wifi.status()` hides the SSID/IP):
 ```json
@@ -122,7 +141,10 @@ larger than `max_body`, not enough RAM for TLS, user pressed **Back** (`"cancell
 
 * **Calls block the device** (like every CrossPoint screen that talks to the network): draw "Loading…" and `gfx.present()` *before*
   calling. **Back cancels** a transfer.
-* HTTPS is verified against CrossPoint's CA bundle. TLS needs ≥ 40 KB free RAM **and** a ≥ 20 KB contiguous block; otherwise the
+* **HTTPS is encrypted but the server certificate is NOT verified.** CrossPoint's HTTP stack calls `setInsecure()` everywhere
+  (the wolfSSL transport has no CA bundle wired up), so a machine on your network path can impersonate the server. Never send
+  secrets you would not send over plain HTTP on that network; treat responses as untrusted input. (Planned: optional
+  certificate pinning via a PEM shipped with the app, using `SecureHttpClient::setCACert`.) TLS needs ≥ 40 KB free RAM **and** a ≥ 20 KB contiguous block; otherwise the
   call fails with `not enough free RAM for TLS (free N, largest M)`. `system.heap()` returns `free, min_free, largest_block`;
   keep your Lua heap small in network apps (`collectgarbage()` first).
 * After WiFi was used, leaving the app does a **silent reboot** to Home (the same defragmentation every WiFi screen does).
@@ -139,4 +161,4 @@ Memory: the result is built in a few KB of staging chunks; budget roughly 2–3�
 Backends: `src/lua/LuaApi.h` (`Backend` interface). Host tests: `test/lua_host/run.sh`.
 
 ## Planned (see PLAN.md)
-`zip`, `net` (raw TCP), `ble`/`hid`, `radio`, orientation control, HTTP streaming callbacks.
+`net` (raw TCP), `ble`/`hid`, `radio`, orientation control, HTTP streaming callbacks.

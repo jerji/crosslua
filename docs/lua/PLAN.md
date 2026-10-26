@@ -17,7 +17,7 @@ workflow, tests) · [UPSTREAM_TOUCHPOINTS.md](UPSTREAM_TOUCHPOINTS.md) (every ed
 |---|---|
 | 0 Baseline | **done** — stock build measured, toolchain fixed |
 | 1 VM in firmware | **done and verified on the real X4** |
-| 2 Core API | **mostly done** — gfx, input, app, system, fs (+ range reads, in-place records), require, json, time. Remaining: `zip`, shared `ui` lib in `/.crosslua/lib/`, orientation |
+| 2 Core API | **mostly done** — gfx, input, app, system, fs (+ range reads, in-place records), require, json, time. Remaining: shared `ui` lib in `/.crosslua/lib/`, orientation |
 | 3 Network (wifi/http) | **done and verified on the X4**: `wifi.connect/status/off`, `http.request/get` (HTTPS, POST form, stream-to-file, Back cancels), permission gate. Raw `net` sockets not started |
 | 4 BLE + radio | not started |
 | 5 Port features as apps | **started**: Study (flashcards, FSRS-5) and 2048 done and verified on the X4. Next: more crossplay games, AO3 library (needs Phase 3), the rest |
@@ -69,7 +69,7 @@ Flash cost of Phase 1: +137.7 KB (5,709,440 B, 87.1 %).
 ## Phase 2 — Core API (mostly done)
 Done: `fs`, `require` (written in Lua so modules may yield), `json` (staged output, depth-limited, never throws on
 decode), example apps `hello_lua`, `counter_lua`, `selftest_lua`. Cost: ~+10 KB flash.
-Remaining: `zip` (EPUB/CBZ access via ROM miniz), wall-clock `time`, a Lua `ui` helper library (list/menu/dialog/
+Done since: wall-clock `time`, range reads, `sd:` scope + `zip` + `app.open_book` (library permission, hidden paths refused). Remaining: a Lua `ui` helper library (list/menu/dialog/
 keyboard over `gfx`), `app.orientation()`, images/bitmaps.
 
 ## Measured on the real X4 (Angel's device, dev build) — authoritative
@@ -96,8 +96,9 @@ keyboard over `gfx`), `app.orientation()`, images/bitmaps.
 
 ## Phase 3 — Network API (done; verified on hardware)
 `wifi.connect()` parks the script and runs CrossPoint's own `WifiSelectionActivity` as a sub-activity (it auto-joins the
-saved network; no password ever passes through an app), `http.request/get` wraps `HttpDownloader` (esp_http_client +
-wolfSSL, CA-bundle verified). Calls **block the main loop** like every CrossPoint network screen (no worker task: a
+saved network; no password ever passes through an app), `http.request/get` wraps `HttpDownloader` (wolfSSL). **TLS
+server certificates are NOT verified** — upstream calls `setInsecure()` on every client; `HttpDownloader.h`'s "verified
+against the CA bundle" comment is stale. Pinning (`setCACert`) is a future option. Calls **block the main loop** like every CrossPoint network screen (no worker task: a
 10 KB stack is RAM we don't have); the response is POD + one `malloc` that is freed even when pushing it into Lua runs out
 of memory (ASAN/LSAN-tested, mutation-checked). Bigger-than-RAM responses go to a file (`save_to = "data:..."`) and are read
 back with `fs.read(path, off, len)`. Apps need `"permissions": ["network"]` in `manifest.json`; `wifi.status()` hides the
@@ -112,7 +113,7 @@ Consequences: **an app needs >= 96 KB free to bring WiFi up usefully** (56 + 40)
 small (~20-30 KB; Study's 48 KB would not fit) — `wifi.connect()` refuses up front with a readable reason instead of failing
 mid-request. A release build (no 9 KB capture buffers) has 9 KB more. Screens that leave the radio on and stay alive under
 the plugin picker (the Plugin Hub) cost another ~20 KB until the next reboot; Home -> Plugins on a fresh boot is clean.
-Not done: raw TCP (`net`), streaming callbacks, non-form POST bodies, response headers, WebSocket.
+See [AO3_PLAN.md](AO3_PLAN.md) for the AO3 library (milestone 1 = `sd:`/`zip`/`open_book` done and verified on the X4). Not done: raw TCP (`net`), streaming callbacks, non-form POST bodies, response headers, WebSocket.
 
 ## Phase 4 — BLE + radio (not started)
 `ble` over NimBLE (already linked for the page turner), `hid` keyboard, `radio` (promiscuous ring buffer, channel hop,

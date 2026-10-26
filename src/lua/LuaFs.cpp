@@ -48,6 +48,34 @@ bool validRel(const char* rel, const char** err) {
 }  // namespace
 
 bool resolveIn(Backend& b, Scope scope, const char* rel, char* out, size_t cap, const char** err) {
+  if (scope == Scope::Sd) {
+    // The user's SD card outside the app sandbox: read-only (callers enforce), permission-gated, and never anything hidden
+    // (.crosspoint = settings/credentials, .crosslua = other apps' data, any dot-name).
+    if (!b.libraryAllowed()) {
+      *err = "library access not permitted: add \"library\" to \"permissions\" in manifest.json";
+      return false;
+    }
+    if (rel[0] == '\0') {
+      snprintf(out, cap, "/");
+      return true;
+    }
+    if (!validRel(rel, err)) return false;
+    for (const char* p = rel;;) {
+      if (*p == '.') {
+        *err = "hidden files and folders are not accessible";
+        return false;
+      }
+      const char* slash = strchr(p, '/');
+      if (!slash) break;
+      p = slash + 1;
+    }
+    const int n = snprintf(out, cap, "/%s", rel);
+    if (n < 0 || static_cast<size_t>(n) >= cap) {
+      *err = "path too long";
+      return false;
+    }
+    return true;
+  }
   const char* root = scope == Scope::App ? b.appDir() : scope == Scope::Data ? b.dataDir() : b.libDir();
   if (rel[0] == '\0') {  // the scope root itself ("data:"): listable, never writable/removable as a file
     const int n = snprintf(out, cap, "%s", root);
@@ -76,6 +104,9 @@ bool resolvePath(Backend& b, const char* spec, char* out, size_t cap, Scope* sco
   } else if (!strncmp(spec, "lib:", 4)) {
     sc = Scope::Lib;
     spec += 4;
+  } else if (!strncmp(spec, "sd:", 3)) {
+    sc = Scope::Sd;
+    spec += 3;
   }
   if (scope) *scope = sc;
   return resolveIn(b, sc, spec, out, cap, err);
@@ -244,6 +275,7 @@ int fs_list(lua_State* L) {
   bool isDir = false;
   while (be(L).fsListNext(name, sizeof(name) - 1, &isDir)) {
     if (n >= 512) break;  // sanity cap
+    if (sc == Scope::Sd && name[0] == '.') continue;  // hidden entries do not exist as far as an app can tell
     if (isDir) strcat(name, "/");
     lua_pushstring(L, name);
     lua_rawseti(L, -2, ++n);

@@ -87,10 +87,38 @@ local function cancel_test()
   log("app is still alive.")
 end
 
-draw("Confirm: run   Right: cancel test   Back: quit")
+-- Left: can the X4 talk to AO3 (Cloudflare) at all? Fetch a real EPUB, retrying on 5xx like a real client must.
+local function ao3_test()
+  lines = {}
+  mem("ao3 test start")
+  local ok, why = wifi.connect()
+  if not ok then log("NOT CONNECTED: " .. tostring(why)); return end
+  draw("working...")
+  local url = "https://archiveofourown.org/downloads/5000/Talk_About_the_Weather.epub?updated_at=1568019238"
+  for try = 1, 5 do
+    log("GET epub, try " .. try)
+    local t0 = system.millis()
+    local r, err = http.get(url, { save_to = "data:ao3.epub" })
+    local dt = system.millis() - t0
+    if not r then
+      log(("  FAIL %s (%d ms)"):format(tostring(err), dt))
+    else
+      log(("  status %d, %d bytes (%d ms)"):format(r.status, r.bytes, dt))
+      if r.status == 200 then break end
+    end
+    app.sleep(3000)
+  end
+  log("saved size: " .. tostring(fs.size("data:ao3.epub")))
+  local head = fs.read("data:ao3.epub", 0, 4)
+  log("starts with PK (zip): " .. tostring(head == "PK\3\4"))
+  mem("ao3 test end")
+end
+
+draw("Confirm: run  Right: cancel  Left: AO3  Back: quit")
 while true do
   local ev = input.wait()
   if ev == "back" then return end
   if ev == "confirm" then run(); draw("Back: quit (silent reboot)") end
   if ev == "right" then cancel_test(); draw("Back: quit (silent reboot)") end
+  if ev == "left" then ao3_test(); draw("Back: quit (silent reboot)") end
 end

@@ -27,7 +27,7 @@ constexpr size_t MAX_WRITE_BYTES = 256 * 1024;
 constexpr size_t MAX_WRITE_AT_BYTES = 16 * 1024;
 constexpr size_t MAX_MODULE_BYTES = 64 * 1024;
 
-enum class Scope { App, Data, Lib };
+enum class Scope { App, Data, Lib, Sd };  // Sd = the SD card outside the sandbox: read-only, needs "library", no hidden paths
 
 // Path sandbox. Accepts "app:rel", "data:rel", "lib:rel" or bare "rel" (= app:). rel must be a clean
 // relative path: no "..", ".", empty parts, leading '/', backslashes, ':' or control chars.
@@ -40,5 +40,6 @@ void registerFs(lua_State* L, Ctx* c);
 void registerJson(lua_State* L, Ctx* c);
 void registerRequire(lua_State* L, Ctx* c);
 void registerNet(lua_State* L, Ctx* c);
+void registerZip(lua_State* L, Ctx* c);
 
 }  // namespace crosslua
