@@ -14,7 +14,7 @@ lib/lua/                 vendored Lua 5.4.7 (pure C)
 src/lua/                 LuaHost (VM+allocator), LuaAppActivity, bindings/
   bindings/gfx.cpp input.cpp fs.cpp ... wifi.cpp ble.cpp radio.cpp
 docs/lua/                PLAN.md, INFRASTRUCTURE.md, API.md (later)
-sd_card_contents/apps/   reference SD layout: apps/lib, apps/<name>/{app.json,main.lua}
+sd_card_contents/plugins/  reference apps: <name>/{main.lua,manifest.json,...}; shared libs go to /.crosslua/lib/ on the card
 tools/                   fetch_lua.py, luac size checks, SD packer
 ```
 
