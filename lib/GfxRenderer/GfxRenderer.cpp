@@ -1,5 +1,7 @@
 #include "GfxRenderer.h"
 
+#include "DevCapture.h"
+
 #include <BidiUtils.h>
 #include <BoardConfig.h>
 #include <BuildScratch.h>
@@ -700,6 +702,9 @@ void GfxRenderer::drawText(const int fontId, const int x, const int y, const cha
   if (text == nullptr || *text == '\0') {
     return;
   }
+#ifdef CROSSLUA_DEV
+  devcapture::text(fontId, x, y, text);
+#endif
 
   // Route non-Latin strings to the fallback font when the requested font
   // lacks the glyphs (e.g. Chinese book titles drawn with a Latin UI font).
@@ -1004,6 +1009,9 @@ void GfxRenderer::drawRoundedRect(const int x, const int y, const int width, con
 }
 
 void GfxRenderer::fillRect(const int x, const int y, const int width, const int height, const bool state) const {
+#ifdef CROSSLUA_DEV
+  devcapture::rect(x, y, width, height, state ? Color::Black : Color::White);
+#endif
   if (state) {
     fillRectImpl<Color::Black>(x, y, width, height);
   } else {
@@ -1039,6 +1047,9 @@ void GfxRenderer::drawPixelDither<Color::DarkGray>(const int x, const int y) con
 }
 
 void GfxRenderer::fillRectDither(const int x, const int y, const int width, const int height, Color color) const {
+#ifdef CROSSLUA_DEV
+  devcapture::rect(x, y, width, height, color);
+#endif
   switch (color) {
     case Color::Clear:
       break;
@@ -1312,6 +1323,10 @@ void GfxRenderer::fillRoundedRect(const int x, const int y, const int width, con
   if (width <= 0 || height <= 0) {
     return;
   }
+#ifdef CROSSLUA_DEV
+  devcapture::rect(x, y, width, height, color);
+  devcapture::Suppress devSuppressInnerFills;
+#endif
 
   // Assume if we're not rounding all corners then we are only rounding one side
   const int roundedSides = (!roundTopLeft || !roundTopRight || !roundBottomLeft || !roundBottomRight) ? 1 : 2;
@@ -1703,6 +1718,9 @@ static unsigned long start_ms = 0;
 
 void GfxRenderer::clearScreen(const uint8_t color) const {
   start_ms = millis();
+#ifdef CROSSLUA_DEV
+  devcapture::beginFrame();
+#endif
   if (_stripActive) {
     // Clear only the active band's scratch, not the shared framebuffer.
     memset(_stripBuf, color, static_cast<size_t>(panelWidthBytes) * _stripRows);
@@ -1760,11 +1778,17 @@ void GfxRenderer::displayBuffer(HalDisplay::RefreshMode refreshMode) const {
   auto elapsed = millis() - start_ms;
   LOG_DBG("GFX", "Time = %lu ms from clearScreen to displayBuffer", elapsed);
   refreshMode = applyPromotedRefresh(refreshMode);
+#ifdef CROSSLUA_DEV
+  devcapture::commitFrame();
+#endif
   display.displayBuffer(refreshMode, fadingFix);
 }
 
 void GfxRenderer::displayBufferAsync(HalDisplay::RefreshMode refreshMode) const {
   refreshMode = applyPromotedRefresh(refreshMode);
+#ifdef CROSSLUA_DEV
+  devcapture::commitFrame();
+#endif
   // The async path has no turn-off-screen hook, which the sunlight fading fix
   // relies on; keep those users on the blocking path.
   if (fadingFix) {

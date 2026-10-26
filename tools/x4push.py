@@ -18,6 +18,11 @@ def post_form(host, path, fields):
 
 
 def upload(host, local, remote_dir):
+    # The server answers 400 "File already exists" instead of overwriting (despite its docs): delete first.
+    try:
+        post_form(host, "/delete", {"path": remote_dir.rstrip("/") + "/" + os.path.basename(local)})
+    except urllib.error.HTTPError:
+        pass  # not there yet
     boundary = uuid.uuid4().hex
     name = os.path.basename(local)
     with open(local, "rb") as f:

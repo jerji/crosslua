@@ -14,4 +14,6 @@ re-check them first when merging `upstream/master`.
 | `lib/hal/HalGPIO.{h,cpp}` | `#ifdef CROSSLUA_DEV`: `injectButton(idx, holdMs)` simulates a physical press+release (pressed/released edges, `isPressed`, `getHeldTime`), so button remapping, ButtonNavigator and long-press logic all run for real |
 | `src/main.cpp` | `#ifdef CROSSLUA_DEV`: `CMD:BTN:<name>[:holdMs]` and `CMD:PING` next to upstream's `CMD:SCREENSHOT` |
 | `src/activities/ActivityManager.{h,cpp}` | `#ifdef CROSSLUA_DEV`: `currentName()` for `CMD:PING` |
+| `lib/GfxRenderer/GfxRenderer.cpp` | `#ifdef CROSSLUA_DEV` hooks into `drawText`, `fillRect`, `fillRectDither`, `fillRoundedRect`, `clearScreen`, `displayBuffer(Async)` feeding `DevCapture` (text dump for `CMD:SCREEN`) |
+| `src/main.cpp` | also `CMD:SCREEN` |
 

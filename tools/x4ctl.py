@@ -9,6 +9,10 @@ Commands
   ping                        round-trip check; prints the current screen/activity name
   btn <name[:holdMs]>...      press PHYSICAL buttons: back confirm left right up down (0.4 s apart; --gap to change).
                               e.g. `btn right right confirm`, `btn back:1300` (1.3 s hold = long press)
+  screen [--raw]              the screen as TEXT (rows, highlighted row marked '>'): no vision model needed
+  select <regex>              move the highlight (Down) until a row matching <regex> is marked '>' (max 20 presses)
+  open <regex>                select, then press Confirm; prints the resulting screen
+  expect-screen <regex> [sec] poll until the screen text matches; prints it, exit 1 on timeout
   shot [out.png] [--landscape]  grab the screen (default shot.png, portrait like CrossPoint's default orientation)
   log [seconds] [--grep RE]   print device log lines for N seconds (default 5)
   expect <regex> [seconds]    wait until a log line matches; exit 1 on timeout
@@ -105,6 +109,18 @@ class Device:
             for _ in self.lines(gap + (int(hold) / 1000.0 if hold else 0.12)):  # keep logging while we wait
                 pass
 
+    def screen(self, seconds=5.0):
+        self.send("SCREEN")
+        got, started = [], False
+        for ln in self.lines(seconds):
+            if ln.startswith("SCREEN_START:"):
+                started, got = True, []
+            if started:
+                got.append(ln)
+                if ln.startswith("SCREEN_END"):
+                    return parse_screen(got)
+        return None
+
     def screenshot_raw(self, seconds=10.0):
         """Returns the raw 1bpp 800x480 framebuffer (48000 bytes) or None."""
         self.ser.reset_input_buffer()
@@ -122,6 +138,49 @@ class Device:
         while len(data) < size and time.time() < end:
             data += self.ser.read(size - len(data))
         return data if len(data) == size else None
+
+
+SELECT_COLORS = (5, 10)  # Color::LightGray / DarkGray are what themes fill behind the selected row
+
+
+def parse_screen(lines):
+    """Parse SCREEN_START..SCREEN_END lines -> dict(seq, activity, w, h, texts[(x,y,font,text)], rects[(x,y,w,h,color)])."""
+    scr = {"seq": 0, "activity": "?", "w": 0, "h": 0, "texts": [], "rects": [], "truncated": False}
+    for ln in lines:
+        if ln.startswith("SCREEN_START:"):
+            parts = ln.split(":")
+            scr["seq"], scr["activity"] = int(parts[1]), parts[2]
+            scr["w"], scr["h"] = (int(v) for v in parts[3].split("x"))
+            scr["truncated"] = len(parts) > 4 and parts[4] == "TRUNCATED"
+        elif ln.startswith("T "):
+            _, x, y, font, text = ln.split(" ", 4)
+            scr["texts"].append((int(x), int(y), int(font), text))
+        elif ln.startswith("R "):
+            _, x, y, w, h, c = ln.split(" ")
+            scr["rects"].append((int(x), int(y), int(w), int(h), int(c)))
+    # Partial repaints can draw the same thing twice: the newest draw wins.
+    seen = {}
+    for t in scr["texts"]:
+        seen[(t[0], t[1])] = t
+    scr["texts"] = list(seen.values())
+    return scr
+
+
+def render_screen(scr):
+    """Human/LLM-readable text. '>' marks text sitting inside a gray-filled (selection) rectangle."""
+    sel = [r for r in scr["rects"] if r[4] in SELECT_COLORS and r[2] >= 120 and r[3] >= 24]
+    def selected(t):
+        return any(r[0] - 2 <= t[0] < r[0] + r[2] and r[1] - 6 <= t[1] < r[1] + r[3] for r in sel)
+    rows = {}
+    for t in sorted(scr["texts"], key=lambda t: (t[1], t[0])):
+        key = next((k for k in rows if abs(k - t[1]) <= 6), t[1])  # same visual row = within 6 px
+        rows.setdefault(key, []).append(t)
+    out = [f"[{scr['activity']} {scr['w']}x{scr['h']} frame#{scr['seq']}" + (" TRUNCATED" if scr["truncated"] else "") + "]"]
+    for key in sorted(rows):
+        cells = rows[key]
+        mark = ">" if any(selected(c) for c in cells) else " "
+        out.append(f"{mark} y={key:<4} " + "  |  ".join(c[3] for c in cells))
+    return "\n".join(out)
 
 
 def raw_to_png(raw, landscape=False):
@@ -142,6 +201,7 @@ def main(argv=None):
     ap.add_argument("--gap", type=float, default=0.4)
     ap.add_argument("--landscape", action="store_true")
     ap.add_argument("--grep")
+    ap.add_argument("--raw", action="store_true")
     ap.add_argument("cmd")
     ap.add_argument("args", nargs="*")
     a = ap.parse_args(argv)
@@ -195,6 +255,45 @@ def main(argv=None):
     if a.cmd == "btn":
         dev.press(a.args, a.gap)
         return 0
+    if a.cmd == "screen":
+        scr = dev.screen()
+        if not scr:
+            print("no screen data (dev firmware with CMD:SCREEN flashed?)")
+            return 1
+        print(render_screen(scr) if not a.raw else "\n".join(f"T {t}" for t in scr["texts"]) + "\n" + "\n".join(f"R {r}" for r in scr["rects"]))
+        return 0
+    if a.cmd in ("select", "open"):
+        rx = re.compile(a.args[0], re.I)
+        for _ in range(21):
+            scr = dev.screen(3.0)
+            if not scr:
+                print("no screen data")
+                return 1
+            marked = [ln for ln in render_screen(scr).splitlines()[1:] if ln.startswith(">")]
+            if any(rx.search(ln) for ln in marked):
+                break
+            dev.press(["right"], 0.35)
+            time.sleep(1.0)  # let the e-ink redraw finish before reading the next frame
+        else:
+            print("not found; last screen:\n" + render_screen(scr))
+            return 1
+        if a.cmd == "open":
+            dev.press(["confirm"], 0.3)
+            time.sleep(2.0)
+            scr = dev.screen(3.0)
+        print(render_screen(scr) if scr else "(no screen)")
+        return 0
+    if a.cmd == "expect-screen":
+        rx = re.compile(a.args[0], re.I | re.S)
+        end = time.time() + (float(a.args[1]) if len(a.args) > 1 else 10.0)
+        while time.time() < end:
+            scr = dev.screen(3.0)
+            if scr and rx.search(render_screen(scr)):
+                print(render_screen(scr))
+                return 0
+            time.sleep(0.3)
+        print("TIMEOUT; last screen:\n" + (render_screen(scr) if scr else "(none)"))
+        return 1
     if a.cmd == "shot":
         out = a.args[0] if a.args else "shot.png"
         raw = dev.screenshot_raw()

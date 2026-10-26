@@ -10,6 +10,7 @@
 #include <HalFrontlight.h>
 #include <HalGPIO.h>
 #include <HalMemory.h>
+#include <DevCapture.h>
 #include <HalPowerManager.h>
 #include <HalStorage.h>
 #include <HalSystem.h>
@@ -935,6 +936,8 @@ void loop() {
           }
         }
         logSerial.printf("BTN_%s:%s\n", ok ? "OK" : "ERR", name.c_str());
+      } else if (cmd == "SCREEN") {
+        devcapture::dump(logSerial, activityManager.currentName(), renderer.getScreenWidth(), renderer.getScreenHeight());
       } else if (cmd == "PING") {
         logSerial.printf("PONG:%lu:%s\n", millis(), activityManager.currentName());
 #endif

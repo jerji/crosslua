@@ -37,6 +37,12 @@ def fake_device():
                 ok = n in x4ctl.BUTTONS
                 if ok: pressed.append(n)
                 os.write(master, f"BTN_{'OK' if ok else 'ERR'}:{n}\n".encode())
+            elif line == "CMD:SCREEN":
+                os.write(master, (
+                    "SCREEN_START:7:Home:480x800\n"
+                    "T 24 120 100 Browse Files\nT 24 180 100 Library\nT 24 240 100 Plugins\nT 24 240 100 Plugins\n"
+                    "T 300 180 7 sub-title\n"
+                    "R 10 170 460 56 5\nR 0 700 480 60 16\nR 10 112 460 56 1\nSCREEN_END\n").encode())
             elif line == "CMD:SCREENSHOT":
                 os.write(master, f"SCREENSHOT_START:{len(fb)}\n".encode())
                 for i in range(0, len(fb), 1024):  # chunked like a real USB-CDC stream
@@ -68,6 +74,14 @@ check("landscape: black rect where drawn, white elsewhere", landscape.getpixel((
 # PIL ROTATE_270 = 90 deg clockwise: native (x, y) -> portrait (H-1-y, x); same transform as scripts/debugging_monitor.py
 check("portrait rotation: native (50,50) -> (H-1-50, 50), and the rect's corner moves with it",
       portrait.getpixel((H - 1 - 50, 50)) == 0 and portrait.getpixel((H - 1 - 19, 50)) == 255 and portrait.getpixel((300, 300)) == 255)
+scr = dev.screen()
+check("screen: parsed, activity + size", scr and scr["activity"] == "Home" and (scr["w"], scr["h"]) == (480, 800))
+check("screen: repeated identical draw deduped", scr and sum(1 for t in scr["texts"] if t[3] == "Plugins") == 1)
+txt = x4ctl.render_screen(scr)
+print(txt)
+check("screen: gray rect behind 'Library' marks it selected (and only it)",
+      "> y=180  Library  |  sub-title" in txt and "> y=120" not in txt and "> y=240" not in txt)
+check("screen: black button-bar rect / white rect do not mark selection", "y=700" not in txt)
 stop = True
 print("ALL PASSED" if not fails else f"{fails} FAILED")
 sys.exit(1 if fails else 0)

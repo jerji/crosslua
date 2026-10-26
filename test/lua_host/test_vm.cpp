@@ -402,6 +402,7 @@ int main() {
       CHECK(vm.resume() == Status::Waiting);
       be.events = {"confirm", "confirm", "right", "left"};
       CHECK(run(vm, be) == Status::Waiting);  // consumed all four, now idle waiting for input
+      for (auto& c : be.calls) CHECK(c.find("failed") == std::string::npos && c.find("error") == std::string::npos);  // nothing alarming is DRAWN
       saved = be.files["/.crosslua/data/test/state.json"];
       printf("    launch %d saved: %s\n", launch, saved.c_str());
       CHECK(vm.resume("back") == Status::Finished);

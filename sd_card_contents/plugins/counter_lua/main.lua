@@ -25,5 +25,5 @@ while true do
   elseif e == "right" then state.count = state.count + 10
   elseif e == "up" then state.count = 0 end
   local ok, err = store.save("state.json", state)
-  draw(ok and nil or ("save failed: " .. tostring(err)))
+  if ok then draw() else draw("save failed: " .. tostring(err)) end  -- (not `ok and nil or x`: that is always x)
 end
