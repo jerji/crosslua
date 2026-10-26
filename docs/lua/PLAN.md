@@ -19,7 +19,7 @@ workflow, tests) · [UPSTREAM_TOUCHPOINTS.md](UPSTREAM_TOUCHPOINTS.md) (every ed
 | 1 VM in firmware | **done and verified on the real X4** |
 | 2 Core API | **mostly done** — gfx, input, app, system, fs (+ range reads, in-place records), require, json, time. Remaining: shared `ui` lib in `/.crosslua/lib/`, orientation |
 | 2b Library + Tier-1 + load | **done, host-tested and mutation-checked; `load` and the Grimoire shim verified on the X4**: `sd:` scope (read-only, `library` permission, no hidden paths), `zip.list/read/inflate`, `app.open_book`, `wifi.scan`, `time.sync/set`, `fs.rename`, `system.mac`, `gfx.qr`, `gfx.rounded_rect`, `device.frontlight`, text-only sandboxed `load`, `gfx.image` (PNG/JPEG; verified on the X4 in a lean app; a PNG needs a ~60 KB contiguous block), `app.restart`/`app.entry`, per-folder storage grants (approval screen verified on the X4), streaming `require`. Pure-Lua Grimoire compatibility shim (`plugins/grimoire_lua`, `test/lua_shim`) |
-| 3 Network (wifi/http/net) | **done and verified on the X4**: `wifi.connect/status/off`, `http.request/get` (HTTPS, POST form, stream-to-file, Back cancels), raw `net.*` TCP client + UDP + `listen`/`accept` (server, `listen` permission behind the approval flow) + `net.mdns_query`, Back cancels a blocking connect. Not done: TLS sockets (`net.connect{tls=true}` still refused) |
+| 3 Network (wifi/http/net) | **done and verified on the X4**: `wifi.connect/status/off`, `http.request/get` (HTTPS, POST form, stream-to-file, Back cancels), raw `net.*` TCP client + UDP + `listen`/`accept` (server, `listen` permission behind the approval flow) + `net.mdns_query`, Back cancels a blocking connect. Not done: TLS server sockets, client certificates |
 | 4 BLE + radio | not started |
 | 5 Port features as apps | **started**: Study (flashcards, FSRS-5) and 2048 done and verified on the X4. Next: more crossplay games, AO3 library (needs Phase 3), the rest |
 | 6 Ecosystem | not started |
@@ -115,7 +115,7 @@ Consequences: **an app needs >= 96 KB free to bring WiFi up usefully** (56 + 40)
 small (~20-30 KB; Study's 48 KB would not fit) — `wifi.connect()` refuses up front with a readable reason instead of failing
 mid-request. A release build (no 9 KB capture buffers) has 9 KB more. Screens that leave the radio on and stay alive under
 the plugin picker (the Plugin Hub) cost another ~20 KB until the next reboot; Home -> Plugins on a fresh boot is clean.
-See [AO3_PLAN.md](AO3_PLAN.md) for the AO3 library (milestone 1 = `sd:`/`zip`/`open_book` done and verified on the X4). Raw TCP/UDP/listen/mDNS: [NET_SOCKETS_PLAN.md](NET_SOCKETS_PLAN.md). Not done: TLS sockets, streaming callbacks, non-form POST bodies, response headers, WebSocket.
+See [AO3_PLAN.md](AO3_PLAN.md) for the AO3 library (milestone 1 = `sd:`/`zip`/`open_book` done and verified on the X4). Raw TCP/UDP/listen/mDNS: [NET_SOCKETS_PLAN.md](NET_SOCKETS_PLAN.md). Not done: TLS server sockets, streaming callbacks, non-form POST bodies, response headers, WebSocket.
 
 ## Phase 4 — BLE + radio (not started)
 `ble` over NimBLE (already linked for the page turner), `hid` keyboard, `radio` (promiscuous ring buffer, channel hop,

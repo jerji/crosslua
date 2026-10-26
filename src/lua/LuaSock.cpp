@@ -15,6 +15,9 @@ namespace {
 // idle socket costs 3.4-3.8 KB, one after a ping/echo 6.8 KB, one with a full receive window ~16 KB, and a 64 KB burst dips
 // free heap to ~16.7 KB. Refuse a new connection below 16 KB free rather than starve the stack.
 constexpr size_t SOCK_MIN_FREE_BYTES = 16 * 1024;
+// A TLS session needs real, contiguous RAM (measured on the X4, same floors as HttpDownloader::MIN_TLS_FREE_HEAP / MIN_TLS_MAX_ALLOC).
+constexpr size_t TLS_MIN_FREE_BYTES = 40000, TLS_MIN_BLOCK_BYTES = 20000;
+constexpr int64_t CA_MIN_BYTES = 32, CA_MAX_BYTES = 8192;
 constexpr int DEFAULT_CONNECT_MS = 5000, MIN_CONNECT_MS = 100, MAX_CONNECT_MS = 15000;
 constexpr size_t MAX_HOST = 253;
 constexpr lua_Number DEFAULT_READ = 512, MAX_READ = 4096;
@@ -34,7 +37,8 @@ int pushFail(lua_State* L, const char* msg) {
 // The handle operations are kind-checked: net.read on a UDP slot would silently do the wrong thing.
 // kind: 1 TCP (read/write/available/connected), 2 UDP (udp_send/udp_recv). Returns 0 when ok, else pushes nil,err.
 int checkKind(lua_State* L, int slot, int kind, const char* what) {
-  if (be(L).netKind(slot) == kind) return 0;
+  const int k = be(L).netKind(slot);
+  if (k == kind || (kind == 1 && k == 4)) return 0;  // a TLS client (kind 4) is a TCP socket for read/write/available/connected
   char msg[64];
   snprintf(msg, sizeof(msg), "not a %s socket", what);
   return pushFail(L, msg);
@@ -124,14 +128,17 @@ int net_resolve(lua_State* L) {
   return 1;
 }
 
-// net.connect(host, port [, {timeout_ms = 5000}]) -> handle | nil, err. Blocks up to timeout_ms (100..15000).
-// Reserved option keys: tls, insecure (not implemented yet: refused with a clear message, never silently ignored).
+// net.connect(host, port [, {timeout_ms = 5000, tls = false, ca = path, insecure = false}]) -> handle | nil, err. Blocks up to
+// timeout_ms (100..15000). tls=true opens a TLS client and needs EXACTLY ONE trust choice: ca = "<PEM file>" (the server must
+// chain to that certificate: pin your server's CA) or insecure = true (encrypted, but anyone can impersonate the server).
+// ca/insecure without tls=true are refused, never silently ignored. One TLS socket at a time (the session costs ~40 KB).
 int net_connect(lua_State* L) {
   size_t n = 0;
   const char* host = luaL_checklstring(L, 1, &n);
   const lua_Number port = luaL_checknumber(L, 2);
   lua_Number timeout = DEFAULT_CONNECT_MS;
-  bool wantTls = false;
+  bool wantTls = false, insecure = false;
+  const char* caSpec = nullptr;
   if (!lua_isnoneornil(L, 3)) {
     luaL_checktype(L, 3, LUA_TTABLE);
     lua_getfield(L, 3, "timeout_ms");
@@ -141,7 +148,13 @@ int net_connect(lua_State* L) {
     wantTls = lua_toboolean(L, -1) != 0;
     lua_pop(L, 1);
     lua_getfield(L, 3, "insecure");
-    wantTls = wantTls || lua_toboolean(L, -1) != 0;
+    insecure = lua_toboolean(L, -1) != 0;
+    lua_pop(L, 1);
+    lua_getfield(L, 3, "ca");
+    if (!lua_isnil(L, -1)) {
+      if (lua_type(L, -1) != LUA_TSTRING) return luaL_argerror(L, 3, "ca must be a path string");  // no number->string coercion
+      caSpec = lua_tostring(L, -1);  // the string stays referenced by the options table
+    }
     lua_pop(L, 1);
   }
   if (int r = gateOnline(L)) return r;
@@ -149,9 +162,15 @@ int net_connect(lua_State* L) {
   if (port < 1 || port > 65535 || port != static_cast<int>(port)) return pushFail(L, "port must be an integer 1..65535");
   if (timeout < MIN_CONNECT_MS || timeout > MAX_CONNECT_MS || timeout != static_cast<int>(timeout))
     return pushFail(L, "timeout_ms must be an integer 100..15000");
-  if (wantTls) return pushFail(L, "tls sockets are not implemented yet (plain TCP only)");
+  if (!wantTls && (insecure || caSpec)) return pushFail(L, "ca and insecure only apply with tls=true");
+  if (wantTls && insecure && caSpec) return pushFail(L, "pass either ca or insecure, not both");
+  if (wantTls && !insecure && !caSpec)
+    return pushFail(L, "tls needs ca=\"<PEM file>\" (verified) or insecure=true (encrypted, server NOT authenticated)");
   bool free = false;
-  for (int i = 0; i < Backend::MAX_SOCKETS; i++) free = free || !be(L).netIsOpen(i);
+  for (int i = 0; i < Backend::MAX_SOCKETS; i++) {
+    free = free || !be(L).netIsOpen(i);
+    if (wantTls && be(L).netKind(i) == 4) return pushFail(L, "only one TLS socket at a time (it costs ~40 KB of RAM)");
+  }
   if (!free) return pushFail(L, "too many open sockets (max 8)");
   const size_t freeNow = be(L).freeHeap();
   if (freeNow < SOCK_MIN_FREE_BYTES) {
@@ -161,7 +180,32 @@ int net_connect(lua_State* L) {
     return pushFail(L, msg);
   }
   char err[96] = {0};
-  const int slot = be(L).netConnect(host, static_cast<int>(port), static_cast<int>(timeout), err, sizeof(err));
+  int slot;
+  if (!wantTls) {
+    slot = be(L).netConnect(host, static_cast<int>(port), static_cast<int>(timeout), err, sizeof(err));
+  } else {
+    const size_t largest = be(L).largestFreeBlock();
+    if (freeNow < TLS_MIN_FREE_BYTES || largest < TLS_MIN_BLOCK_BYTES) {
+      char msg[96];
+      snprintf(msg, sizeof(msg), "not enough free RAM for TLS (free %u, largest %u)", static_cast<unsigned>(freeNow),
+               static_cast<unsigned>(largest));
+      return pushFail(L, msg);
+    }
+    char* pem = nullptr;  // Lua-heap userdata: budget-accounted, freed with the VM even if a later step raises
+    if (caSpec) {
+      char path[MAX_PATH_LEN + 80];
+      Scope sc;
+      const char* perr = nullptr;
+      if (!resolvePath(be(L), caSpec, path, sizeof(path), &sc, &perr)) return pushFail(L, perr);
+      const int64_t sz = be(L).fsSize(path);
+      if (sz == -1) return pushFail(L, "ca file not found");
+      if (sz < CA_MIN_BYTES || sz > CA_MAX_BYTES) return pushFail(L, "ca file must be a PEM of 32..8192 bytes");
+      pem = static_cast<char*>(lua_newuserdata(L, static_cast<size_t>(sz) + 1));
+      if (!be(L).fsReadInto(path, pem, static_cast<size_t>(sz), 0)) return pushFail(L, "cannot read the ca file");
+      pem[sz] = '\0';
+    }
+    slot = be(L).netConnectTls(host, static_cast<int>(port), static_cast<int>(timeout), pem, err, sizeof(err));
+  }
   if (slot < 0) return pushFail(L, err[0] ? err : "cannot connect");
   lua_pushinteger(L, slot + 1);
   return 1;

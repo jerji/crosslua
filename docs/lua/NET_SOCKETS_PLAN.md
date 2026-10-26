@@ -66,7 +66,7 @@ Shipped as `net.info / resolve / connect / read / write / available / connected 
 Differences from the proposal above:
 - `net.local()` became **`net.info()`**: `local` is a Lua keyword, so `net.local()` does not parse.
 - `net.resolve(host)` has no timeout argument: `WiFi.hostByName` in this Arduino core takes none (it uses the system DNS timeout).
-- `{tls=true}` / `{insecure=true}` are accepted as option names but **refused with a clear message**: TLS sockets are the next step.
+- `{tls=true, ca=<PEM path> | insecure=true}`: TLS client sockets (kind 4), built on the SDK `SecureClient`. Done and verified on the X4 (verified handshake, wrong-CA refusal, insecure, one at a time, RAM floors).
 
 What the device told us (WiFi up, memprobe_lua / socktest_lua against `echo_server.py` on the LAN):
 - The 40 KB guard floor is wrong once the radio is up: free heap is ~44 KB, so Lua could allocate ~1.3 KB. Any floor above ~16 KB made reads fail mid-stream (TCP buffering alone dips free heap to ~16.7 KB in a 64 KB burst). Floors of 16, 12 and 8 KB all completed with a matching SHA-256. **Shipped: 12 KB after a successful `wifi.connect()`** (one-way; WiFi apps restart the device on exit).
@@ -76,7 +76,7 @@ What the device told us (WiFi up, memprobe_lua / socktest_lua against `echo_serv
 - Closed connections sit in TIME_WAIT: ~4.6 KB for the first ~40 cycles, then a plateau (+212 bytes over the next 120).
 - Timings: connect to a LAN host 16-26 ms; DNS 30-52 ms; refused port 18-19 ms; a blackhole host with `timeout_ms=1500` failed after 1504-1505 ms.
 
-Done: UDP (verified on the X4), `net.listen`/`accept` (host-tested, 14 mutants caught, firmware build pending), `net.mdns_query` (host-tested, 14 mutants caught, firmware build pending). Still open: TLS sockets (`SecureClient`, needs ~60 KB: that does not fit next to a socket-using Lua heap on the X4 without measurement).
+Done: UDP (verified on the X4), `net.listen`/`accept` (host-tested, 14 mutants caught, firmware build pending), `net.mdns_query` (host-tested, 14 mutants caught, firmware build pending). TLS client sockets: done. **Measured on the X4** (WiFi up, tls.lua): heap before the handshake free 46.9 KB / largest 43.0 KB; session open free 36.1 KB / largest 23.5 KB; after close free 46.5 KB; the low-water mark during the verified handshake was **7.6 KB**, i.e. the handshake transiently uses ~39 KB. So it fits, but only just: the floors are free >= 40000 and largest block >= 20000 (same as `http.request`). A wrong CA is refused at the handshake (server sees `unknown ca`). A raw TLS socket fetched `HTTP/1.1 200` from example.com with `insecure=true`. Not done: TLS server sockets, client certificates, system CA bundle (use `ca=`), session reuse.
 
 Back-to-cancel for `net.connect` is DONE (verified on the X4): the backend performs the connect itself as a non-blocking
 socket + select in 40 ms slices, pumping the buttons and the dev serial channel each slice; Back (physical or injected)

@@ -107,6 +107,9 @@ class Backend {
   virtual bool netLocal(char* ip, char* mask, char* gateway, char* dns, size_t cap) = 0;  // false: WiFi is down
   virtual bool netResolve(const char* host, char* ip, size_t ipCap, char* err, size_t errCap) = 0;
   virtual int netConnect(const char* host, int port, int timeoutMs, char* err, size_t errCap) = 0;  // slot, or -1 + err
+  // TLS client (slot kind 4, at most one open: the session costs ~40 KB). caPem != nullptr verifies the server against that
+  // PEM (the connection fails when it does not match); nullptr = encrypted but UNVERIFIED (the app asked for insecure).
+  virtual int netConnectTls(const char* host, int port, int timeoutMs, const char* caPem, char* err, size_t errCap) = 0;
   virtual bool netIsOpen(int slot) = 0;                              // the handle is allocated (even if the peer closed)
   virtual int netKind(int slot) = 0;                                 // 0 free, 1 TCP, 2 UDP
   virtual int netAvailable(int slot) = 0;                            // bytes waiting; -1 when the slot is not open

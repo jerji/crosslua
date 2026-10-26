@@ -201,6 +201,21 @@ struct MockBackend : Backend {
     snprintf(err, errCap, "no free slot (mock)");
     return -1;
   }
+  // --- TLS client mock (kind 4) ---
+  int tlsCalls = 0;
+  std::string tlsCaSeen = "<none>";  // the PEM the binding handed over, or "<insecure>"
+  const char* tlsFailMsg = nullptr;
+  int netConnectTls(const char* host, int port, int timeoutMs, const char* caPem, char* err, size_t errCap) override {
+    tlsCalls++;
+    tlsCaSeen = caPem ? caPem : "<insecure>";
+    if (tlsFailMsg) {
+      snprintf(err, errCap, "%s", tlsFailMsg);
+      return -1;
+    }
+    const int s = netConnect(host, port, timeoutMs, err, errCap);
+    if (s >= 0) socks[s].kind = 4;
+    return s;
+  }
   bool netIsOpen(int s) override { return s >= 0 && s < Backend::MAX_SOCKETS && socks[s].used; }
   int netKind(int s) override { return netIsOpen(s) ? socks[s].kind : 0; }
   int udpOpen(int port, char* err, size_t errCap) override {
@@ -3429,7 +3444,8 @@ int main() {
         "nil\tport must be an integer 1..65535", "nil\tport must be an integer 1..65535", "nil\tport must be an integer 1..65535",
         "nil\ttimeout_ms must be an integer 100..15000", "nil\ttimeout_ms must be an integer 100..15000",
         "nil\ttimeout_ms must be an integer 100..15000",
-        "nil\ttls sockets are not implemented yet (plain TCP only)", "nil\ttls sockets are not implemented yet (plain TCP only)",
+        "nil\ttls needs ca=\"<PEM file>\" (verified) or insecure=true (encrypted, server NOT authenticated)",
+        "nil\tca and insecure only apply with tls=true",
         "false", "false", "nil\tconnection refused (mock)", "1\t4\t8", "nil\ttoo many open sockets (max 8)", "true", "2",
         "nil\tmax must be an integer 1..4096", "nil\tmax must be an integer 1..4096", "nil\tmax must be an integer 1..4096",
         "nil\tdata too large (max 16384 per call; loop on the returned count)",
@@ -4316,6 +4332,146 @@ int main() {
       CHECK(run(vm, be, 100000) == Status::Finished);
       CHECK(be.logs.size() == 2);
       for (size_t i = 0; i < be.logs.size(); i++) CHECK(be.logs[i] == "nil\tno microphone on this board");
+    }
+  }
+  {
+    TEST("net: TLS client sockets: trust choice is mandatory, ca PEM is read through the sandbox, one at a time, RAM floors, kind-4 is TCP");
+    const char* PEM = "-----BEGIN CERTIFICATE-----\nMIIBFAKEFAKEFAKEFAKEFAKEFAKEFAKEFAKEFAKE\n-----END CERTIFICATE-----\n";
+    {
+      MockBackend be;
+      be.net = true;
+      be.wifiUp = true;
+      be.files["/plugins/test/ca.pem"] = PEM;
+      be.files["/plugins/test/tiny.pem"] = "short";
+      be.files["/plugins/test/huge.pem"] = std::string(8193, 'A');
+      be.sockReply["secure.test:443"] = "HELLO";
+      LuaVm vm;
+      CHECK(vm.open(128 * 1024));
+      registerApi(vm, be);
+      const char* script = R"LUA(
+        print(net.connect("secure.test", 443, {tls = true}))
+        print(net.connect("secure.test", 443, {tls = true, insecure = true, ca = "app:ca.pem"}))
+        print(net.connect("secure.test", 443, {ca = "app:ca.pem"}))
+        print(net.connect("secure.test", 443, {insecure = true}))
+        print(net.connect("secure.test", 443, {tls = true, ca = "app:missing.pem"}))
+        print(net.connect("secure.test", 443, {tls = true, ca = "app:tiny.pem"}))
+        print(net.connect("secure.test", 443, {tls = true, ca = "app:huge.pem"}))
+        print(net.connect("secure.test", 443, {tls = true, ca = "nowhere:x.pem"}))
+        print(pcall(net.connect, "secure.test", 443, {tls = true, ca = 5}))
+        local a = net.connect("secure.test", 443, {tls = true, ca = "app:ca.pem"})
+        print(a)
+        print(net.connect("secure.test", 443, {tls = true, insecure = true}))
+        print(net.read(a, 5))
+        print(net.write(a, "GET"))
+        print(net.available(a), net.connected(a))
+        print(net.close(a))
+        local b = net.connect("secure.test", 443, {tls = true, insecure = true})
+        print(b)
+      )LUA";
+      CHECK(vm.load("t", script, strlen(script)));
+      CHECK(run(vm, be, 400000) == Status::Finished);
+      const char* want[] = {
+          "nil\ttls needs ca=\"<PEM file>\" (verified) or insecure=true (encrypted, server NOT authenticated)",
+          "nil\tpass either ca or insecure, not both",
+          "nil\tca and insecure only apply with tls=true",
+          "nil\tca and insecure only apply with tls=true",
+          "nil\tca file not found",
+          "nil\tca file must be a PEM of 32..8192 bytes",
+          "nil\tca file must be a PEM of 32..8192 bytes",
+          "nil\tillegal character in path",
+          "false\tbad argument #3 to '?' (ca must be a path string)",
+          "1",
+          "nil\tonly one TLS socket at a time (it costs ~40 KB of RAM)",
+          "HELLO", "3", "0\ttrue", "true", "1"};
+      const size_t N = sizeof(want) / sizeof(want[0]);
+      CHECK(be.logs.size() == N);
+      if (be.logs.size() != N || getenv("DUMP_LOGS")) for (size_t i = 0; i < be.logs.size(); i++) printf("    tls log[%zu] '%s'\n", i, be.logs[i].c_str());
+      for (size_t i = 0; i < N && i < be.logs.size(); i++) {
+        CHECK(be.logs[i] == want[i]);
+        if (be.logs[i] != want[i]) printf("    tls #%zu got '%s' want '%s'\n", i + 1, be.logs[i].c_str(), want[i]);
+      }
+      CHECK(be.tlsCalls == 2);  // every refused call stopped in the binding; the verified one and the reopen
+    }
+    {
+      MockBackend be;  // the PEM the backend sees is exactly the file; insecure hands it nullptr
+      be.net = true;
+      be.wifiUp = true;
+      be.files["/plugins/test/ca.pem"] = PEM;
+      LuaVm vm;
+      CHECK(vm.open(128 * 1024));
+      registerApi(vm, be);
+      const char* script = "print(net.connect('secure.test', 443, {tls = true, ca = 'app:ca.pem'}))";
+      CHECK(vm.load("t", script, strlen(script)));
+      CHECK(run(vm, be, 100000) == Status::Finished);
+      CHECK(be.tlsCalls == 1 && be.tlsCaSeen == PEM);
+    }
+    {
+      MockBackend be;
+      be.net = true;
+      be.wifiUp = true;
+      LuaVm vm;
+      CHECK(vm.open(128 * 1024));
+      registerApi(vm, be);
+      const char* script = "print(net.connect('secure.test', 443, {tls = true, insecure = true}))";
+      CHECK(vm.load("t", script, strlen(script)));
+      CHECK(run(vm, be, 100000) == Status::Finished);
+      CHECK(be.tlsCalls == 1 && be.tlsCaSeen == "<insecure>");
+    }
+    {
+      MockBackend be;  // RAM floors: free 40000 and largest block 20000 are the minimum (boundary values pass)
+      be.net = true;
+      be.wifiUp = true;
+      LuaVm vm;
+      CHECK(vm.open(128 * 1024));
+      registerApi(vm, be);
+      const char* script = "print(net.connect('secure.test', 443, {tls = true, insecure = true}))";
+      be.freeHeapVal = 39999;
+      be.largest = 100000;
+      CHECK(vm.load("t", script, strlen(script)));
+      CHECK(run(vm, be, 100000) == Status::Finished);
+      CHECK(be.logs.size() == 1 && be.logs[0] == "nil\tnot enough free RAM for TLS (free 39999, largest 100000)");
+      CHECK(be.tlsCalls == 0);
+    }
+    {
+      MockBackend be;
+      be.net = true;
+      be.wifiUp = true;
+      be.largest = 19999;
+      LuaVm vm;
+      CHECK(vm.open(128 * 1024));
+      registerApi(vm, be);
+      const char* script = "print(net.connect('secure.test', 443, {tls = true, insecure = true}))";
+      CHECK(vm.load("t", script, strlen(script)));
+      CHECK(run(vm, be, 100000) == Status::Finished);
+      CHECK(be.logs.size() == 1 && be.logs[0].rfind("nil\tnot enough free RAM for TLS", 0) == 0);
+      CHECK(be.tlsCalls == 0);
+    }
+    {
+      MockBackend be;  // exactly at the floors: allowed
+      be.net = true;
+      be.wifiUp = true;
+      be.freeHeapVal = 40000;
+      be.largest = 20000;
+      LuaVm vm;
+      CHECK(vm.open(128 * 1024));
+      registerApi(vm, be);
+      const char* script = "print(net.connect('secure.test', 443, {tls = true, insecure = true}))";
+      CHECK(vm.load("t", script, strlen(script)));
+      CHECK(run(vm, be, 100000) == Status::Finished);
+      CHECK(be.logs.size() == 1 && be.logs[0] == "1" && be.tlsCalls == 1);
+    }
+    {
+      MockBackend be;  // the backend's own failure text (handshake / certificate mismatch / cancelled) passes through
+      be.net = true;
+      be.wifiUp = true;
+      be.tlsFailMsg = "tls handshake failed (certificate does not match the ca)";
+      LuaVm vm;
+      CHECK(vm.open(128 * 1024));
+      registerApi(vm, be);
+      const char* script = "print(net.connect('secure.test', 443, {tls = true, insecure = true}))";
+      CHECK(vm.load("t", script, strlen(script)));
+      CHECK(run(vm, be, 100000) == Status::Finished);
+      CHECK(be.logs.size() == 1 && be.logs[0] == "nil\ttls handshake failed (certificate does not match the ca)");
     }
   }
   printf(g_fail ? "\n%d FAILED\n" : "\nALL PASSED\n", g_fail);

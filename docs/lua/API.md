@@ -1,4 +1,4 @@
-# CrossLua app API (v0.19)
+# CrossLua app API (v0.20)
 
 An app is a plugin folder containing `main.lua`, in any plugin root
 (`/plugins`, `/.plugins`, `/.crosspoint/plugins`):
@@ -230,13 +230,13 @@ CrossPoint runs on more boards than the X4. Hardware features are gated by the f
 
 ## net — raw TCP client sockets + UDP + listen + mDNS (needs the `network` permission and WiFi up)
 
-Plain TCP over the Arduino `NetworkClient` that CrossPoint already links for its web server (no extra network code). Join WiFi first with `wifi.connect()`. Same permission and "WiFi up" rules as `http.*`. Not implemented yet: TLS sockets (`{tls=true}` is refused, never silently ignored).
+Plain TCP over the Arduino `NetworkClient` that CrossPoint already links for its web server (no extra network code). Join WiFi first with `wifi.connect()`. Same permission and "WiFi up" rules as `http.*`. TLS client sockets (`{tls=true, ...}`) ride the same handles; see `net.connect`.
 
 | call | |
 |---|---|
 | `net.info()` -> `{ip, mask, gateway, dns}` \| nil, err | The device's own addressing. (Not `net.local`: `local` is a Lua keyword.) |
 | `net.resolve(host)` -> `"a.b.c.d"` \| nil, err | DNS (system timeout, blocks). An IPv4 literal is returned as is with no DNS traffic. Host names: letters, digits, `.` `-` `_`, at most 253 characters. |
-| `net.connect(host, port [, {timeout_ms=5000}])` -> handle \| nil, err | Blocks up to `timeout_ms` (100..15000); **Back cancels** the wait (`nil, "cancelled"`), same as `http`. Handles are small integers 1..8 (TCP and UDP share the table). Refused when 8 are open or under 16 KB free RAM. |
+| `net.connect(host, port [, {timeout_ms=5000, tls=false, ca=path, insecure=false}])` -> handle \| nil, err | Blocks up to `timeout_ms` (100..15000); **Back cancels** the wait (`nil, "cancelled"`), same as `http`. Handles are small integers 1..8 (TCP and UDP share the table). Refused when 8 are open or under 16 KB free RAM. **`tls=true`** opens a TLS 1.3 client and needs exactly one trust choice, because certificate trust is never guessed: **`ca="app:ca.pem"`** (a PEM of 32..8192 bytes in a readable scope; the server must chain to it, otherwise `nil, "...tls handshake failed..."`: pin your own CA) or **`insecure=true`** (encrypted, but the server is NOT authenticated: anyone on the path can impersonate it). `ca` or `insecure` without `tls=true`, both together, or neither with `tls=true` are refused. The handle then works with `read/write/available/connected/close` like a TCP one. **One TLS socket at a time**; the handshake transiently needs ~39 KB (measured on the X4: heap low-water 7.6 KB during it), so it is refused below 40 KB free or a 20 KB contiguous block (`not enough free RAM for TLS (free N, largest M)`), the same floors as `http.request`. Open it right after `wifi.connect()`, before you build big tables, and close it when done. Back cancels the handshake between its steps. |
 | `net.read(h [, max=512])` -> string \| nil, "closed" | Never blocks. `""` means nothing has arrived yet. `max` 1..4096. After the peer closes you still get everything it sent, then `nil, "closed"`. |
 | `net.write(h, data)` -> n \| nil, err | `data` at most 16384 bytes per call; **n can be less than `#data`**: loop on the returned count. |
 | `net.available(h)` -> n | Bytes waiting (0 when none or closed). |

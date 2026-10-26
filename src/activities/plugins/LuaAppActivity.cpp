@@ -6,6 +6,7 @@
 #include <AudioManager.h>
 #include <Buzzer.h>
 #include <Microphone.h>
+#include <SecureClient.h>
 #include <EnvironmentSensor.h>
 #include <Epub.h>
 #include <functional>
@@ -327,7 +328,7 @@ class LuaAppActivity::Backend final : public crosslua::Backend {
   bool imuTried_ = false, envTried_ = false, buzzerTried_ = false, ledTried_ = false;
   ~Backend() override {
     for (int i = 0; i < crosslua::Backend::MAX_SOCKETS; i++)
-      if (sockUsed_[i]) socks_[i].stop();  // an app that exits with sockets open must not leak them
+      if (sockUsed_[i]) netClose(i);  // an app that exits with sockets open must not leak them (TCP, UDP, listen server, TLS session)
     if (buzzer_.present()) {
       buzzer_.noTone();
       buzzer_.end();
@@ -447,6 +448,10 @@ class LuaAppActivity::Backend final : public crosslua::Backend {
   bool sockUsed_[crosslua::Backend::MAX_SOCKETS] = {};
   int sockKind_[crosslua::Backend::MAX_SOCKETS] = {};  // 0 free, 1 TCP, 2 UDP, 3 server
   WiFiServer* sockServers_[crosslua::Backend::MAX_SOCKETS] = {};  // non-null for kind-3 slots
+  // One TLS client at a time (kind 4): the wolfSSL session + record buffers cost ~40 KB, so it is heap-allocated only while open.
+  freeink::SecureClient* tls_ = nullptr;
+  std::string tlsCa_;  // the pinned PEM; SecureClient keeps the pointer, so it must outlive the session
+  Client& sockCli(int s) { return sockKind_[s] == 4 && tls_ ? static_cast<Client&>(*tls_) : static_cast<Client&>(socks_[s]); }
   static void fmtIp(char* out, size_t cap, const IPAddress& ip) { snprintf(out, cap, "%u.%u.%u.%u", ip[0], ip[1], ip[2], ip[3]); }
   bool netLocal(char* ip, char* mask, char* gw, char* dns, size_t cap) override {
     if (WiFi.status() != WL_CONNECTED) return false;
@@ -541,6 +546,46 @@ class LuaAppActivity::Backend final : public crosslua::Backend {
     sockKind_[slot] = 1;
     return slot;
   }
+  // TLS client. The handshake polls the abort callback between its steps, so Back cancels (the longest uninterruptible
+  // stretch is one TCP connect window). caPem != nullptr verifies the server against it; nullptr = unverified (app asked).
+  int netConnectTls(const char* host, int port, int timeoutMs, const char* caPem, char* err, size_t errCap) override {
+    int slot = -1;
+    for (int i = 0; i < crosslua::Backend::MAX_SOCKETS && slot < 0; i++)
+      if (!sockUsed_[i]) slot = i;
+    if (slot < 0 || tls_) {
+      snprintf(err, errCap, slot < 0 ? "too many open sockets (max 8)" : "only one TLS socket at a time");
+      return -1;
+    }
+    auto* c = new (std::nothrow) freeink::SecureClient();
+    if (!c) {
+      snprintf(err, errCap, "out of memory for TLS");
+      return -1;
+    }
+    if (caPem) {
+      tlsCa_ = caPem;
+      c->setCACert(tlsCa_.c_str());
+    } else {
+      c->setInsecure();
+    }
+    c->setTimeout(static_cast<uint32_t>(timeoutMs));
+    c->setAbortCallback([this]() { return backCancelRequested(); });
+    const int ok = c->connect(host, static_cast<uint16_t>(port));
+    if (!ok) {
+      const bool cancelled = c->aborted();
+      delete c;
+      tlsCa_.clear();
+      tlsCa_.shrink_to_fit();
+      if (cancelled) snprintf(err, errCap, "cancelled");
+      else if (caPem) snprintf(err, errCap, "cannot connect to %s:%d (tls handshake failed: unreachable, or the certificate does not match ca)", host, port);
+      else snprintf(err, errCap, "cannot connect to %s:%d (tls handshake failed or unreachable)", host, port);
+      return -1;
+    }
+    c->setAbortCallback(nullptr);  // the lambda captures `this`; the session outlives the connect call
+    tls_ = c;
+    sockUsed_[slot] = true;
+    sockKind_[slot] = 4;
+    return slot;
+  }
   int netKind(int s) override { return s >= 0 && s < crosslua::Backend::MAX_SOCKETS ? sockKind_[s] : 0; }
   int udpOpen(int port, char* err, size_t errCap) override {
     int slot = -1;
@@ -587,6 +632,7 @@ class LuaAppActivity::Backend final : public crosslua::Backend {
   // Arduino's NetworkClient::connected() does not notice a graceful close (FIN) until a later read, so ask the socket directly:
   // a non-destructive peek returns 0 on an orderly shutdown, > 0 if data waits, and -1/EWOULDBLOCK when simply idle.
   bool peerAlive(int s) {
+    if (sockKind_[s] == 4) return tls_ && tls_->connected();
     const int fd = socks_[s].fd();
     if (fd < 0) return false;
     uint8_t b;
@@ -595,24 +641,28 @@ class LuaAppActivity::Backend final : public crosslua::Backend {
     if (r < 0 && errno != EWOULDBLOCK && errno != EAGAIN) return false;
     return true;
   }
-  int netAvailable(int s) override { return netIsOpen(s) ? socks_[s].available() : -1; }
+  int netAvailable(int s) override { return netIsOpen(s) ? sockCli(s).available() : -1; }
   int netRead(int s, void* buf, size_t max) override {
     if (!netIsOpen(s)) return -1;
-    const int a = socks_[s].available();
+    const int a = sockCli(s).available();
     if (a <= 0) return peerAlive(s) ? 0 : -1;
-    return socks_[s].read(static_cast<uint8_t*>(buf), std::min(max, static_cast<size_t>(a)));
+    return sockCli(s).read(static_cast<uint8_t*>(buf), std::min(max, static_cast<size_t>(a)));
   }
   int netWrite(int s, const void* d, size_t n) override {
-    if (!netIsOpen(s) || (socks_[s].available() == 0 && !peerAlive(s))) return -1;
-    const size_t w = socks_[s].write(static_cast<const uint8_t*>(d), n);
+    if (!netIsOpen(s) || (sockCli(s).available() == 0 && !peerAlive(s))) return -1;
+    const size_t w = sockCli(s).write(static_cast<const uint8_t*>(d), n);
     return (w == 0 && n > 0) ? -1 : static_cast<int>(w);
   }
-  bool netConnected(int s) override { return netIsOpen(s) && (socks_[s].available() > 0 || peerAlive(s)); }
+  bool netConnected(int s) override { return netIsOpen(s) && (sockCli(s).available() > 0 || peerAlive(s)); }
   void netClose(int s) override {
     if (!netIsOpen(s)) return;
     if (sockKind_[s] == 2) udps_[s].stop();
     else if (sockKind_[s] == 3) {
       if (sockServers_[s]) { delete sockServers_[s]; sockServers_[s] = nullptr; }
+    } else if (sockKind_[s] == 4) {
+      if (tls_) { tls_->stop(); delete tls_; tls_ = nullptr; }
+      tlsCa_.clear();
+      tlsCa_.shrink_to_fit();
     } else socks_[s].stop();
     sockUsed_[s] = false;
     sockKind_[s] = 0;
@@ -1227,7 +1277,7 @@ class LuaAppActivity::Backend final : public crosslua::Backend {
     if (!BoardConfig::hasMic() || !mic_.begin(16000)) { snprintf(err, errCap, "no microphone on this board"); return false; }
     return true;
   }
-  bool micCancelRequested() {
+  bool backCancelRequested() {
     devcapture::pollSerial();
     in_.update(true);
     if (!(in_.wasPressed(MappedInputManager::Button::Back) || in_.isPressed(MappedInputManager::Button::Back))) return false;
@@ -1262,7 +1312,7 @@ class LuaAppActivity::Backend final : public crosslua::Backend {
     int16_t buf[256];
     uint32_t lastData = millis();
     while (got < wantBytes) {
-      if (micCancelRequested()) { f.close(); Storage.remove(path); snprintf(err, errCap, "cancelled"); return false; }
+      if (backCancelRequested()) { f.close(); Storage.remove(path); snprintf(err, errCap, "cancelled"); return false; }
       const size_t room = std::min<size_t>(256, (wantBytes - got) / 2);
       const int n = mic_.read(buf, room, 100);
       if (n < 0) { f.close(); Storage.remove(path); snprintf(err, errCap, "microphone read failed"); return false; }
@@ -1289,7 +1339,7 @@ class LuaAppActivity::Backend final : public crosslua::Backend {
     int p = 0;
     const uint32_t t0 = millis();
     while (millis() - t0 < static_cast<uint32_t>(ms)) {
-      if (micCancelRequested()) { snprintf(err, errCap, "cancelled"); return false; }
+      if (backCancelRequested()) { snprintf(err, errCap, "cancelled"); return false; }
       const int n = mic_.read(buf, 256, 50);
       if (n < 0) { snprintf(err, errCap, "microphone read failed"); return false; }
       for (int i = 0; i < n; i++) {
