@@ -125,14 +125,14 @@ int LuaVm::loadText(lua_State* L, const char* buf, size_t n, const char* chunkNa
     free(d.p);
     return LUA_OK;  // couldn't strip: keep the unstripped function that is already on the stack
   }
+  // Peak-memory matters here: the full function (debug info is ~1/3 of it), the stripped copy and the caller's source
+  // buffer used to coexist. Drop the original and collect BEFORE loading the stripped copy (the dump lives in a
+  // malloc'd buffer, outside the Lua budget), so a big module needs source + max(full, stripped), not source + both.
+  lua_pop(L, 1);  // [orig] -> []
+  lua_gc(L, LUA_GCCOLLECT);
   rc = luaL_loadbufferx(L, d.p, d.n, chunkName, "b");  // our own dump, never user bytecode
   free(d.p);
-  if (rc != LUA_OK) {  // [orig, err] -> [err]
-    lua_remove(L, -2);
-    return rc;
-  }
-  lua_remove(L, -2);  // [orig, stripped] -> [stripped]
-  return LUA_OK;
+  return rc;  // [stripped] or [err]
 }
 
 bool LuaVm::load(const char* chunkName, const char* src, size_t len) {

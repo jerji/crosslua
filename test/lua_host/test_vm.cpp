@@ -1789,6 +1789,43 @@ int main() {
     CHECK(be.logs[1] == "X\tpkg-init\tfrom-lib\ttrue\t1");
   }
   {
+    TEST("require: a big module loads in a tight heap (the unstripped copy is dropped before the stripped one loads)");
+    std::string mod = "local M = {}\n";
+    for (int i = 0; i < 200; i++) {
+      char line[160];
+      snprintf(line, sizeof(line), "function M.f%d(a, b)\n  local t = {a, b, %d}\n  return t[1] * t[2] + t[3] + #tostring(a)\nend\n", i, i);
+      mod += line;
+    }
+    mod += "return M\n";
+    size_t peakOk = 0;
+    {
+      MockBackend be;
+      be.files["/plugins/test/big.lua"] = mod;
+      LuaVm vm;
+      vm.open(1024 * 1024);
+      registerApi(vm, be);
+      const char* sc = "local m = require('big'); print(m.f7(3, 4), collectgarbage('count') > 0)";
+      CHECK(vm.load("t", sc, strlen(sc)));
+      Status st0 = run(vm, be);
+      if (getenv("DUMP_LOGS")) printf("   st0=%d err=%s\n", (int)st0, vm.error().c_str());
+      CHECK(st0 == Status::Finished && be.logs.size() == 1 && be.logs[0] == "20\ttrue");
+      peakOk = vm.peakBytes();
+      if (getenv("DUMP_LOGS")) printf("   module %zu B, peak with a huge budget %zu B\n", mod.size(), peakOk);
+    }
+    // measured on the host: new order peaks at ~128 KB, the old order (full + stripped copies together) at ~181 KB
+    CHECK(peakOk > mod.size() && peakOk < 150000);
+    MockBackend be;
+    be.files["/plugins/test/big.lua"] = mod;
+    LuaVm vm;
+    vm.open(150000);  // between the two: only the new order fits
+    registerApi(vm, be);
+    const char* sc = "local ok, m = pcall(require, 'big'); print(ok, ok and m.f7(3, 4))";
+    CHECK(vm.load("t", sc, strlen(sc)));
+    CHECK(run(vm, be) == Status::Finished);
+    if (getenv("DUMP_LOGS")) for (auto& l : be.logs) printf("   tight: %s\n", l.c_str());
+    CHECK(be.logs.size() == 1 && be.logs[0] == "true\t20");
+  }
+  {
     TEST("require: errors - missing, bad names, syntax error, runtime error, circular, bytecode");
     LuaVm vm; MockBackend be;
     be.files["/plugins/test/syn.lua"] = "return ((";
