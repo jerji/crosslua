@@ -2,6 +2,7 @@
 //
 // Same discipline as LuaNet.cpp: arguments become plain pointers, the backend works on POD + one malloc'd buffer, and the
 // result is pushed from inside lua_pcall so an out-of-memory error can never skip the free().
+#include <cctype>
 #include <cstdlib>
 #include <cstring>
 
@@ -137,9 +138,53 @@ int zip_inflate(lua_State* L) {
   return 1;
 }
 
+// gfx.image(path, x, y [, box_w, box_h]) -> drawn_w, drawn_h | nil, err
+// PNG/JPEG from app:/data:/sd: (sd: needs "library"), decoded row by row into the current frame, fitted into the box
+// (default: from x,y to the screen edge), never upscaled, centred in the box, dithered to black/white. Call
+// gfx.present() afterwards like for any drawing.
+static int gfx_image(lua_State* L) {
+  char path[MAX_PATH_LEN + 80];
+  if (!resolveArg(L, 1, path, sizeof(path))) return 2;
+  const int x = static_cast<int>(luaL_checknumber(L, 2));
+  const int y = static_cast<int>(luaL_checknumber(L, 3));
+  const int sw = be(L).width(), sh = be(L).height();
+  if (x < 0 || y < 0 || x >= sw || y >= sh) return pushFail(L, "x,y must be on the screen");
+  int bw = lua_isnoneornil(L, 4) ? sw - x : static_cast<int>(luaL_checknumber(L, 4));
+  int bh = lua_isnoneornil(L, 5) ? sh - y : static_cast<int>(luaL_checknumber(L, 5));
+  if (bw < 8 || bh < 8) return pushFail(L, "box must be at least 8x8");
+  if (x + bw > sw) bw = sw - x;  // clip to the screen
+  if (y + bh > sh) bh = sh - y;
+  const size_t pl = strlen(path);
+  auto endsWith = [&](const char* ext) {
+    const size_t el = strlen(ext);
+    if (pl < el) return false;
+    for (size_t i = 0; i < el; i++)
+      if (tolower(static_cast<unsigned char>(path[pl - el + i])) != ext[i]) return false;
+    return true;
+  };
+  if (!endsWith(".png") && !endsWith(".jpg") && !endsWith(".jpeg")) return pushFail(L, "unsupported image type (png, jpg)");
+  const int64_t size = be(L).fsSize(path);
+  if (size == -1) return pushFail(L, "no such file");
+  if (size == -2) return pushFail(L, "is a directory");
+  if (size == 0 || size > 6 * 1024 * 1024) return pushFail(L, "image file is empty or over 6 MB");
+  int dw = 0, dh = 0;
+  char err[96] = {0};
+  if (!be(L).drawImage(path, x, y, bw, bh, &dw, &dh, err, sizeof(err))) return pushFail(L, err[0] ? err : "cannot draw image");
+  lua_pushinteger(L, dw);
+  lua_pushinteger(L, dh);
+  return 2;
+}
+
 void registerZip(lua_State* L, Ctx* c) {
   static const luaL_Reg fns[] = {{"list", zip_list}, {"read", zip_read}, {"inflate", zip_inflate}, {nullptr, nullptr}};
   regTable(L, c, "zip", fns);
+  lua_getglobal(L, "gfx");  // gfx.image lives here because it shares the path sandbox with zip/fs
+  if (lua_istable(L, -1)) {
+    lua_pushlightuserdata(L, c);
+    lua_pushcclosure(L, gfx_image, 1);
+    lua_setfield(L, -2, "image");
+  }
+  lua_pop(L, 1);
 }
 
 }  // namespace crosslua

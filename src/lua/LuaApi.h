@@ -148,6 +148,10 @@ class Backend {
                        size_t errCap) = 0;
   // Outline (filled=false) or filled rounded rectangle.
   virtual void drawRoundedRect(int x, int y, int w, int h, int radius, bool black, bool filled) = 0;
+  // Decode a PNG/JPEG (absolute SD path) into the CURRENT frame, fitted (never upscaled) and centred in the box
+  // x,y,maxW,maxH. Reports the drawn size. false + err on failure (missing/corrupt/too big/not enough RAM).
+  virtual bool drawImage(const char* absPath, int x, int y, int maxW, int maxH, int* outW, int* outH, char* err,
+                         size_t errCap) = 0;
 };
 
 // Registers print + gfx/input/app/system tables into vm.state(). Call after open(), before load().

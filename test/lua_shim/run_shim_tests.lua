@@ -122,6 +122,20 @@ assert(not input.pressed("back"), "back edge must have expired after poll")
 return
 ]]
 
+FIXTURES["z_image_test.lua"] = [[
+-- TEST FIXTURE (harness-only): image.* contract. Results are drawn as text so the harness can read them.
+local a, ea = image.open("/spells/nope.png")
+local b, eb = image.open("/spells/lib/format.lua")
+local c = image.open("/spells/images/test.png")
+local ok = image.draw(c, 10, 20, 200, 200)
+image.close(c)
+local ok2, e2 = image.draw(c, 0, 0)
+display.text(0, 0,  "A:" .. tostring(a) .. ":" .. tostring(ea), 1, true)
+display.text(0, 20, "B:" .. tostring(b) .. ":" .. tostring(eb), 1, true)
+display.text(0, 40, "C:" .. image.width(c) .. "x" .. image.height(c) .. ":" .. tostring(ok), 1, true)
+display.text(0, 60, "D:" .. tostring(ok2) .. ":" .. tostring(e2), 1, true)
+]]
+
 FIXTURES["z_wifi_creds_test.lua"] = [[
 -- TEST FIXTURE (harness-only): credentials handed to wifi.connect() must
 -- NEVER reach the firmware (CrossLua joins the system's saved network).
@@ -218,7 +232,11 @@ local function setupScenario(autoRun)
         writeFile(HOST_ROOT .. "/sd/spells/" .. name, src)
     end
     writeFile(HOST_ROOT .. "/sd/os/config.lua", CONFIG_LUA)
-    writeFile(HOST_ROOT .. "/sd/spells/images/test.png", "")  -- content unused
+    do  -- the REAL test.png (800x300) so image.width/height read a genuine IHDR
+        local rf = io.open("/root/x4/Grimoire/sd_card_contents/spells/images/test.png", "rb")
+        writeFile(HOST_ROOT .. "/sd/spells/images/test.png", rf and rf:read("a") or "")
+        if rf then rf:close() end
+    end
 
     local env = fake.makeEnv()
     fake.appEnv = env
@@ -378,10 +396,33 @@ local function runAllDirect()
           #fake.calls.httpRequest == 4,
           "http calls=" .. #fake.calls.httpRequest)
 
+    -- (h) gallery.lua now works: image.* maps onto gfx.image (PNG header for dims, fit + centre, no upscale)
+    do
+        st, msg, log = scenarioDirect("gallery.lua", { "right", "back" })
+        local img
+        for _, e in ipairs(log) do if e.op == "image" then img = e break end end
+        check("(h) gallery.lua did not error", st ~= "error", "status=" .. tostring(st) .. " msg=" .. tostring(msg))
+        check("(h) gallery drew test.png through gfx.image", img ~= nil and tostring(img[1]):find("spells/images/test.png", 1, true) ~= nil,
+              "image op=" .. tostring(img and img[1]))
+        check("(h) drawn size fits the screen and keeps 800:300 aspect",
+              img ~= nil and img[4] <= fake.screenW and img[5] <= fake.screenH
+              and math.abs(img[4] / img[5] - 800 / 300) < 0.1,
+              img and ("size " .. tostring(img[4]) .. "x" .. tostring(img[5])) or "no image op")
+        note("gallery.lua", st, msg)
+        -- image API contract (fixture spell): open errors are values, dims come from the IHDR, draw fits+centres
+        st, msg, log = scenarioDirect("z_image_test.lua", {})
+        local shown = logTextMessages(log)
+        check("(h) image fixture finishes", st == "finished", "status=" .. tostring(st) .. " msg=" .. tostring(msg))
+        check("(h) image.open missing file -> nil, err", shown:find("A:nil:", 1, true) ~= nil and shown:find("A:nil:nil", 1, true) == nil, shown:sub(1, 160))
+        check("(h) image.open non-PNG -> nil, 'not a PNG file'", shown:find("B:nil:not a PNG file", 1, true) ~= nil, shown:sub(1, 160))
+        check("(h) width/height from the IHDR and draw succeeds", shown:find("C:800x300:true", 1, true) ~= nil, shown:sub(1, 160))
+        check("(h) draw after close -> nil, 'image is closed'", shown:find("D:nil:image is closed", 1, true) ~= nil, shown:sub(1, 160))
+    end
+
     -- (d) gallery / ble_* / wifi_server fail GRACEFULLY with the readable
     -- message (never 'attempt to call a nil value')
     for _, sp in ipairs({
-        "gallery.lua", "ble_client_test.lua",
+        "ble_client_test.lua",
         "ble_keyboard_test.lua", "wifi_server_test.lua",
     }) do
         st, msg, log = scenarioDirect(sp, {})

@@ -368,11 +368,10 @@ S.UNSUPPORTED = {
     hid = { "begin", "stop", "isConnected", "type", "key", "media" },
     net = { "listen", "accept", "closeServer", "connect", "read", "write",
             "close" },
-    image = { "open", "width", "height", "draw", "close" },
     wifi = { "startAP", "apIP", "stopAP" },
 }
 
-local EmuBle, EmuHid, EmuNet, EmuImage = {}, {}, {}, {}
+local EmuBle, EmuHid, EmuNet = {}, {}, {}
 for _, fn in ipairs(S.UNSUPPORTED.ble) do
     EmuBle[fn] = function() return unsupported(fn) end
 end
@@ -382,9 +381,30 @@ end
 for _, fn in ipairs(S.UNSUPPORTED.net) do
     EmuNet[fn] = function() return unsupported(fn) end
 end
-for _, fn in ipairs(S.UNSUPPORTED.image) do
-    EmuImage[fn] = function() return unsupported(fn) end
+-- image.*: PNG/JPEG via gfx.image (decoded by the firmware, streamed, dithered to 1-bit). A handle is a tiny
+-- table; width/height come from the PNG header (IHDR) so open() never decodes anything. gfx.image fits the image
+-- into the w,h box (never upscales) and centres it, which is what spells like gallery.lua already ask for.
+local EmuImage = {}
+local PNG_SIG = "\137PNG\r\n\26\n"
+function EmuImage.open(path)
+    local rel, e = grimPath(path)
+    if not rel then return nil, e end
+    local p = "sd:" .. rel
+    local hdr, err = fs.read(p, 0, 24)
+    if not hdr then return nil, err or "cannot open image" end
+    if #hdr < 24 or hdr:sub(1, 8) ~= PNG_SIG then return nil, "not a PNG file" end
+    local w, h = string.unpack(">I4I4", hdr, 17)
+    return { p = p, w = w, h = h }
 end
+function EmuImage.width(img) return img.w end
+function EmuImage.height(img) return img.h end
+function EmuImage.draw(img, x, y, w, h)
+    if not img.p then return nil, "image is closed" end
+    local dw, err = gfx.image(img.p, x, y, w or img.w, h or img.h)
+    if not dw then return nil, err end
+    return true
+end
+function EmuImage.close(img) img.p = nil end
 EmuNet.isConnected = function() return false end
 EmuNet.available = function() return 0 end
 

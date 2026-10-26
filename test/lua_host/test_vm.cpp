@@ -270,6 +270,24 @@ struct MockBackend : Backend {
   void drawRoundedRect(int x, int y, int w, int h, int radius, bool black, bool filled) override {
     (void)x; (void)y; (void)w; (void)h; (void)radius; (void)black; (void)filled; roundedSeen++;
   }
+  // ---- image mock: path -> source size; records the last draw so tests can check fit/centre/permissions ---------
+  std::map<std::string, std::pair<int, int>> images;
+  struct ImageCall { std::string path; int x = 0, y = 0, w = 0, h = 0; };
+  std::vector<ImageCall> imageCalls;
+  std::string imageErr;  // non-empty = the decoder "fails" with this message
+  bool drawImage(const char* absPath, int x, int y, int maxW, int maxH, int* outW, int* outH, char* err, size_t errCap) override {
+    if (!imageErr.empty()) { snprintf(err, errCap, "%s", imageErr.c_str()); return false; }
+    auto it = images.find(absPath);
+    if (it == images.end()) { snprintf(err, errCap, "cannot read the image header (corrupt or unsupported)"); return false; }
+    int dw = it->second.first, dh = it->second.second;
+    if (dw > maxW || dh > maxH) {
+      const double sc = std::min((double)maxW / dw, (double)maxH / dh);
+      dw = std::max(1, (int)(dw * sc)); dh = std::max(1, (int)(dh * sc));
+    }
+    imageCalls.push_back({absPath, x + (maxW - dw) / 2, y + (maxH - dh) / 2, dw, dh});
+    *outW = dw; *outH = dh;
+    return true;
+  }
   int64_t epoch = 0;  // 0 = clock not trusted
   int64_t epochNow() override { return epoch ? epoch + now / 1000 : 0; }  // epoch = clock at app start; advances with mock millis
   bool localDate(int64_t e, int out[8]) override {
@@ -1787,6 +1805,83 @@ int main() {
     CHECK(run(vm, be) == Status::Finished);
     CHECK(be.logs[0] == "true\t1\tcounter\t1");
     CHECK(be.logs[1] == "X\tpkg-init\tfrom-lib\ttrue\t1");
+  }
+  {
+    TEST("gfx.image: scopes+permission, type/size checks, fit/centre/no-upscale, errors are values");
+    MockBackend be;
+    be.library = true;
+    be.files["/Books/cover.PNG"] = "x";
+    be.files["/Books/photo.jpg"] = "x";
+    be.files["/Books/notes.txt"] = "x";
+    be.files["/Books/empty.png"] = "";
+    be.files["/Books/dir.png/x"] = "x";
+    be.files["/.crosspoint/secret.png"] = "x";
+    be.files["/.crosslua/data/test/pic.png"] = "x";
+    be.files["/plugins/test/logo.jpeg"] = "x";
+    be.images["/Books/cover.PNG"] = {1000, 2000};
+    be.images["/Books/photo.jpg"] = {100, 50};
+    be.images["/.crosslua/data/test/pic.png"] = {40, 40};
+    be.images["/plugins/test/logo.jpeg"] = {20, 10};
+    const char* script = R"LUA(
+      local function show(...) print(...) end
+      local W, H = gfx.size()                                        -- the mock screen is 240x480
+      show(gfx.image("sd:Books/cover.PNG", 0, 0))                    -- 1000x2000 fitted to the whole screen, never upscaled
+      show(gfx.image("sd:Books/photo.jpg", 10, 20, 300, 300))        -- small: never upscaled, centred
+      show(gfx.image("data:pic.png", 0, 0, 100, 100))
+      show(gfx.image("app:logo.jpeg", 0, 0, 480, 100))
+      show(gfx.image("logo.jpeg", 0, 0, 480, 100))                   -- bare = app:
+      show(gfx.image("sd:Books/notes.txt", 0, 0))                    -- type
+      show(gfx.image("sd:Books/empty.png", 0, 0))                    -- empty
+      show(gfx.image("sd:Books/missing.png", 0, 0))
+      show(gfx.image("sd:Books/dir.png", 0, 0))                      -- directory
+      show(gfx.image("sd:.crosspoint/secret.png", 0, 0))             -- hidden
+      show(gfx.image("sd:../x.png", 0, 0))
+      show(gfx.image("sd:Books/photo.jpg", -1, 0)); show(gfx.image("sd:Books/photo.jpg", 0, H)); show(gfx.image("sd:Books/photo.jpg", 0, 0, 4, 4))
+      show(gfx.image("sd:Books/photo.jpg", W - 80, H - 100, 500, 500))  -- box clipped to 80x100: 100x50 shrinks to 80x40
+    )LUA";
+    for (int allowed = 1; allowed >= 0; allowed--) {
+      be.library = allowed; be.logs.clear(); be.imageCalls.clear();
+      LuaVm vm;
+      CHECK(vm.open(256 * 1024));
+      registerApi(vm, be);
+      CHECK(vm.load("t", script, strlen(script)));
+      CHECK(run(vm, be, 100000) == Status::Finished);
+      if (getenv("DUMP_LOGS")) { printf("   [allowed=%d]\n", allowed); for (size_t i = 0; i < be.logs.size(); i++) printf("   [%zu] %s\n", i, be.logs[i].c_str()); for (auto& c : be.imageCalls) printf("   call %s x=%d y=%d %dx%d\n", c.path.c_str(), c.x, c.y, c.w, c.h); }
+      CHECK(be.logs.size() == 15);
+      if (be.logs.size() != 15) continue;
+      CHECK(be.logs[2] == "40\t40" && be.logs[3] == "20\t10" && be.logs[4] == "20\t10");   // data:/app: need no permission
+      if (allowed) {
+        CHECK(be.logs[0] == "240\t480");                    // 1000x2000 into 480x800 -> scale .4
+        CHECK(be.logs[1] == "100\t50");                     // small image untouched
+        CHECK(be.imageCalls.size() == 6);
+        if (be.imageCalls.size() == 6) {
+          CHECK(be.imageCalls[1].x == 10 + (300 - 100) / 2 && be.imageCalls[1].y == 20 + (300 - 50) / 2);  // centred in its box
+          CHECK(be.imageCalls[0].path == "/Books/cover.PNG");
+          CHECK(be.imageCalls[5].path == "/Books/photo.jpg" && be.imageCalls[5].w == 80 && be.imageCalls[5].h == 40 && be.imageCalls[5].y == 380 + (100 - 40) / 2);
+        }
+        CHECK(be.logs[5] == "nil\tunsupported image type (png, jpg)");
+        CHECK(be.logs[6] == "nil\timage file is empty or over 6 MB");
+        CHECK(be.logs[7] == "nil\tno such file" && be.logs[8] == "nil\tis a directory");
+        CHECK(be.logs[9] == "nil\thidden files and folders are not accessible");
+        CHECK(be.logs[10].find("nil\t'.' and '..'") == 0);
+        CHECK(be.logs[11] == "nil\tx,y must be on the screen" && be.logs[12] == "nil\tx,y must be on the screen");
+        CHECK(be.logs[13] == "nil\tbox must be at least 8x8");
+        CHECK(be.logs[14] == "80\t40");
+      } else {
+        CHECK(be.logs[0].find("nil\tlibrary access not permitted") == 0 && be.logs[1].find("nil\tlibrary access not permitted") == 0);
+        CHECK(be.imageCalls.size() == 3);                   // only the data:/app: draws happened
+        CHECK(be.logs[9].find("nil\tlibrary access not permitted") == 0);
+      }
+    }
+    // a decoder failure is a plain nil,err and never aborts the app
+    be.library = true; be.imageErr = "decode failed (corrupt image or not enough RAM)"; be.logs.clear();
+    LuaVm vm;
+    CHECK(vm.open(64 * 1024));
+    registerApi(vm, be);
+    const char* s2 = "print(gfx.image('sd:Books/photo.jpg', 0, 0)); print('alive')";
+    CHECK(vm.load("t", s2, strlen(s2)));
+    CHECK(run(vm, be) == Status::Finished);
+    CHECK(be.logs.size() == 2 && be.logs[0] == "nil\tdecode failed (corrupt image or not enough RAM)" && be.logs[1] == "alive");
   }
   {
     TEST("require: a big module loads in a tight heap (the unstripped copy is dropped before the stripped one loads)");

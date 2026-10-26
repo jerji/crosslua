@@ -18,6 +18,7 @@
 #include <deque>
 #include <vector>
 
+#include "Epub/converters/ImageDecoderFactory.h"
 #include "MappedInputManager.h"
 #include "SilentRestart.h"
 #include "activities/ActivityManager.h"
@@ -158,6 +159,8 @@ class LuaAppActivity::Backend final : public crosslua::Backend {
   bool libraryAllowed() override { return lib_; }
   // Inflating needs ~45 KB transient (ZipFile's own docs warn about it): refuse instead of aborting mid-way.
   static constexpr size_t ZIP_RESERVE = 48 * 1024;
+  // Largest free block the PNG/JPEG decoders need before gfx.image starts (first guess: measure on the device).
+  static constexpr size_t IMAGE_MIN_BLOCK = 40 * 1024;
   int zipList(const char* path, crosslua::Backend::ZipEntryInfo* out, int maxEntries, int* total, char* err,
               size_t errCap) override {
     const std::string p(path);
@@ -476,6 +479,49 @@ class LuaAppActivity::Backend final : public crosslua::Backend {
   }
   bool drawQr(const char* text, int x, int y, int side) override {
     QrUtils::drawQrCode(r_, Rect(x, y, side, side), text);
+    return true;
+  }
+  bool drawImage(const char* absPath, int x, int y, int maxW, int maxH, int* outW, int* outH, char* err,
+                 size_t errCap) override {
+    ImageToFramebufferDecoder* dec = ImageDecoderFactory::getDecoder(absPath);
+    if (!dec) {
+      snprintf(err, errCap, "no decoder for this image type");
+      return false;
+    }
+    // The decoders stream (RAM never scales with the source) but need working buffers of their own.
+    const auto h = HalMemory::getInternalHeap();
+    if (h.largestBlockBytes < IMAGE_MIN_BLOCK) {
+      snprintf(err, errCap, "not enough free RAM to decode (largest block %uK, need %uK)",
+               static_cast<unsigned>(h.largestBlockBytes / 1024), static_cast<unsigned>(IMAGE_MIN_BLOCK / 1024));
+      return false;
+    }
+    ImageDimensions d{};
+    if (!dec->getDimensions(absPath, d) || d.width <= 0 || d.height <= 0) {
+      snprintf(err, errCap, "cannot read the image header (corrupt or unsupported)");
+      return false;
+    }
+    // Fit, never upscale, centre in the box.
+    int dw = d.width, dh = d.height;
+    if (dw > maxW || dh > maxH) {
+      const float sc = std::min(static_cast<float>(maxW) / dw, static_cast<float>(maxH) / dh);
+      dw = std::max(1, static_cast<int>(dw * sc));
+      dh = std::max(1, static_cast<int>(dh * sc));
+    }
+    RenderConfig cfg;
+    cfg.x = x + (maxW - dw) / 2;
+    cfg.y = y + (maxH - dh) / 2;
+    cfg.maxWidth = dw;
+    cfg.maxHeight = dh;
+    cfg.useGrayscale = false;
+    cfg.useDithering = true;
+    cfg.performanceMode = false;
+    cfg.useExactDimensions = true;
+    if (!dec->decodeToFramebuffer(absPath, r_, cfg)) {
+      snprintf(err, errCap, "decode failed (corrupt image or not enough RAM)");
+      return false;
+    }
+    *outW = dw;
+    *outH = dh;
     return true;
   }
   bool frontlightGet(bool* on, int* brightness, int* warmth) override {

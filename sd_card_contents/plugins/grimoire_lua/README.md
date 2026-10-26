@@ -72,7 +72,7 @@ is read-only on CrossLua, but `/os/config.lua` is a read).
 ## Deliberate deviations (documented)
 
 1. **Unsupported hardware APIs raise, they don't return `nil, err`.**
-   `ble.*`, `hid.*`, `net.listen/accept/...`, `image.*`, `wifi.startAP/apIP/stopAP`
+   `ble.*`, `hid.*`, `net.listen/accept/...`, `wifi.startAP/apIP/stopAP` (`image.*` now works: see below)
    call `error("not supported on CrossLua yet (<name>)")`. Rationale: the
    shipped spells never check the error value — `ble_client_test.lua` does
    `#ble.scan(5)` and would die with *"attempt to get length of a nil value"*,
@@ -93,15 +93,15 @@ is read-only on CrossLua, but `/os/config.lua` is a read).
    merges `data:` over `sd:` so written files show up.
 5. **`display.bitmap` is a Lua pixel loop** — correct, but slow for
    full-screen blits (hundreds of thousands of `gfx.pixel` calls). Fine for
-   icons/partial blits; `image.*`-style full-screen images have no CrossLua
-   equivalent yet.
+   icons/partial blits; use `image.*` (backed by `gfx.image`) for
+   full-screen images.
 
 ## What could NOT be emulated, and why
 
 - **`ble.*`, `hid.*`** — needs a real BLE backend. CrossLua has none yet
   (planned). Stubs error with the readable message above.
 - **`net.*` raw TCP** — CrossLua has no sockets yet (planned).
-- **`image.*` PNG decode** — CrossLua has no image decoder (only `gfx.qr`).
+- **`image.*`** — now implemented on `gfx.image` (PNG/JPEG decoded by the firmware). `image.open(path)` reads the PNG header for `width/height`; `image.draw(h, x, y, w?, h?)` fits the image into the w,h box (default: native size), never upscales and centres it in the box; Grimoire stretched to the box. JPEG files are not opened by `image.open` (PNG header only).
 - **`wifi.startAP`/AP mode** — CrossLua only joins networks the user has
   configured; it can't create one.
 - **`system.reboot/sleep/startSdFlash`** — flashing/rebooting is CrossLua

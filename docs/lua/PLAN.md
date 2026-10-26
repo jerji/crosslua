@@ -18,6 +18,7 @@ workflow, tests) · [UPSTREAM_TOUCHPOINTS.md](UPSTREAM_TOUCHPOINTS.md) (every ed
 | 0 Baseline | **done** — stock build measured, toolchain fixed |
 | 1 VM in firmware | **done and verified on the real X4** |
 | 2 Core API | **mostly done** — gfx, input, app, system, fs (+ range reads, in-place records), require, json, time. Remaining: shared `ui` lib in `/.crosslua/lib/`, orientation |
+| 2b Library + Tier-1 + load | **done, host-tested and mutation-checked; `load` and the Grimoire shim verified on the X4**: `sd:` scope (read-only, `library` permission, no hidden paths), `zip.list/read/inflate`, `app.open_book`, `wifi.scan`, `time.sync/set`, `fs.rename`, `system.mac`, `gfx.qr`, `gfx.rounded_rect`, `device.frontlight`, text-only sandboxed `load`, `gfx.image` (PNG/JPEG; host-tested, device test pending). Pure-Lua Grimoire compatibility shim (`plugins/grimoire_lua`, `test/lua_shim`) |
 | 3 Network (wifi/http) | **done and verified on the X4**: `wifi.connect/status/off`, `http.request/get` (HTTPS, POST form, stream-to-file, Back cancels), permission gate. Raw `net` sockets not started |
 | 4 BLE + radio | not started |
 | 5 Port features as apps | **started**: Study (flashcards, FSRS-5) and 2048 done and verified on the X4. Next: more crossplay games, AO3 library (needs Phase 3), the rest |
@@ -82,6 +83,7 @@ keyboard over `gfx`), `app.orientation()`, images/bitmaps.
 - On-device self-test (`selftest_lua`, 12 checks: fs, atomic write, sandbox, json, require, fonts, OOM, preemption,
   sleep timing, coroutines): **12/12**. `counter_lua` persistence across restarts verified (13 -> 24 -> 35).
 - Force-quit (hold Back 1.4 s) verified in the log. Leaving WiFi/File Transfer causes CrossPoint's normal silent restart.
+- `load()` on the device: 14/14 checks (`loadtest_lua`); heap 104 K -> 103 K across the run; a 5000-statement compile fails with a clean `nil, not enough memory`. A 17 KB module (the Grimoire shim) used to die in `require` with `not enough memory` because the source buffer, the full function and the stripped copy coexisted; `LuaVm::loadText` now drops the full function and collects before loading the stripped copy (host peak 181 KB -> 128 KB, regression test in `test_vm.cpp`). With that the Grimoire launcher lists the real spells on the X4, `example_spell` and `library_demo` run, and `gallery`/BLE spells fail with a readable message.
 - Bugs only hardware could show: negative font IDs misread as "unknown font" (0 is the sentinel); realloc transient
   needing old+new bytes; compiled script code ~2.2x its source, mostly debug info (-32 % when stripped). A bug only the draw-text checks showed: Lua's `ok and nil or x` trap in an example app.
 

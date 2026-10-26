@@ -1,4 +1,4 @@
-# CrossLua app API (v0.5)
+# CrossLua app API (v0.6)
 
 An app is a plugin folder containing `main.lua`, in any plugin root
 (`/plugins`, `/.plugins`, `/.crosspoint/plugins`):
@@ -52,6 +52,7 @@ cannot freeze the device, drop the power button, or block sleep.
 | `gfx.text_width(str [, font [, flags]])` → px | |
 | `gfx.line_height([font])` → px | |
 | `gfx.present([mode])` | pushes the frame to the panel. `"fast"` (default), `"half"`, `"full"` (clears ghosting, slow) |
+| `gfx.image(path, x, y [, box_w, box_h])` → drawn_w, drawn_h \| nil, err | PNG/JPEG (`.png .jpg .jpeg`) from `app:`/`data:`/`sd:` (`sd:` needs `library`; hidden paths refused). Decoded row by row by the firmware (RAM does not scale with the source; sources up to 8 MP / 6 MB), dithered to black/white into the current frame. The box defaults to x,y..screen edge and is clipped to the screen; the image is **fitted into the box, never upscaled, and centred**; the return values are the size actually drawn. Errors are values: `no such file`, `unsupported image type`, `cannot read the image header`, `not enough free RAM to decode`, `decode failed`. Needs a free contiguous block of ~40 KB, so an app with a huge Lua heap can get the RAM error. Call `gfx.present()` afterwards. |
 
 Fonts: `ui`, `ui12`, `small`, `sans12`, `sans14`, `sans16`, `sans18` (CrossPoint's built-in fonts, same as the rest of the UI).
 Nothing reaches the panel until `gfx.present()`. Coordinates may be floats (truncated).
