@@ -907,6 +907,14 @@ class LuaAppActivity::Backend final : public crosslua::Backend {
     if (f.isDirectory()) return -2;
     return static_cast<int64_t>(f.fileSize());
   }
+  bool fsStat(const char* path, FsStat* out) override {
+    HalFile f = Storage.open(path);
+    if (!f) return false;
+    out->isDir = f.isDirectory();
+    out->size = out->isDir ? 0 : static_cast<int64_t>(f.fileSize());
+    out->fatTime = f.modificationTime();
+    return true;
+  }
   bool fsReadInto(const char* path, void* dst, size_t n, size_t offset) override {
     HalFile f;
     if (!Storage.openFileForRead(TAG, path, f)) return false;

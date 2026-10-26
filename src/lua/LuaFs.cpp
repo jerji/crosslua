@@ -358,10 +358,99 @@ int fs_remove(lua_State* L) {
   return 1;
 }
 // fs.list(path) -> { "a.txt", "sub/", ... } (directories get a trailing slash), sorted
+// FAT stores LOCAL wall-clock time as a packed stamp: date = (year-1980) << 9 | month << 5 | day, time = hour << 11 | minute << 5 | sec/2.
+// Returns that wall-clock expressed as seconds since 1970 as if it were UTC (a plain, sortable, diffable number; there is no time
+// zone in the stamp). 0 = unknown or not a valid stamp.
+int64_t fatToEpoch(uint32_t fat) {
+  const uint32_t d = fat >> 16, t = fat & 0xFFFF;
+  if (d == 0) return 0;
+  const int year = 1980 + static_cast<int>(d >> 9), mon = static_cast<int>((d >> 5) & 15), day = static_cast<int>(d & 31);
+  const int hour = static_cast<int>(t >> 11), min = static_cast<int>((t >> 5) & 63), sec = static_cast<int>((t & 31) * 2);
+  if (mon < 1 || mon > 12 || day < 1 || day > 31 || hour > 23 || min > 59 || sec > 59) return 0;
+  const int y = year - (mon <= 2 ? 1 : 0);  // days-from-civil (proleptic Gregorian), March-based year
+  const int era = y / 400;
+  const int yoe = y - era * 400;
+  const int doy = (153 * (mon + (mon > 2 ? -3 : 9)) + 2) / 5 + day - 1;
+  const int doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+  const int64_t days = static_cast<int64_t>(era) * 146097 + doe - 719468;
+  return days * 86400 + hour * 3600 + min * 60 + sec;
+}
+
+// Lua here has 32-bit integers (and 32-bit floats), so a number is only exact up to 2^31-1: sizes above 2 GiB read as
+// 2147483647 (never wrapped negative) and a time past 2038-01-19 (FAT allows 2107) is reported as unknown, not as a wrong date.
+constexpr int64_t LUA_INT_MAX = 2147483647;
+
+// Pushes {size=, dir=, mtime=} (mtime only when the card has a stamp that fits).
+void pushStat(lua_State* L, const Backend::FsStat& st) {
+  lua_createtable(L, 0, 3);
+  lua_pushinteger(L, static_cast<lua_Integer>(std::min(st.size, LUA_INT_MAX)));
+  lua_setfield(L, -2, "size");
+  lua_pushboolean(L, st.isDir);
+  lua_setfield(L, -2, "dir");
+  const int64_t m = fatToEpoch(st.fatTime);
+  if (m != 0 && m <= LUA_INT_MAX) {
+    lua_pushinteger(L, static_cast<lua_Integer>(m));
+    lua_setfield(L, -2, "mtime");
+  }
+}
+
+// fs.stat(path) -> {size, dir, mtime} | nil, err. mtime = the file's wall-clock modification time as seconds since 1970
+// read as UTC (FAT keeps local time, no zone); missing when the card has no valid stamp.
+int fs_stat(lua_State* L) {
+  char path[MAX_PATH_LEN + 80];
+  Scope sc;
+  if (!pathArg(L, 1, false, path, sizeof(path), &sc)) return 2;
+  Backend::FsStat st;
+  if (!be(L).fsStat(path, &st)) return pushFail(L, "no such file");
+  pushStat(L, st);
+  return 1;
+}
+
+constexpr int LIST_MAX_NAMES = 512, LIST_MAX_DETAIL = 64, LIST_DEFAULT_DETAIL = 32;
+
+// fs.list(path [, {detail=false, offset=0, limit=N}]) -> array [, total]
+//   plain:  sorted names, folders end in "/" (unchanged). With an options table it also returns the total entry count and
+//           only the window offset..offset+limit (limit 1..512, default all).
+//   detail: the same window as tables {name=, dir=, size=, mtime=} (name has no trailing "/"); limit 1..64, default 32,
+//           because a table per entry is ~100 bytes of the ~96 KB Lua heap: page through big folders.
 int fs_list(lua_State* L) {
   char path[MAX_PATH_LEN + 80];
   Scope sc;
   if (!pathArg(L, 1, false, path, sizeof(path), &sc)) return 2;
+  bool hasOpts = false, detail = false;
+  lua_Number offset = 0, limit = -1;
+  if (!lua_isnoneornil(L, 2)) {
+    luaL_checktype(L, 2, LUA_TTABLE);
+    hasOpts = true;
+    lua_pushnil(L);
+    while (lua_next(L, 2)) {  // key at -2, value at -1
+      if (lua_type(L, -2) != LUA_TSTRING) return pushFail(L, "options must have string keys");
+      const char* k = lua_tostring(L, -2);
+      if (!strcmp(k, "detail")) {
+        if (lua_type(L, -1) != LUA_TBOOLEAN) return pushFail(L, "detail must be a boolean");
+        detail = lua_toboolean(L, -1) != 0;
+      } else if (!strcmp(k, "offset")) {
+        if (lua_type(L, -1) != LUA_TNUMBER) return pushFail(L, "offset must be an integer >= 0");
+        offset = lua_tonumber(L, -1);
+      } else if (!strcmp(k, "limit")) {
+        if (lua_type(L, -1) != LUA_TNUMBER) return pushFail(L, "limit must be an integer");
+        limit = lua_tonumber(L, -1);
+      } else {
+        char msg[64];
+        snprintf(msg, sizeof(msg), "unknown option '%.24s'", k);
+        return pushFail(L, msg);
+      }
+      lua_pop(L, 1);
+    }
+  }
+  if (offset < 0 || offset > 100000 || offset != static_cast<int>(offset)) return pushFail(L, "offset must be an integer >= 0");
+  const int maxLimit = detail ? LIST_MAX_DETAIL : LIST_MAX_NAMES;
+  if (limit < 0) limit = detail ? LIST_DEFAULT_DETAIL : LIST_MAX_NAMES;
+  else if (limit < 1 || limit > maxLimit || limit != static_cast<int>(limit)) {
+    char msg[48];
+    snprintf(msg, sizeof(msg), "limit must be an integer 1..%d", maxLimit);
+    return pushFail(L, msg);
+  }
   if (be(L).fsSize(path) != -2) return pushFail(L, "not a directory");
   if (!be(L).fsListBegin(path)) return pushFail(L, "cannot open directory");
   lua_newtable(L);  // a lua error below (OOM) leaves the backend iterator open; the next Begin/close resets it
@@ -369,7 +458,7 @@ int fs_list(lua_State* L) {
   char name[130];
   bool isDir = false;
   while (be(L).fsListNext(name, sizeof(name) - 1, &isDir)) {
-    if (n >= 512) break;  // sanity cap
+    if (n >= LIST_MAX_NAMES) break;  // sanity cap
     if (sc == Scope::Sd && name[0] == '.') continue;  // hidden entries do not exist as far as an app can tell
     if (isDir) strcat(name, "/");
     lua_pushstring(L, name);
@@ -382,7 +471,36 @@ int fs_list(lua_State* L) {
   lua_remove(L, -2);
   lua_pushvalue(L, -2);
   lua_call(L, 1, 0);
-  return 1;
+  if (!hasOpts) return 1;
+  const int names = lua_gettop(L);
+  const int first = static_cast<int>(offset), last = std::min(n, first + static_cast<int>(limit));
+  lua_createtable(L, std::max(0, last - first), 0);
+  for (int i = first + 1; i <= last; i++) {
+    lua_rawgeti(L, names, i);
+    if (!detail) {
+      lua_rawseti(L, -2, i - first);
+      continue;
+    }
+    char entry[130];
+    snprintf(entry, sizeof(entry), "%s", lua_tostring(L, -1));
+    lua_pop(L, 1);
+    const size_t el = strlen(entry);
+    const bool dir = el > 0 && entry[el - 1] == '/';
+    if (dir) entry[el - 1] = '\0';
+    char child[MAX_PATH_LEN + 80];
+    Backend::FsStat st;
+    const int w = snprintf(child, sizeof(child), "%s/%s", path, entry);
+    if (w < 0 || static_cast<size_t>(w) >= sizeof(child) || !be(L).fsStat(child, &st)) {
+      st = Backend::FsStat();  // vanished between the listing and the stat (or a path too long to ask about): size 0, no time
+      st.isDir = dir;
+    }
+    pushStat(L, st);
+    lua_pushstring(L, entry);
+    lua_setfield(L, -2, "name");
+    lua_rawseti(L, -2, i - first);
+  }
+  lua_pushinteger(L, n);
+  return 2;
 }
 
 // ---- require support ---------------------------------------------------------
@@ -544,7 +662,7 @@ int fs_rename(lua_State* L) {
 void registerFs(lua_State* L, Ctx* c) {
   static const luaL_Reg fs[] = {{"read", fs_read},     {"write", fs_write}, {"write_at", fs_write_at}, {"append", fs_append},
                                 {"exists", fs_exists}, {"size", fs_size},   {"mkdir", fs_mkdir},
-                                {"remove", fs_remove}, {"list", fs_list},   {"rename", fs_rename}, {nullptr, nullptr}};
+                                {"remove", fs_remove}, {"list", fs_list},   {"rename", fs_rename}, {"stat", fs_stat}, {nullptr, nullptr}};
   regTable(L, c, "fs", fs);
 }
 

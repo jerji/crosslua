@@ -116,6 +116,23 @@ struct MockBackend : Backend {
     auto it = files.lower_bound(pre);
     return (it != files.end() && it->first.rfind(pre, 0) == 0) ? -2 : -1;
   }
+  std::map<std::string, uint32_t> fatTimes;  // FAT modification stamps (date << 16 | time) by absolute path
+  int statCalls = 0;
+  std::map<std::string, int64_t> bigSizes;  // sizes a std::string cannot hold (fsStat only)
+  std::string statFailPath;  // fsStat of this path fails (an entry that vanished between listing and stat)
+  bool fsStat(const char* p, FsStat* out) override {
+    statCalls++;
+    if (statFailPath == p) return false;
+    const int64_t n = fsSize(p);
+    if (n == -1) return false;
+    out->isDir = n == -2;
+    out->size = n == -2 ? 0 : n;
+    auto big = bigSizes.find(p);
+    if (big != bigSizes.end()) out->size = big->second;
+    auto t = fatTimes.find(p);
+    out->fatTime = t == fatTimes.end() ? 0 : t->second;
+    return true;
+  }
   std::string failReadPath;  // reads of this path fail (a card that goes away mid-read)
   bool fsReadInto(const char* p, void* dst, size_t n, size_t offset) override {
     auto f = files.find(p);
@@ -4472,6 +4489,218 @@ int main() {
       CHECK(vm.load("t", script, strlen(script)));
       CHECK(run(vm, be, 100000) == Status::Finished);
       CHECK(be.logs.size() == 1 && be.logs[0] == "nil\ttls handshake failed (certificate does not match the ca)");
+    }
+  }
+  {
+    TEST("fs.stat / fs.list detail: size, dir, FAT time -> wall-clock epoch (independent reference values), paging, option validation");
+    auto fat = [](int y, int mo, int d, int h, int mi, int sec) -> uint32_t {
+      return (static_cast<uint32_t>(((y - 1980) << 9) | (mo << 5) | d) << 16) | static_cast<uint32_t>((h << 11) | (mi << 5) | (sec / 2));
+    };
+    {
+      MockBackend be;
+      const std::string D = "/.crosslua/data/test/";
+      be.files[D + "a.txt"] = "abc";
+      be.files[D + "b.txt"] = "hello";
+      be.files[D + "c.txt"] = "";
+      be.files[D + "sub/x"] = "1";
+      be.fatTimes[D + "b.txt"] = fat(2026, 10, 26, 12, 34, 56);  // 1793018096 (python calendar.timegm)
+      be.fatTimes[D + "a.txt"] = fat(1980, 1, 1, 0, 0, 0);       // 315532800
+      be.files[D + "leap"] = "x"; be.fatTimes[D + "leap"] = fat(2024, 2, 29, 23, 59, 58);  // 1709251198
+      be.files[D + "last"] = "x"; be.fatTimes[D + "last"] = fat(2107, 12, 31, 23, 59, 58); // 4354819198: past 32-bit Lua, so unknown
+      be.files[D + "y2038"] = "x"; be.fatTimes[D + "y2038"] = fat(2038, 1, 19, 3, 14, 6);   // 2147483646: the last stamp that fits
+      be.files[D + "y2038b"] = "x"; be.fatTimes[D + "y2038b"] = fat(2038, 1, 19, 3, 14, 8); // 2147483648: one tick too far -> unknown
+      be.files[D + "huge"] = "x"; be.bigSizes[D + "huge"] = 3000000000LL;                    // > 2 GiB: clamps, never negative
+      be.files[D + "edge"] = "x"; be.bigSizes[D + "edge"] = 2147483647LL;
+      be.files[D + "jan"] = "x"; be.fatTimes[D + "jan"] = fat(2025, 1, 31, 0, 0, 0);       // 1738281600
+      be.files[D + "mar"] = "x"; be.fatTimes[D + "mar"] = fat(2025, 3, 1, 0, 0, 0);        // 1740787200
+      be.files[D + "badmon"] = "x"; be.fatTimes[D + "badmon"] = fat(2026, 13, 1, 0, 0, 0);
+      be.files[D + "badmon0"] = "x"; be.fatTimes[D + "badmon0"] = fat(2026, 0, 1, 0, 0, 0);
+      be.files[D + "badday"] = "x"; be.fatTimes[D + "badday"] = fat(2026, 1, 0, 0, 0, 0);
+      be.files[D + "badday32"] = "x"; be.fatTimes[D + "badday32"] = fat(2026, 1, 32 & 31, 0, 0, 0);  // 0 after the mask: same as badday
+      be.files[D + "badhour"] = "x"; be.fatTimes[D + "badhour"] = fat(2026, 1, 1, 24, 0, 0);
+      be.files[D + "badmin"] = "x"; be.fatTimes[D + "badmin"] = fat(2026, 1, 1, 0, 60, 0);
+      be.files[D + "badsec"] = "x"; be.fatTimes[D + "badsec"] = (fat(2026, 1, 1, 0, 0, 0) & 0xFFFF0000u) | 30;  // 30 * 2 = 60 s
+      be.files[D + "nodate"] = "x"; be.fatTimes[D + "nodate"] = 0x00001234;  // a time without a date
+      LuaVm vm;
+      CHECK(vm.open(128 * 1024));
+      registerApi(vm, be);
+      const char* script = R"LUA(
+        local function show(st) if not st then return "nil" end
+          return ("%d,%s,%s"):format(st.size, tostring(st.dir), tostring(st.mtime)) end
+        print(show(fs.stat("data:b.txt")))
+        print(show(fs.stat("data:a.txt")))
+        print(show(fs.stat("data:c.txt")))
+        print(show(fs.stat("data:sub")))
+        print(fs.stat("data:nope"))
+        print(show(fs.stat("data:leap")))
+        print(show(fs.stat("data:last")))
+        print(show(fs.stat("data:y2038")))
+        print(show(fs.stat("data:y2038b")))
+        print(show(fs.stat("data:huge")))
+        print(show(fs.stat("data:edge")))
+        print(show(fs.stat("data:jan")))
+        print(show(fs.stat("data:mar")))
+        for _, n in ipairs{"badmon", "badmon0", "badday", "badday32", "badhour", "badmin", "badsec", "nodate"} do
+          print(n .. "=" .. tostring(fs.stat("data:" .. n).mtime))
+        end
+        print(fs.stat("../x"))
+        print((pcall(fs.stat)))
+      )LUA";
+      CHECK(vm.load("t", script, strlen(script)));
+      CHECK(run(vm, be, 400000) == Status::Finished);
+      const char* want[] = {"5,false,1793018096", "3,false,315532800", "0,false,nil", "0,true,nil", "nil\tno such file",
+                            "1,false,1709251198", "1,false,nil", "1,false,2147483646", "1,false,nil", "2147483647,false,nil", "2147483647,false,nil", "1,false,1738281600", "1,false,1740787200",
+                            "badmon=nil", "badmon0=nil", "badday=nil", "badday32=nil", "badhour=nil", "badmin=nil", "badsec=nil", "nodate=nil",
+                            "nil\t'.' and '..' are not allowed", "false"};
+      const size_t N = sizeof(want) / sizeof(want[0]);
+      CHECK(be.logs.size() == N);
+      if (be.logs.size() != N || getenv("DUMP_LOGS")) for (size_t i = 0; i < be.logs.size(); i++) printf("    stat log[%zu] '%s'\n", i, be.logs[i].c_str());
+      for (size_t i = 0; i < N && i < be.logs.size(); i++) {
+        CHECK(be.logs[i] == want[i]);
+        if (be.logs[i] != want[i]) printf("    stat #%zu got '%s' want '%s'\n", i + 1, be.logs[i].c_str(), want[i]);
+      }
+    }
+    {
+      MockBackend be;  // listing: plain unchanged, windows, detail, paging, stat call counts, vanished entries
+      const std::string D = "/.crosslua/data/test/";
+      be.files[D + "a.txt"] = "abc";
+      be.files[D + "b.txt"] = "hello";
+      be.files[D + "c.txt"] = "";
+      be.files[D + "sub/x"] = "1";
+      be.fatTimes[D + "b.txt"] = fat(2026, 10, 26, 12, 34, 56);
+      LuaVm vm;
+      CHECK(vm.open(128 * 1024));
+      registerApi(vm, be);
+      const char* script = R"LUA(
+        local function names(t) local o = {} for i, v in ipairs(t) do o[i] = type(v) == "table" and (v.name .. (v.dir and "/" or "")) or v end return table.concat(o, " ") end
+        print(select("#", fs.list("data:")))
+        print(names(fs.list("data:")))
+        local t, total = fs.list("data:", {})
+        print(names(t), total)
+        t, total = fs.list("data:", {offset = 1, limit = 2})
+        print(names(t), total)
+        t, total = fs.list("data:", {offset = 4})
+        print(#t, total)
+        t, total = fs.list("data:", {offset = 3, limit = 5})
+        print(names(t), total)
+        t, total = fs.list("data:", {detail = true})
+        print(names(t), total)
+        local b = t[2]
+        print(b.name, b.size, b.dir, b.mtime)
+        print(t[4].name, t[4].size, t[4].dir, t[4].mtime)
+        t, total = fs.list("data:", {detail = true, offset = 1, limit = 2})
+        print(names(t), total, #t)
+        t, total = fs.list("data:", {detail = false, limit = 1})
+        print(names(t), total)
+      )LUA";
+      CHECK(vm.load("t", script, strlen(script)));
+      CHECK(run(vm, be, 400000) == Status::Finished);
+      const char* want[] = {"1", "a.txt b.txt c.txt sub/", "a.txt b.txt c.txt sub/\t4", "b.txt c.txt\t4", "0\t4", "sub/\t4",
+                            "a.txt b.txt c.txt sub/\t4", "b.txt\t5\tfalse\t1793018096", "sub\t0\ttrue\tnil",
+                            "b.txt c.txt\t4\t2", "a.txt\t4"};
+      const size_t N = sizeof(want) / sizeof(want[0]);
+      CHECK(be.logs.size() == N);
+      if (be.logs.size() != N || getenv("DUMP_LOGS")) for (size_t i = 0; i < be.logs.size(); i++) printf("    list log[%zu] '%s'\n", i, be.logs[i].c_str());
+      for (size_t i = 0; i < N && i < be.logs.size(); i++) {
+        CHECK(be.logs[i] == want[i]);
+        if (be.logs[i] != want[i]) printf("    list #%zu got '%s' want '%s'\n", i + 1, be.logs[i].c_str(), want[i]);
+      }
+      // stat is only asked for the entries inside the window: 4 (full detail) + 2 (the 2-entry window); plain listings ask for none
+      CHECK(be.statCalls == 6);
+    }
+    {
+      MockBackend be;  // the default detail window is 32 entries (a table per entry is ~100 bytes of the Lua heap); names default to all
+      for (int i = 0; i < 40; i++) {
+        char nm[48];
+        snprintf(nm, sizeof(nm), "/.crosslua/data/test/f%02d", i);
+        be.files[nm] = "x";
+      }
+      LuaVm vm;
+      CHECK(vm.open(128 * 1024));
+      registerApi(vm, be);
+      const char* script = R"LUA(
+        local t, total = fs.list("data:", {detail = true})
+        print(#t, total, t[1].name, t[32].name)
+        t, total = fs.list("data:", {detail = true, offset = 32})
+        print(#t, total, t[1].name, t[8].name)
+        t, total = fs.list("data:", {})
+        print(#t, total)
+        t, total = fs.list("data:", {detail = true, limit = 64})
+        print(#t, total)
+      )LUA";
+      CHECK(vm.load("t", script, strlen(script)));
+      CHECK(run(vm, be, 200000) == Status::Finished);
+      const char* want[] = {"32\t40\tf00\tf31", "8\t40\tf32\tf39", "40\t40", "40\t40"};
+      CHECK(be.logs.size() == 4);
+      for (size_t i = 0; i < 4 && i < be.logs.size(); i++) {
+        CHECK(be.logs[i] == want[i]);
+        if (be.logs[i] != want[i]) printf("    page #%zu got '%s' want '%s'\n", i + 1, be.logs[i].c_str(), want[i]);
+      }
+    }
+    {
+      MockBackend be;  // an entry that vanishes between the listing and the stat keeps its name and type, size 0, no time
+      const std::string D = "/.crosslua/data/test/";
+      be.files[D + "gone.txt"] = "abc";
+      be.files[D + "sub/x"] = "1";
+      be.statFailPath = D + "gone.txt";
+      LuaVm vm;
+      CHECK(vm.open(128 * 1024));
+      registerApi(vm, be);
+      const char* script = R"LUA(
+        local t = fs.list("data:", {detail = true})
+        print(t[1].name, t[1].dir, t[1].size, t[1].mtime)
+        print(t[2].name, t[2].dir, t[2].size)
+      )LUA";
+      CHECK(vm.load("t", script, strlen(script)));
+      CHECK(run(vm, be, 100000) == Status::Finished);
+      CHECK(be.logs.size() == 2 && be.logs[0] == "gone.txt\tfalse\t0\tnil" && be.logs[1] == "sub\ttrue\t0");
+      be.statFailPath = D + "sub";  // a folder that vanishes keeps dir = true
+      be.logs.clear();
+      LuaVm vm2;
+      CHECK(vm2.open(128 * 1024));
+      registerApi(vm2, be);
+      CHECK(vm2.load("t", script, strlen(script)));
+      CHECK(run(vm2, be, 100000) == Status::Finished);
+      CHECK(be.logs.size() == 2 && be.logs[1] == "sub\ttrue\t0");
+    }
+    {
+      MockBackend be;  // option validation: nothing invalid reaches the backend
+      be.files["/.crosslua/data/test/a.txt"] = "abc";
+      LuaVm vm;
+      CHECK(vm.open(128 * 1024));
+      registerApi(vm, be);
+      const char* script = R"LUA(
+        print(fs.list("data:", {detail = "yes"}))
+        print(fs.list("data:", {offset = -1}))
+        print(fs.list("data:", {offset = 1.5}))
+        print(fs.list("data:", {offset = "1"}))
+        print(fs.list("data:", {offset = 100001}))
+        print(fs.list("data:", {limit = 0}))
+        print(fs.list("data:", {limit = 513}))
+        print(fs.list("data:", {limit = 1.5}))
+        print(fs.list("data:", {limit = "2"}))
+        print(fs.list("data:", {detail = true, limit = 65}))
+        print(fs.list("data:", {colour = 1}))
+        print(fs.list("data:", {"x"}))
+        print((pcall(fs.list, "data:", 5)))
+        print(#fs.list("data:", {limit = 512}), #fs.list("data:", {detail = true, limit = 64}))
+        print(fs.list("data:nope", {limit = 1}))
+      )LUA";
+      CHECK(vm.load("t", script, strlen(script)));
+      CHECK(run(vm, be, 100000) == Status::Finished);
+      const char* want[] = {"nil\tdetail must be a boolean", "nil\toffset must be an integer >= 0", "nil\toffset must be an integer >= 0",
+                            "nil\toffset must be an integer >= 0", "nil\toffset must be an integer >= 0",
+                            "nil\tlimit must be an integer 1..512", "nil\tlimit must be an integer 1..512", "nil\tlimit must be an integer 1..512",
+                            "nil\tlimit must be an integer", "nil\tlimit must be an integer 1..64",
+                            "nil\tunknown option 'colour'", "nil\toptions must have string keys", "false", "1\t1", "nil\tnot a directory"};
+      const size_t N = sizeof(want) / sizeof(want[0]);
+      CHECK(be.logs.size() == N);
+      if (be.logs.size() != N || getenv("DUMP_LOGS")) for (size_t i = 0; i < be.logs.size(); i++) printf("    opt log[%zu] '%s'\n", i, be.logs[i].c_str());
+      for (size_t i = 0; i < N && i < be.logs.size(); i++) {
+        CHECK(be.logs[i] == want[i]);
+        if (be.logs[i] != want[i]) printf("    opt #%zu got '%s' want '%s'\n", i + 1, be.logs[i].c_str(), want[i]);
+      }
+      CHECK(be.statCalls == 1);  // only the valid detail call at the end asked about its one entry
     }
   }
   printf(g_fail ? "\n%d FAILED\n" : "\nALL PASSED\n", g_fail);

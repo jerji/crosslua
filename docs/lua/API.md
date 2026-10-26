@@ -1,4 +1,4 @@
-# CrossLua app API (v0.20)
+# CrossLua app API (v0.21)
 
 An app is a plugin folder containing `main.lua`, in any plugin root
 (`/plugins`, `/.plugins`, `/.crosspoint/plugins`):
@@ -106,7 +106,8 @@ Anything else is rejected, so `fs.read("../../x")` cannot escape. Errors are ret
 | `fs.write_at(path, offset, data)` | true \| nil, err. **In place, NOT atomic** (`data:` only; the file must exist; `offset` ≤ size; data ≤ 16 KB). For small fixed-size records in big files (a power cut can tear that one record, never the whole file) |
 | `fs.exists(path)` | bool |
 | `fs.size(path)` | bytes \| nil, err |
-| `fs.list(path)` | sorted array of names, folders end in `/` \| nil, err (`fs.list("data:")` lists your save folder) |
+| `fs.list(path [, {detail, offset, limit}])` | sorted array of names, folders end in `/` \| nil, err (`fs.list("data:")` lists your save folder). **With an options table** it also returns the total entry count and only the window `offset`..`offset+limit` (limit 1..512, default all). **`detail=true`** returns tables `{name, dir, size, mtime}` instead (`name` has no trailing `/`; limit 1..64, **default 32**: a table per entry is ~100 bytes of the ~96 KB Lua heap, so page through big folders with `offset`; `size` costs one card lookup per returned entry only). Unknown options, wrong types and out-of-range values are refused with an error value, never ignored |
+| `fs.stat(path)` | `{size, dir, mtime}` \| nil, `"no such file"`. `size` is 0 for a folder. `mtime` is the file's FAT stamp as seconds since 1970 **read as local wall-clock time** (FAT stores no zone, so it is not comparable with `time.now()` across zones) and is missing when the card has no valid stamp. **Lua numbers here are 32-bit**: sizes above 2 GiB read as 2147483647, and a stamp past 2038-01-19 (FAT allows 2107) is reported as missing rather than as a wrong date. **Files created on the device itself currently all carry the same constant default stamp (2026-01-01 00:00:00): the firmware sets no FAT clock yet**, so `mtime` is only meaningful for files that came from a computer |
 | `fs.mkdir(path)` / `fs.remove(path)` | true \| nil, err (`data:` only; remove works on files and *empty* folders) |
 
 ## require

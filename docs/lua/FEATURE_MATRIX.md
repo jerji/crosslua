@@ -7,7 +7,7 @@ roadmap, ordered by how many features each primitive unblocks and how cheap/safe
 Lua heap). Verdicts in the per-fork files; here only the gaps.
 
 ## Tier 1 — trivial native bindings, unlock the most (one build)
-**Status: every Tier 1 and Tier 2 row below is implemented** (checked against the registered functions in `src/lua/`: wifi.scan, time.sync/set, fs.rename, system.mac/usb, gfx.qr, device.haptic/frontlight, zip.inflate, gfx.image, crypto, input.text, save_bmp, epub.meta, net). Open work is Tier 3, the parked hardware rows (BLE, COLOR gfx model, `device.wake_in`) and the Angel requests (`fs.stat` / detailed `fs.list`, app categories).
+**Status: every Tier 1 and Tier 2 row below is implemented** (checked against the registered functions in `src/lua/`: wifi.scan, time.sync/set, fs.rename, system.mac/usb, gfx.qr, device.haptic/frontlight, zip.inflate, gfx.image, crypto, input.text, save_bmp, epub.meta, net). Open work is Tier 3, the parked hardware rows (BLE, COLOR gfx model, `device.wake_in`), app categories, and a real FAT clock (see below).
 
 | primitive | unlocks | notes / where it comes from |
 |---|---|---|
@@ -88,7 +88,7 @@ Order of work: (1) caps flags for everything + `device.motion` + `device.environ
   confirmation listing the grants in plain words; approval stored in a hidden firmware-owned file (re-prompt when an
   update widens the grants). Hidden/dot paths and firmware images are NEVER grantable; `/plugins` (other apps' code) needs a
   separate louder warning. Enables `sd:` writes + `http save_to sd:Books/..`, `fs.rename/remove` inside grants, `app.open(path)`
-  (reader today; text/image viewers later). File-browser apps additionally need `fs.stat` / detailed `fs.list` (size, type, mtime).
+  (reader today; text/image viewers later). File-browser apps additionally needed `fs.stat` / detailed `fs.list` (size, type, mtime): **done** (`fs.stat`, `fs.list{detail,offset,limit}`; host-tested, 26 mutants; verified on the X4). Open: the firmware sets no FAT clock, so device-created files all carry one default stamp.
 
 ## Also requested by Angel, scheduled for later
 - **`app.restart(entry)` (implemented, host-tested, 6 mutants; verified on the X4 via the Grimoire launcher -> run.lua -> launcher round trip)** — the app quits itself and is relaunched immediately with a different entry script (`main.lua` by

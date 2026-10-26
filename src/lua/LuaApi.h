@@ -56,6 +56,12 @@ class Backend {
   // Absolute SD paths only. Sandboxing/validation happens in the API layer, never here.
   // Rule: no callbacks into Lua from these (a lua_error would longjmp over backend frames).
   virtual int64_t fsSize(const char* path) = 0;  // bytes; -1 = missing; -2 = directory
+  struct FsStat {
+    bool isDir = false;
+    int64_t size = 0;      // bytes; 0 for a folder
+    uint32_t fatTime = 0;  // FAT modification stamp packed as (date << 16) | time; 0 = unknown
+  };
+  virtual bool fsStat(const char* path, FsStat* out) = 0;  // false: missing
   virtual bool fsReadInto(const char* path, void* dst, size_t n, size_t offset) = 0;  // exactly n bytes from offset
   virtual bool fsWrite(const char* path, const void* data, size_t n, bool append) = 0;  // atomic unless append
   // In-place write at `offset` (<= file size; may extend the file). NOT atomic: meant for small fixed-size records.
