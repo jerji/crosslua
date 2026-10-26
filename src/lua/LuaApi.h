@@ -60,6 +60,8 @@ class Backend {
   virtual bool fsWrite(const char* path, const void* data, size_t n, bool append) = 0;  // atomic unless append
   // In-place write at `offset` (<= file size; may extend the file). NOT atomic: meant for small fixed-size records.
   virtual bool fsWriteAt(const char* path, size_t offset, const void* data, size_t n) = 0;
+  // Writes the CURRENT drawing buffer as a 1-bit BMP (the firmware's own screenshot writer: streams rows, no heap).
+  virtual bool saveScreenBmp(const char* absPath, char* err, size_t errCap) = 0;
   virtual bool fsMkdir(const char* path) = 0;   // recursive; ok if it exists
   virtual bool fsRemove(const char* path) = 0;  // file or empty directory
   // One iterator at a time; fsListBegin() closes any previous one.

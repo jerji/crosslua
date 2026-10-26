@@ -1,4 +1,4 @@
-# CrossLua app API (v0.12)
+# CrossLua app API (v0.13)
 
 An app is a plugin folder containing `main.lua`, in any plugin root
 (`/plugins`, `/.plugins`, `/.crosspoint/plugins`):
@@ -53,6 +53,7 @@ cannot freeze the device, drop the power button, or block sleep.
 | `gfx.line_height([font])` → px | |
 | `gfx.present([mode])` | pushes the frame to the panel. `"fast"` (default), `"half"`, `"full"` (clears ghosting, slow) |
 | `gfx.image(path, x, y [, box_w, box_h])` → drawn_w, drawn_h \| nil, err | PNG/JPEG/BMP (`.png .jpg .jpeg .bmp`) from `app:`/`data:`/`sd:` (`sd:` needs `library`; hidden paths refused). Decoded row by row by the firmware (RAM does not scale with the source; sources up to 8 MP / 6 MB), dithered to black/white into the current frame. The box defaults to x,y..screen edge and is clipped to the screen; the image is **fitted into the box, never upscaled, and centred**; the return values are the size actually drawn. Errors are values: `no such file`, `unsupported image type (png, jpg, bmp)`, `cannot read the image header`, `not enough free RAM to decode`, `decode failed`. RAM: **BMP needs only ~16 KB** (uncompressed 1/2/4/8/24/32-bit up to 2048x3072, read row by row, dithered, scaled to the box), JPEG ~24 KB, PNG ~62 KB (the decoder object is 59.5 KB). On a tight heap prefer BMP or JPEG; an app with a big Lua heap can get `not enough free RAM to decode`. Call `gfx.present()` afterwards. |
+| `gfx.save_bmp(path)` → `true` \| `nil, err` | saves the CURRENT drawing buffer (draw first; `gfx.present` is not needed) as a 1-bit BMP in the panel's portrait orientation (480x800 on the X4, 48,062 bytes), using the firmware's own screenshot writer. Same write rules as `fs.write`: `data:` always, `sd:` only with a write grant, never `app:` or `*.bin`; the name must end in `.bmp` (any case); missing folders are created. Streams one row at a time (no heap) and takes about 240 ms on the X4. Verified: reloading the file with `gfx.image` gives a pixel-identical screen; 20 saves leak nothing. Handy for bug reports, sharing a result, or tests |
 
 Fonts: `ui`, `ui12`, `small`, `sans12`, `sans14`, `sans16`, `sans18` (CrossPoint's built-in fonts, same as the rest of the UI).
 Nothing reaches the panel until `gfx.present()`. Coordinates may be floats (truncated).

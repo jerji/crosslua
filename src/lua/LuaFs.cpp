@@ -284,6 +284,22 @@ int fs_write_at(lua_State* L) {
   return 1;
 }
 
+// gfx.save_bmp(path) -> true | nil, err. The drawing buffer as it is right now (draw first; present is not needed), as a
+// 1-bit BMP in the panel's portrait orientation. Same write rules as fs.write: data: always, sd: only with a write grant.
+int gfx_save_bmp(lua_State* L) {
+  char path[MAX_PATH_LEN + 80];
+  Scope sc;
+  if (!pathArg(L, 1, true, path, sizeof(path), &sc)) return 2;
+  const size_t n = strlen(path);
+  if (n < 4 || strcasecmp(path + n - 4, ".bmp") != 0) return pushFail(L, "path must end in .bmp");
+  if (be(L).fsSize(path) == -2) return pushFail(L, "is a directory");
+  if (!ensureParent(be(L), path)) return pushFail(L, "cannot create directory");
+  char err[96] = {0};
+  if (!be(L).saveScreenBmp(path, err, sizeof(err))) return pushFail(L, err[0] ? err : "could not save the screenshot");
+  lua_pushboolean(L, 1);
+  return 1;
+}
+
 int writeImpl(lua_State* L, bool append) {
   char path[MAX_PATH_LEN + 80];
   Scope sc;
@@ -530,6 +546,13 @@ void registerFs(lua_State* L, Ctx* c) {
                                 {"exists", fs_exists}, {"size", fs_size},   {"mkdir", fs_mkdir},
                                 {"remove", fs_remove}, {"list", fs_list},   {"rename", fs_rename}, {nullptr, nullptr}};
   regTable(L, c, "fs", fs);
+  lua_getglobal(L, "gfx");  // gfx.save_bmp lives here because it shares fs.write's path rules
+  if (lua_istable(L, -1)) {
+    lua_pushlightuserdata(L, c);
+    lua_pushcclosure(L, gfx_save_bmp, 1);
+    lua_setfield(L, -2, "save_bmp");
+  }
+  lua_pop(L, 1);
 }
 
 void registerRequire(lua_State* L, Ctx* c) {

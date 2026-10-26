@@ -39,6 +39,7 @@
 #include "network/HttpDownloader.h"
 #include "network/WifiPowerSaveGuard.h"
 #include "util/QrUtils.h"
+#include "util/ScreenshotUtil.h"
 #include "CrossPointSettings.h"
 #include "activities/util/KeyboardEntryActivity.h"
 #include "components/themes/BaseTheme.h"
@@ -367,6 +368,19 @@ class LuaAppActivity::Backend final : public crosslua::Backend {
   static constexpr size_t JPEG_MIN_BLOCK = 24 * 1024;
   static constexpr size_t EPUB_META_MIN_FREE = 64 * 1024;  // measured on the X4: the metadata parse peaks at ~55 KB (epubtest_lua PEAK line)
   static constexpr size_t BMP_MIN_BLOCK = 16 * 1024;  // Bitmap row buffers (<= 2048 px wide) + dither state
+  bool saveScreenBmp(const char* path, char* err, size_t errCap) override {
+    // The firmware's own screenshot writer: rotates to the panel's portrait orientation while streaming rows (68-byte buffer).
+    const uint8_t* fb = r_.getFrameBuffer();
+    if (!fb) {
+      snprintf(err, errCap, "no frame buffer");
+      return false;
+    }
+    if (!ScreenshotUtil::saveFramebufferAsBmp(path, fb, r_.getDisplayWidth(), r_.getDisplayHeight())) {
+      snprintf(err, errCap, "could not write the BMP (SD card full or not writable)");
+      return false;
+    }
+    return true;
+  }
   bool epubMeta(const char* path, char* title, size_t titleCap, char* author, size_t authorCap, char* err,
                 size_t errCap) override {
     // The same metadata-only parse the library indexer uses for books nobody has opened (no cache is built).

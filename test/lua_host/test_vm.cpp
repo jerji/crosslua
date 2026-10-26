@@ -401,6 +401,16 @@ struct MockBackend : Backend {
     return true;
   }
   bool failWrites = false;
+  std::vector<std::string> bmpSaved;
+  std::string bmpFailPath;
+  bool saveScreenBmp(const char* path, char* err, size_t errCap) override {
+    if (!bmpFailPath.empty() && bmpFailPath == path) {
+      snprintf(err, errCap, "mock: card full");
+      return false;
+    }
+    bmpSaved.push_back(path);
+    return true;
+  }
   bool fsMkdir(const char* p) override {
     std::string s(p);
     for (size_t i = 1; i <= s.size(); i++)
@@ -2676,6 +2686,40 @@ int main() {
     CHECK(run(vm, be, 100000) == Status::Finished);
     CHECK(be.logs.size() == 1 && be.logs[0].rfind("nil\t", 0) == 0);
     CHECK(be.epubAsked.empty());
+  }
+  {
+    TEST("gfx.save_bmp: same write rules as fs.write (data: yes, sd: needs a grant, app: never, no .bin), .bmp only, backend errors pass through");
+    MockBackend be;
+    be.library = true;  // may READ sd: but has no write grant
+    LuaVm vm;
+    CHECK(vm.open(128 * 1024));
+    registerApi(vm, be);
+    const char* script = R"LUA(
+      print(gfx.save_bmp("data:shots/a.bmp"))
+      print(gfx.save_bmp("data:B.BMP"))
+      print(gfx.save_bmp("data:shot.png"))
+      print(gfx.save_bmp("sd:Books/x.bmp"))
+      print(gfx.save_bmp("app:x.bmp"))
+      print(gfx.save_bmp("data:../x.bmp"))
+      print(gfx.save_bmp("data:fail.bmp"))
+      print(pcall(gfx.save_bmp))
+    )LUA";
+    CHECK(vm.load("t", script, strlen(script)));
+    be.bmpFailPath = "/.crosslua/data/test/fail.bmp";
+    CHECK(run(vm, be, 200000) == Status::Finished);
+    CHECK(be.logs.size() == 8);
+    if (be.logs.size() == 8) {
+      CHECK(be.logs[0] == "true" && be.logs[1] == "true");
+      CHECK(be.logs[2] == "nil\tpath must end in .bmp");
+      CHECK(be.logs[3] == "nil\tread-only location (write to 'data:...')");
+      CHECK(be.logs[4].rfind("nil\t", 0) == 0);
+      CHECK(be.logs[5].rfind("nil\t", 0) == 0);
+      CHECK(be.logs[6] == "nil\tmock: card full");
+      CHECK(be.logs[7].rfind("false\t", 0) == 0);
+    }
+    const std::vector<std::string> saved = {"/.crosslua/data/test/shots/a.bmp", "/.crosslua/data/test/B.BMP"};
+    CHECK(be.bmpSaved == saved);  // only the two good saves; the refused paths never reached the backend, fail.bmp failed
+    CHECK(be.dirs.count("/.crosslua/data/test/shots") == 1);  // the parent folder is created like fs.write does
   }
   {
     TEST("require: a big module loads in a tight heap (the unstripped copy is dropped before the stripped one loads)");
