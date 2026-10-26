@@ -1,0 +1,60 @@
+# Raw network sockets for Lua — survey and proposed design (NOT implemented yet)
+
+Goal (Angel): give Lua apps TCP/UDP/DNS/mDNS **by calling what CrossPoint already links**, with minimum RAM and no duplicated
+code. This file is the survey result; nothing here is built. Decide the API (section 3) before any code.
+
+## 1. What already exists (measured by reading the trees, not guessed)
+
+| source | what it uses | verdict |
+|---|---|---|
+| CrossPoint `HttpDownloader` / `OpdsTransport` | `esp_http_client` (CA bundle, streaming) | already behind `http.request`; keep for HTTP(S) |
+| SDK `SecureNet::SecureClient` (`freeink-sdk/libs/network/SecureNet`) | an Arduino `Client` over mbedtls with `setCACert`, `setInsecure`, abort callback, `tls13Available()` | **reuse for TLS sockets**: same CA bundle, same TLS stack, no second mbedtls config |
+| Arduino `NetworkClient` / `WiFiClient`, `WiFiServer`, `WiFiUDP` | lwIP sockets, already linked (web server, Calibre, OPDS) | **reuse for plain TCP/UDP/listen**; no new library |
+| `WiFi.hostByName`, `WiFi.localIP/subnetMask/gatewayIP/dnsIP` | Arduino WiFi | DNS + local info, zero extra code |
+| `ESPmDNS` (`MDNS.queryService`) | linked for `crosspoint.local` by `CrossPointWebServerActivity` | mDNS browse |
+| **Grimoire** `src/lua_api/api_net.cpp` (160 lines) | `WiFiServer` + `WiFiClient`; 2 servers, 4 clients, handles are ints, `accept`/`read`/`available` non-blocking, 512-byte chunks | the precedent: its API is the compatibility target (the Grimoire shim's `net.*` and `wifi_server` spell fail today for lack of this) |
+| **biscuit** network apps | `PingActivity` = TCP connect timing (no ICMP); `HostScannerActivity` = `connect` with `setTimeout` over `localIP`/`subnetMask`; `DnsLookupActivity` = `hostByName`; `MdnsBrowserActivity` = `MDNS.queryService`; `HttpClientActivity` = `HTTPClient` | the real use cases: connect-with-timeout, DNS, local network info, mDNS, HTTP (done) |
+| **Ruby** `WifiSniffer` | `esp_wifi_set_promiscuous` | a radio feature, not a socket: stays behind the planned radio permission, out of scope here |
+| crossplay / AvesO3 | only the stock web server + `esp_http_client` | nothing new |
+
+No reference firmware implements ICMP or raw sockets; "ping" everywhere is a TCP connect. We will not add raw sockets.
+
+## 2. RAM and duplication rules for the design
+- Plain TCP/UDP/listen: Arduino classes over lwIP only. No custom buffers; reads go straight into one `luaL_Buffer` (one copy).
+- TLS: `SecureClient` only (shares the CA bundle and the one mbedtls config with HTTPS). Known cost: WiFi ~56 KB, TLS needs
+  40 KB free + a 20 KB contiguous block: the existing preflight (`NET_MIN_FREE_BYTES`) applies, and each new connection class
+  gets a MEASURED figure (same method as `epub.meta`: min-free watermark before/after on the X4), never a guess.
+- Fixed small tables of handles (Grimoire parity: 4 clients, 2 servers, 1-2 UDP sockets), freed when the app ends. Closing is
+  automatic in `~Backend`, like the buzzer/LEDs.
+- Everything is polled from the Activity loop or by the script; no worker task (a task costs ~10 KB, per the HTTP design notes).
+
+## 3. Proposed Lua API (needs the manifest `"permissions": ["network"]`, like `http`/`wifi`)
+```
+net.local()                          -> { ip, mask, gateway, dns } | nil, err          (WiFi must be up)
+net.resolve(host [, timeout_ms])     -> ip string | nil, err                           WiFi.hostByName
+net.connect(host, port [, opts])     -> handle | nil, err      opts = { timeout_ms = 5000, tls = false, insecure = false }
+                                        blocking with Back-to-cancel (same pump as http); TLS -> SecureClient
+net.read(h [, max = 512])            -> string (maybe "") | nil, "closed"              never blocks; max <= 4096
+net.write(h, data)                   -> bytes written | nil, err
+net.available(h) / net.connected(h)  -> number / boolean
+net.close(h)
+net.listen(port) / net.accept(srv) / net.close(srv)   -> NEEDS the extra permission "listen" (exposes the device to the LAN)
+net.udp(port?) , sock:send(host, port, data) , sock:recv([max]) -> data, ip, port | nil
+net.mdns_query(service, proto [, timeout_ms]) -> { {host, ip, port, name}, ... }       ESPmDNS
+```
+Grimoire shim mapping: `listen/accept/closeServer/connect/available/isConnected/read/write/close` map 1:1 onto the above, so
+the `wifi_server` spell becomes runnable (today it reports "not supported").
+
+## 4. Decisions needed from Angel before coding
+1. Is `listen` (device as a server) in scope for the first cut, behind a separate `"listen"` permission + approval screen
+   (grants-style), or do we ship client-only first (connect/resolve/local/mdns/udp)? Recommendation: client-only first, since
+   it covers every biscuit tool and has no LAN-exposure question.
+2. TLS sockets in the first cut (`SecureClient`) or plain TCP first? Recommendation: plain first, TLS second (its RAM needs a
+   separate measurement and it blocks the whole heap budget).
+3. `net.*` as one namespace (proposed) next to `http.*` and `wifi.*`.
+
+## 5. Test plan (same rules as every feature)
+Mock backend with scripted sockets (partial reads, closes mid-read, timeouts, refused connects); argument-validation tests
+before the backend is touched; handle-table exhaustion and reuse after close; mutants on every limit and on the permission
+gate; on the X4: connect to a throwaway echo server on the LAN (this Linux box), measure RAM per connection and the leak over
+200 open/close cycles, then port a biscuit tool (host scanner or DNS lookup) as a Lua app as the end-to-end proof.
