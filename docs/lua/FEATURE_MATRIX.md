@@ -43,10 +43,29 @@ Build the feature for every board the firmware supports, even when the X4 (our o
 | `device.haptic(ms [, strength])` | to do | `HapticManager` (Metalio E-Ink 4): single pulse, honours the user's vibration setting; `false, "no vibration motor on this device"` elsewhere. **UNTESTED ON HARDWARE** |
 | touch input events | to do | `input.wait()` also returns `"tap"`, `"press"`, `"release"`, `"long"`; `input.pos()` -> x, y in screen pixels of the last touch event. Only fires when `caps().touch` |
 | `system.usb()` | to do | `HalGPIO::isUsbConnected()`; works on the X4 |
+| `device.motion()` (IMU) | to do | **done** (UNTESTED unless your board has an IMU) |
+| `device.caps()` sensor flags | to do | **done** |
 | frontlight warmth | done | `device.frontlight` already takes warmth; `caps().warmlight` says whether it does anything |
-| colour (`FREEINK_CAP_COLOR`) | idea | needs a colour `gfx` model first (palette/RGB565); park until a colour board owner volunteers |
-| audio (`FREEINK_CAP_AUDIO`) | idea | `audio.beep/play`; park, same reason |
-| BLE keyboard as input | idea | would deliver key events into `input.wait`; behind a permission like BLE; park |
+
+## Hardware coverage: every `FREEINK_CAP_*` flag, mapped to Lua (goal set by Angel: support most CrossPoint hardware where possible)
+Source of truth: `freeink-sdk/libs/hardware/BoardConfig` (16 flags) and the libs behind them. Each feature follows the same recipe: a `device.caps()` flag, a Backend method that wraps the SDK lib (stubs link on boards without the hardware), host tests with a mock, honest `nil/false, "no X on this device"` results, a line in `devtest_lua`, and a build of an env that has the hardware to prove it compiles. Status key: **done**, **todo**, **permission** (needs a manifest permission + user approval, like network/grants), **park** (needs design or a volunteer with the board).
+| flag / hardware | SDK lib | Lua surface | status |
+|---|---|---|---|
+| `TOUCH` | MappedInputManager | `input` events `tap/press/long/release` + `input.pos()` | **done** (UNTESTED on hardware) |
+| `HAPTIC` | HapticManager | `device.haptic(ms, strength)` | **done** (UNTESTED on hardware) |
+| `FRONTLIGHT` / `WARMLIGHT` | FrontlightManager | `device.frontlight(...)` | **done** |
+| `USB_MSC` | UsbMassStorage | caps flag only; Lua gets NO control (it would expose the SD card to a host) | caps **done** |
+| `IMU` | Imu (LSM6DS3 / QMI8658 / SC7A20H) | `device.motion()` -> ax,ay,az (g), gx,gy,gz (deg/s), `gyro` flag | **done** (host-tested, 21 mutants; absence path verified on the X4; hardware path UNTESTED) |
+| `TEMP_HUMIDITY` | EnvironmentSensor | `device.environment()` -> temp_c, humidity_pct | **done** (host-tested, 21 mutants; absence path verified on the X4; hardware path UNTESTED) |
+| `BUZZER` | Buzzer | `device.tone(freq_hz [, ms])`, `device.tone()` stops | **done** (host-tested, 21 mutants; absence path verified on the X4; hardware path UNTESTED) |
+| `LED` | LedManager | `led.count()`, `led.set(i, r, g, b)`, `led.all(r, g, b)`, `led.flash(r, g, b, n)`, `led.off()` | **done** (host-tested, 21 mutants; absence path verified on the X4; hardware path UNTESTED) |
+| `RTC` | Rtc | caps flag; `time.*` already uses the trusted clock; later `device.wake_in(seconds)` (RTC wake timer for alarm-clock apps) | caps flag **done**; wake_in park |
+| `AUDIO` | AudioManager | `audio.play(path [, loop])` (WAV from the SD card, same path rules as `fs`), `audio.stop()`, `audio.volume(pct)`, `audio.playing()` | permission |
+| `MIC` | Microphone | `mic.read(samples)` / `mic.record(path, seconds)`; a recording device must be consented to: `"microphone"` permission with an approval screen, never silent | permission |
+| `BLE_KEYBOARD` / `BLE_HID_HOST` | BlePageTurner / HID host | key events into `input.wait` + caps; behind a `"ble"` permission | park |
+| `COLOR` | display / gfx | needs a colour `gfx` model (RGB565 palette, `gfx.color(r,g,b)`); caps flag first | caps flag **done**; rest park |
+| `NET_TLS13` | network | caps flag `tls13` so apps know what `http` can talk to | caps flag **done** |
+Order of work: (1) caps flags for everything + `device.motion` + `device.environment` + `device.tone` + `led.*` (one pattern, small, no permissions); (2) `audio.*` and `mic.*` with the permission flow; (3) BLE keyboard and colour once someone can test them.
 
 ## Tier 3 — later / niche / heavy
 

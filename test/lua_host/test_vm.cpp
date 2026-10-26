@@ -329,6 +329,39 @@ struct MockBackend : Backend {
     textMax = maxLen;
     textMode = mode;
   }
+  // sensors / outputs
+  bool motionPresent = false, motionGyro = true, motionFail = false, envPresent = false, envFail = false, buzzerPresent = false;
+  int ledN = 0;
+  std::vector<std::string> toneCalls, ledCalls;
+  SensorStatus motionRead(Backend::Motion* o) override {
+    if (!motionPresent) return SensorStatus::Absent;
+    if (motionFail) return SensorStatus::ReadFailed;
+    *o = {0.5f, -0.25f, 1.0f, motionGyro ? 10.0f : 0.0f, motionGyro ? -20.0f : 0.0f, motionGyro ? 30.0f : 0.0f, motionGyro};
+    return SensorStatus::Ok;
+  }
+  SensorStatus envRead(float* t, float* h) override {
+    if (!envPresent) return SensorStatus::Absent;
+    if (envFail) return SensorStatus::ReadFailed;
+    *t = 21.5f;
+    *h = 40.25f;
+    return SensorStatus::Ok;
+  }
+  bool toneStart(int f, int ms) override {
+    if (!buzzerPresent) return false;
+    toneCalls.push_back(std::to_string(f) + "," + std::to_string(ms));
+    return true;
+  }
+  bool toneStop() override {
+    if (!buzzerPresent) return false;
+    toneCalls.push_back("stop");
+    return true;
+  }
+  int ledCount() override { return ledN; }
+  void ledSet(int i, int r, int g, int b) override {
+    ledCalls.push_back((i < 0 ? std::string("all ") : "set " + std::to_string(i) + " ") + std::to_string(r) + " " + std::to_string(g) + " " + std::to_string(b));
+  }
+  void ledOff() override { ledCalls.push_back("off"); }
+  void ledBrightness(int v) override { ledCalls.push_back("brightness " + std::to_string(v)); }
   uint64_t rng = 0x9e3779b97f4a7c15ull;  // xorshift: deterministic but different on every call
   void randomBytes(uint8_t* out, size_t n) override { for (size_t i = 0; i < n; i++) { rng ^= rng << 13; rng ^= rng >> 7; rng ^= rng << 17; out[i] = (uint8_t)(rng >> 24); } }
   int grantCount() override { return (int)grants.size(); }
@@ -2434,6 +2467,137 @@ int main() {
       }
       CHECK(!be.textAsked);  // none of the invalid calls reached the host
     }
+  }
+  {
+    TEST("sensors: device.motion / environment / tone, led.*: honest 'not on this device', limits, hardware path");
+    for (int hw = 0; hw < 2; hw++) {
+      MockBackend be;
+      if (hw == 1) {
+        be.caps.imu = be.caps.gyro = be.caps.tempHumidity = be.caps.buzzer = be.caps.led = true;
+        be.motionPresent = be.envPresent = be.buzzerPresent = true;
+        be.ledN = 3;
+      }
+      LuaVm vm;
+      CHECK(vm.open(128 * 1024));
+      registerApi(vm, be);
+      const char* script = R"LUA(
+        local c = device.caps()
+        print(c.imu, c.gyro, c.rtc, c.temp_humidity, c.buzzer, c.mic, c.led, c.tls13)
+        local m, err = device.motion()
+        if m then print(string.format("%.2f %.2f %.2f %.1f %.1f %.1f %s", m.ax, m.ay, m.az, m.gx, m.gy, m.gz, tostring(m.gyro))) else print(m, err) end
+        print(device.environment())
+        print(device.tone(440))
+        print(device.tone(1000, 250))
+        print(device.tone())
+        print(device.tone(19))
+        print(device.tone(20001))
+        print(device.tone(440, -1))
+        print(device.tone(440, 10001))
+        print(device.tone(440.5))
+        print(led.count())
+        print(led.set(1, 255, 0, 0))
+        print(led.set(0, 1, 2, 3))
+        print(led.set(4, 1, 2, 3))
+        print(led.set(1, 256, 0, 0))
+        print(led.set(1, 0, 1.5, 0))
+        print(led.all(1, 2, 3))
+        print(led.brightness(128))
+        print(led.brightness(300))
+        print(led.off())
+      )LUA";
+      CHECK(vm.load("t", script, strlen(script)));
+      CHECK(run(vm, be, 200000) == Status::Finished);
+      CHECK(be.logs.size() == 21);
+      if (be.logs.size() == 21) {
+        if (hw == 0) {
+          const char* NO[] = {"false\tfalse\tfalse\tfalse\tfalse\tfalse\tfalse\tfalse", "nil\tno motion sensor on this device",
+                              "nil\tno temperature/humidity sensor on this device", "false\tno buzzer on this device",
+                              "false\tno buzzer on this device", "false\tno buzzer on this device"};
+          for (int i = 0; i < 6; i++) CHECK(be.logs[i] == NO[i]);
+          // argument errors are reported before the hardware is asked
+          CHECK(be.logs[6] == "nil\tfreq must be an integer 20..20000" && be.logs[7] == "nil\tfreq must be an integer 20..20000");
+          CHECK(be.logs[8] == "nil\tms must be an integer 0..10000" && be.logs[9] == "nil\tms must be an integer 0..10000");
+          CHECK(be.logs[10] == "nil\tfreq must be an integer 20..20000");
+          CHECK(be.logs[11] == "0");
+          for (int i = 12; i < 21; i++) CHECK(be.logs[i].rfind("false\tno LEDs on this device", 0) == 0 || be.logs[i].rfind("nil\t", 0) == 0);
+          CHECK(be.logs[12] == "false\tno LEDs on this device");
+          CHECK(be.ledCalls.empty() && be.toneCalls.empty());
+        } else {
+          CHECK(be.logs[0] == "true\ttrue\tfalse\ttrue\ttrue\tfalse\ttrue\tfalse");
+          CHECK(be.logs[1] == "0.50 -0.25 1.00 10.0 -20.0 30.0 true");
+          CHECK(be.logs[2] == "21.5\t40.25");
+          CHECK(be.logs[3] == "true" && be.logs[4] == "true" && be.logs[5] == "true");
+          CHECK(be.logs[6] == "nil\tfreq must be an integer 20..20000" && be.logs[10] == "nil\tfreq must be an integer 20..20000");
+          CHECK(be.logs[11] == "3");
+          CHECK(be.logs[12] == "true");
+          CHECK(be.logs[13] == "nil\tindex must be an integer 1..3" && be.logs[14] == "nil\tindex must be an integer 1..3");
+          CHECK(be.logs[15] == "nil\tr, g, b must be integers 0..255" && be.logs[16] == "nil\tr, g, b must be integers 0..255");
+          CHECK(be.logs[17] == "true" && be.logs[18] == "true");
+          CHECK(be.logs[19] == "nil\tbrightness must be an integer 0..255" && be.logs[20] == "true");
+          const std::vector<std::string> wantTone = {"440,0", "1000,250", "stop"};
+          CHECK(be.toneCalls == wantTone);
+          const std::vector<std::string> wantLed = {"set 0 255 0 0", "all 1 2 3", "brightness 128", "off"};  // index is 0-based on the backend
+          CHECK(be.ledCalls == wantLed);
+        }
+      }
+    }
+    {
+      MockBackend be;
+      be.caps.imu = true;
+      be.motionPresent = true;
+      be.motionGyro = false;
+      LuaVm vm;
+      CHECK(vm.open(128 * 1024));
+      registerApi(vm, be);
+      const char* script = "local m = device.motion()\nprint(string.format('%.2f %.2f %.2f %.1f %.1f %.1f %s', m.ax, m.ay, m.az, m.gx, m.gy, m.gz, tostring(m.gyro)))";
+      CHECK(vm.load("t", script, strlen(script)));
+      CHECK(run(vm, be, 100000) == Status::Finished);
+      CHECK(be.logs.size() == 1 && be.logs[0] == "0.50 -0.25 1.00 0.0 0.0 0.0 false");  // gyro fields are zero on accelerometer-only parts
+    }
+    {
+      MockBackend be;
+      be.motionPresent = true;
+      be.motionFail = true;
+      LuaVm vm;
+      CHECK(vm.open(128 * 1024));
+      registerApi(vm, be);
+      const char* script = "print(device.motion())";
+      CHECK(vm.load("t", script, strlen(script)));
+      CHECK(run(vm, be, 100000) == Status::Finished);
+      CHECK(be.logs.size() == 1 && be.logs[0] == "nil\tmotion sensor read failed");
+    }
+  }
+  {
+    TEST("device.caps: each new flag reports its own field (3 variants: flag i = bit k of i, so any swap shows up)");
+    const char* names[8] = {"imu", "gyro", "rtc", "temp_humidity", "buzzer", "mic", "led", "tls13"};
+    for (int k = 0; k < 3; k++) {
+      MockBackend be;
+      bool* f[8] = {&be.caps.imu, &be.caps.gyro, &be.caps.rtc, &be.caps.tempHumidity, &be.caps.buzzer, &be.caps.mic, &be.caps.led, &be.caps.tls13};
+      std::string want;
+      for (int i = 0; i < 8; i++) {
+        *f[i] = ((i >> k) & 1) != 0;
+        want += std::string(i ? "\t" : "") + (*f[i] ? "true" : "false");
+      }
+      LuaVm vm;
+      CHECK(vm.open(128 * 1024));
+      registerApi(vm, be);
+      std::string script = "local c = device.caps()\nprint(";
+      for (int i = 0; i < 8; i++) script += std::string(i ? ", " : "") + "c." + names[i];
+      script += ")";
+      CHECK(vm.load("t", script.c_str(), script.size()));
+      CHECK(run(vm, be, 100000) == Status::Finished);
+      CHECK(be.logs.size() == 1 && be.logs[0] == want);
+    }
+    MockBackend be;
+    be.envPresent = true;
+    be.envFail = true;
+    LuaVm vm;
+    CHECK(vm.open(128 * 1024));
+    registerApi(vm, be);
+    const char* script = "print(device.environment())";
+    CHECK(vm.load("t", script, strlen(script)));
+    CHECK(run(vm, be, 100000) == Status::Finished);
+    CHECK(be.logs.size() == 1 && be.logs[0] == "nil\ttemperature/humidity sensor read failed");
   }
   {
     TEST("require: a big module loads in a tight heap (the unstripped copy is dropped before the stripped one loads)");

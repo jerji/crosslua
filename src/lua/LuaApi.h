@@ -129,7 +129,8 @@ class Backend {
   // --- what this board has (CrossPoint runs on many boards: apps adapt, they do not guess the model) ---------------
   struct DeviceCaps {
     bool touch = false, haptic = false, frontlight = false, warmlight = false, color = false, audio = false,
-         bleKeyboard = false, usbMsc = false;
+         bleKeyboard = false, usbMsc = false, imu = false, gyro = false, rtc = false, tempHumidity = false,
+         buzzer = false, mic = false, led = false, tls13 = false;
   };
   virtual void deviceCaps(DeviceCaps* out) = 0;
   virtual bool usbConnected() = 0;
@@ -140,6 +141,22 @@ class Backend {
   // input.text(): ask the host to show the system keyboard. The script is parked; the host resumes it with
   // "text:ok:<text>" or "text:cancel". mode: 0 text, 1 password, 2 url.
   virtual void textRequest(const char* title, const char* initial, int maxLen, int mode) = 0;
+
+  // --- sensors / outputs (each is a no-op or `false` on boards without the hardware) -----------------------------------
+  struct Motion {
+    float ax, ay, az;  // acceleration, g
+    float gx, gy, gz;  // angular rate, deg/s (zero on accelerometer-only parts)
+    bool gyro;
+  };
+  enum class SensorStatus : uint8_t { Ok, Absent, ReadFailed };
+  virtual SensorStatus motionRead(Motion* out) = 0;
+  virtual SensorStatus envRead(float* tempC, float* humidityPct) = 0;
+  virtual bool toneStart(int freqHz, int ms) = 0;  // false: no buzzer
+  virtual bool toneStop() = 0;                     // false: no buzzer
+  virtual int ledCount() = 0;                      // 0: no LEDs
+  virtual void ledSet(int index0, int r, int g, int b) = 0;  // index0 -1 = every LED; shown immediately
+  virtual void ledOff() = 0;
+  virtual void ledBrightness(int v) = 0;
   virtual int grantCount() = 0;
   virtual const char* grantPath(int i, bool* write) = 0;
   virtual bool requestRestart(const char* entry) = 0;

@@ -350,12 +350,14 @@ int dev_frontlight(lua_State* L) {
 int dev_caps(lua_State* L) {
   Backend::DeviceCaps c;
   be(L).deviceCaps(&c);
-  lua_createtable(L, 0, 10);
+  lua_createtable(L, 0, 18);
   const struct {
     const char* k;
     bool v;
   } flags[] = {{"touch", c.touch},       {"haptic", c.haptic}, {"frontlight", c.frontlight}, {"warmlight", c.warmlight},
-               {"color", c.color},       {"audio", c.audio},   {"ble_keyboard", c.bleKeyboard}, {"usb_msc", c.usbMsc}};
+               {"color", c.color},       {"audio", c.audio},   {"ble_keyboard", c.bleKeyboard}, {"usb_msc", c.usbMsc},
+               {"imu", c.imu},           {"gyro", c.gyro},     {"rtc", c.rtc},           {"temp_humidity", c.tempHumidity},
+               {"buzzer", c.buzzer},     {"mic", c.mic},       {"led", c.led},           {"tls13", c.tls13}};
   for (const auto& f : flags) {
     lua_pushboolean(L, f.v);
     lua_setfield(L, -2, f.k);
@@ -441,6 +443,165 @@ int input_text(lua_State* L) {
   lua_pushinteger(L, -1);  // no timeout...
   lua_pushboolean(L, 0);   // ...and button events do not wake it: only the host's resume does
   return lua_yieldk(L, 2, 0, text_k);
+}
+
+// device.motion() -> { ax, ay, az (g), gx, gy, gz (deg/s), gyro = boolean } | nil, err. One sample, board-independent axes.
+int dev_motion(lua_State* L) {
+  Backend::Motion m;
+  switch (be(L).motionRead(&m)) {
+    case Backend::SensorStatus::Absent:
+      lua_pushnil(L);
+      lua_pushstring(L, "no motion sensor on this device");
+      return 2;
+    case Backend::SensorStatus::ReadFailed:
+      lua_pushnil(L);
+      lua_pushstring(L, "motion sensor read failed");
+      return 2;
+    case Backend::SensorStatus::Ok:
+      break;
+  }
+  lua_createtable(L, 0, 7);
+  const struct {
+    const char* k;
+    float v;
+  } f[] = {{"ax", m.ax}, {"ay", m.ay}, {"az", m.az}, {"gx", m.gx}, {"gy", m.gy}, {"gz", m.gz}};
+  for (const auto& e : f) {
+    lua_pushnumber(L, e.v);
+    lua_setfield(L, -2, e.k);
+  }
+  lua_pushboolean(L, m.gyro);
+  lua_setfield(L, -2, "gyro");
+  return 1;
+}
+// device.environment() -> temp_c, humidity_pct | nil, err
+int dev_environment(lua_State* L) {
+  float t = 0, h = 0;
+  switch (be(L).envRead(&t, &h)) {
+    case Backend::SensorStatus::Absent:
+      lua_pushnil(L);
+      lua_pushstring(L, "no temperature/humidity sensor on this device");
+      return 2;
+    case Backend::SensorStatus::ReadFailed:
+      lua_pushnil(L);
+      lua_pushstring(L, "temperature/humidity sensor read failed");
+      return 2;
+    case Backend::SensorStatus::Ok:
+      break;
+  }
+  lua_pushnumber(L, t);
+  lua_pushnumber(L, h);
+  return 2;
+}
+// device.tone(freq_hz [, ms]) -> true | false, why | nil, err ; device.tone() stops it. ms 0 (default) = until stopped.
+int dev_tone(lua_State* L) {
+  const char* NO_BUZZER = "no buzzer on this device";
+  if (lua_gettop(L) == 0) {
+    if (!be(L).toneStop()) {
+      lua_pushboolean(L, 0);
+      lua_pushstring(L, NO_BUZZER);
+      return 2;
+    }
+    lua_pushboolean(L, 1);
+    return 1;
+  }
+  const lua_Number f = luaL_checknumber(L, 1);
+  const lua_Number ms = lua_isnoneornil(L, 2) ? 0 : luaL_checknumber(L, 2);
+  if (f < 20 || f > 20000 || f != static_cast<int>(f)) {
+    lua_pushnil(L);
+    lua_pushstring(L, "freq must be an integer 20..20000");
+    return 2;
+  }
+  if (ms < 0 || ms > 10000 || ms != static_cast<int>(ms)) {
+    lua_pushnil(L);
+    lua_pushstring(L, "ms must be an integer 0..10000");
+    return 2;
+  }
+  if (!be(L).toneStart(static_cast<int>(f), static_cast<int>(ms))) {
+    lua_pushboolean(L, 0);
+    lua_pushstring(L, NO_BUZZER);
+    return 2;
+  }
+  lua_pushboolean(L, 1);
+  return 1;
+}
+
+// ---- led (boards with addressable LEDs) ------------------------------------------------------------------------------
+const char* const NO_LEDS = "no LEDs on this device";
+bool colorByte(lua_State* L, int i, int* out) {
+  const lua_Number v = luaL_checknumber(L, i);
+  if (v < 0 || v > 255 || v != static_cast<int>(v)) return false;
+  *out = static_cast<int>(v);
+  return true;
+}
+int ledFail(lua_State* L, const char* msg) {
+  lua_pushnil(L);
+  lua_pushstring(L, msg);
+  return 2;
+}
+// led.count() -> number of LEDs (0 when the board has none)
+int led_count(lua_State* L) {
+  lua_pushinteger(L, be(L).ledCount());
+  return 1;
+}
+// led.set(index 1..count, r, g, b) -> true | false, why | nil, err
+int led_set(lua_State* L) {
+  const lua_Number idx = luaL_checknumber(L, 1);
+  int r, g, b;
+  const bool ok = colorByte(L, 2, &r) & colorByte(L, 3, &g) & colorByte(L, 4, &b);
+  const int n = be(L).ledCount();
+  if (n == 0) {
+    lua_pushboolean(L, 0);
+    lua_pushstring(L, NO_LEDS);
+    return 2;
+  }
+  if (idx < 1 || idx > n || idx != static_cast<int>(idx)) {
+    char msg[48];
+    snprintf(msg, sizeof(msg), "index must be an integer 1..%d", n);
+    return ledFail(L, msg);
+  }
+  if (!ok) return ledFail(L, "r, g, b must be integers 0..255");
+  be(L).ledSet(static_cast<int>(idx) - 1, r, g, b);
+  lua_pushboolean(L, 1);
+  return 1;
+}
+// led.all(r, g, b) -> true | false, why | nil, err
+int led_all(lua_State* L) {
+  int r, g, b;
+  const bool ok = colorByte(L, 1, &r) & colorByte(L, 2, &g) & colorByte(L, 3, &b);
+  if (be(L).ledCount() == 0) {
+    lua_pushboolean(L, 0);
+    lua_pushstring(L, NO_LEDS);
+    return 2;
+  }
+  if (!ok) return ledFail(L, "r, g, b must be integers 0..255");
+  be(L).ledSet(-1, r, g, b);
+  lua_pushboolean(L, 1);
+  return 1;
+}
+// led.off() -> true | false, why
+int led_off(lua_State* L) {
+  if (be(L).ledCount() == 0) {
+    lua_pushboolean(L, 0);
+    lua_pushstring(L, NO_LEDS);
+    return 2;
+  }
+  be(L).ledOff();
+  lua_pushboolean(L, 1);
+  return 1;
+}
+// led.brightness(0..255) -> true | false, why | nil, err   (scales every colour; 255 = as set)
+int led_brightness(lua_State* L) {
+  int v;
+  const bool ok = colorByte(L, 1, &v);
+  if (be(L).ledCount() == 0) {
+    lua_pushboolean(L, 0);
+    lua_pushstring(L, NO_LEDS);
+    return 2;
+  }
+  if (!ok) return ledFail(L, "brightness must be an integer 0..255");
+  be(L).ledBrightness(v);
+  lua_pushboolean(L, 1);
+  return 1;
 }
 
 // ---- time -----------------------------------------------------------------
@@ -556,9 +717,13 @@ void registerApi(LuaVm& vm, Backend& backend) {
   regTable(L, c, "system", sys);
   static const luaL_Reg timeFns[] = {{"now", time_now}, {"date", time_date}, {"sync", time_sync}, {"set", time_set},
                                     {nullptr, nullptr}};
-  static const luaL_Reg devFns[] = {{"frontlight", dev_frontlight}, {"caps", dev_caps}, {"haptic", dev_haptic}, {nullptr, nullptr}};
+  static const luaL_Reg devFns[] = {{"frontlight", dev_frontlight}, {"caps", dev_caps}, {"haptic", dev_haptic},
+                                  {"motion", dev_motion}, {"environment", dev_environment}, {"tone", dev_tone}, {nullptr, nullptr}};
   regTable(L, c, "time", timeFns);
   regTable(L, c, "device", devFns);
+  static const luaL_Reg ledFns[] = {{"count", led_count}, {"set", led_set},   {"all", led_all},
+                                    {"off", led_off},     {"brightness", led_brightness}, {nullptr, nullptr}};
+  regTable(L, c, "led", ledFns);
   registerFs(L, c);
   registerJson(L, c);
   registerNet(L, c);

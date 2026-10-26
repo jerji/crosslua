@@ -1,6 +1,11 @@
 #include "LuaAppActivity.h"
 
+#include <BoardConfig.h>
+#include <Buzzer.h>
+#include <EnvironmentSensor.h>
 #include <GfxRenderer.h>
+#include <Imu.h>
+#include <LedManager.h>
 #include <HalMemory.h>
 #include <HalPowerManager.h>
 #include <HalStorage.h>
@@ -224,17 +229,102 @@ class LuaAppActivity::Backend final : public crosslua::Backend {
 #if FREEINK_CAP_TOUCH
     c->touch = gpio.hasTouch();  // e.g. X4 vs X4 Pro: decided at runtime
 #endif
-    c->haptic = FREEINK_CAP_HAPTIC;
+    c->haptic = FREEINK_CAP_HAPTIC && BoardConfig::hasHaptics();
     bool on = false;
     int b = 0, w = 0;
     c->frontlight = frontlightGet(&on, &b, &w);
     c->warmlight = c->frontlight && FREEINK_CAP_WARMLIGHT;
     c->color = FREEINK_CAP_COLOR;
-    c->audio = FREEINK_CAP_AUDIO;
+    c->audio = BoardConfig::hasAudio();
     c->bleKeyboard = FREEINK_CAP_BLE_KEYBOARD;
     c->usbMsc = FREEINK_CAP_USB_MSC;
+    c->imu = BoardConfig::hasImu();
+    c->gyro = c->imu && BoardConfig::ACTIVE.sensors.imuType != BoardConfig::ImuType::Sc7a20h;  // SC7A20H is accelerometer-only
+    c->rtc = BoardConfig::hasRtc();
+    c->tempHumidity = BoardConfig::hasTempHumidity();
+    c->buzzer = BoardConfig::hasBuzzer();
+    c->mic = BoardConfig::hasMic();
+    c->led = BoardConfig::hasLeds();
+    c->tls13 = FREEINK_CAP_NET_TLS13;
   }
   bool usbConnected() override { return gpio.isUsbConnected(); }
+
+  // --- sensors / outputs. Each SDK lib is begun on first use and put back to rest when the app ends (see ~Backend). ---
+  freeink::Imu imu_;
+  freeink::EnvironmentSensor env_;
+  freeink::Buzzer buzzer_;
+  freeink::LedManager led_;
+  bool imuTried_ = false, envTried_ = false, buzzerTried_ = false, ledTried_ = false;
+  ~Backend() override {
+    if (buzzer_.present()) {
+      buzzer_.noTone();
+      buzzer_.end();
+    }
+    if (led_.begun()) led_.clear();
+    if (imu_.present()) imu_.sleep();  // the tilt page-turner wakes it again when it needs it
+  }
+  SensorStatus motionRead(Motion* o) override {
+    if (!BoardConfig::hasImu()) return SensorStatus::Absent;
+    if (!imuTried_) {
+      imuTried_ = true;
+      imu_.begin();
+    }
+    if (!imu_.present()) return SensorStatus::Absent;
+    freeink::Imu::Sample s{};
+    if (!imu_.read(s)) return SensorStatus::ReadFailed;  // accelerometer-only parts can also say "no new sample yet"
+    *o = {s.ax, s.ay, s.az, s.gx, s.gy, s.gz, imu_.hasGyroscope()};
+    return SensorStatus::Ok;
+  }
+  SensorStatus envRead(float* t, float* h) override {
+    if (!BoardConfig::hasTempHumidity()) return SensorStatus::Absent;
+    if (!envTried_) {
+      envTried_ = true;
+      env_.begin();
+    }
+    if (!env_.present()) return SensorStatus::Absent;
+    return env_.read(*t, *h) ? SensorStatus::Ok : SensorStatus::ReadFailed;
+  }
+  bool buzzerReady() {
+    if (!BoardConfig::hasBuzzer()) return false;
+    if (!buzzerTried_) {
+      buzzerTried_ = true;
+      buzzer_.begin();
+    }
+    return buzzer_.present();
+  }
+  bool toneStart(int f, int ms) override {
+    if (!buzzerReady()) return false;
+    buzzer_.tone(static_cast<uint32_t>(f), static_cast<uint32_t>(ms));
+    return true;
+  }
+  bool toneStop() override {
+    if (!buzzerReady()) return false;
+    buzzer_.noTone();
+    return true;
+  }
+  int ledCount() override {
+    if (!BoardConfig::hasLeds()) return 0;
+    if (!ledTried_) {
+      ledTried_ = true;
+      led_.begin();
+    }
+    return led_.begun() ? led_.count() : 0;
+  }
+  void ledSet(int i, int r, int g, int b) override {
+    if (!led_.begun()) return;
+    const freeink::LedColor c = freeink::LedColor::rgb(static_cast<uint8_t>(r), static_cast<uint8_t>(g), static_cast<uint8_t>(b));
+    if (i < 0) led_.setAll(c);
+    else led_.setColor(static_cast<uint8_t>(i), c);
+    led_.show();
+  }
+  void ledOff() override {
+    if (led_.begun()) led_.clear();
+  }
+  void ledBrightness(int v) override {
+    if (!led_.begun()) return;
+    led_.setBrightness(static_cast<uint8_t>(v));
+    led_.show();
+  }
   bool hapticPulse(int ms, int strength) override {
     return HalHaptics::pulse(SETTINGS.vibration != CrossPointSettings::VIBRATION_OFF, static_cast<uint16_t>(ms),
                              static_cast<uint8_t>(strength));

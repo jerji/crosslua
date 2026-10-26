@@ -1,4 +1,4 @@
-# CrossLua app API (v0.10)
+# CrossLua app API (v0.11)
 
 An app is a plugin folder containing `main.lua`, in any plugin root
 (`/plugins`, `/.plugins`, `/.crosspoint/plugins`):
@@ -211,8 +211,12 @@ PIN lock sketch: `salt = crypto.random(16)`; store `salt .. crypto.pbkdf2_sha256
 CrossPoint runs on more boards than the X4. Hardware features are gated by the firmware's own `FREEINK_CAP_*` flags and report honestly when the hardware is missing. **Features marked UNTESTED were built and host-tested but never run on the physical hardware (we only own an X4): if you have the board, `devtest_lua` exercises them: please report.**
 | call | notes |
 |---|---|
-| `device.caps()` → `{touch, haptic, frontlight, warmlight, color, audio, ble_keyboard, usb_msc, width, height}` | booleans except width/height. Adapt to the board instead of guessing the model. `touch` is decided at runtime (e.g. X4 vs X4 Pro) |
+| `device.caps()` → `{touch, haptic, frontlight, warmlight, color, audio, ble_keyboard, usb_msc, imu, gyro, rtc, temp_humidity, buzzer, mic, led, tls13, width, height}` | booleans except width/height. Adapt to the board instead of guessing the model. Everything is decided at RUNTIME from the board profile (one firmware image can serve several boards, e.g. X4 and X3), never from the model name. `gyro` is false on accelerometer-only IMUs. Flags for hardware that has no Lua API yet (`rtc`, `mic`, `audio`, `color`, `ble_keyboard`, `usb_msc`, `tls13`) only tell you the board has it |
 | `device.haptic(ms [, strength])` → `true` \| `false, why` \| `nil, err` | one non-blocking pulse, ms 10..1000, strength 0..255 (default 255). `false` when the board has no motor or the user turned vibration off in Settings. **UNTESTED on hardware** (Metalio E-Ink 4 has the motor; compiles and links in that env) |
+| `device.motion()` → `{ax, ay, az, gx, gy, gz, gyro}` \| `nil, err` | IMU sample: acceleration in g, angular rate in deg/s (zeros and `gyro=false` on accelerometer-only parts), axes already corrected to a board-independent frame. `nil, "no motion sensor on this device"` without an IMU; `nil, "motion sensor read failed"` can happen transiently (retry). The sensor is woken on first use and put back to sleep when the app ends. **UNTESTED unless your board has an IMU** |
+| `device.environment()` → `temp_c, humidity_pct` \| `nil, err` | on-board temperature/humidity sensor (Sticky today). **UNTESTED on hardware** |
+| `device.tone(freq_hz [, ms])` → `true` \| `false, why` \| `nil, err`; `device.tone()` stops | piezo buzzer, freq 20..20000, ms 0..10000 (0 = until `device.tone()`); silenced automatically when the app ends. **UNTESTED on hardware** |
+| `led.count()` → n; `led.set(i, r, g, b)`; `led.all(r, g, b)`; `led.off()`; `led.brightness(0..255)` | addressable LEDs, `i` is 1..count, colours 0..255. `false, "no LEDs on this device"` without them (`led.count()` is 0); LEDs go dark when the app ends. Blink with `app.sleep`. **UNTESTED on hardware** |
 | `system.usb()` → boolean | USB cable connected (a GPIO read on the X4) |
 | `input.poll()` / `input.wait()` touch events | on touch boards also `"press"` (finger down), `"long"` (held), `"tap"` (quick touch), `"release"` (finger up). **UNTESTED on hardware** (needs a touch board; compiles and links for `x4pro` and `metalio_eink4`) |
 | `input.pos()` → `x, y` \| `nil` | screen-pixel position of the touch event `poll`/`wait` returned last; `nil` after a button event or an empty poll. A `"release"` reports where the finger last was |
