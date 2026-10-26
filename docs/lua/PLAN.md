@@ -47,7 +47,7 @@ recon), **Ruby** (passive RF logger).
 6. **Sandbox.** Libraries: base, string, table, math, utf8, coroutine. No io/os/package/debug/load; bytecode is
    rejected. Files only via `fs` with scopes: `app:` (read-only), `data:` (`/.crosslua/data/<app>/`, read/write,
    atomic), `lib:` (`/.crosslua/lib/`, read-only). Paths with `..`, absolute paths etc. are rejected.
-7. **Memory safety is two layers:** a per-app budget (free RAM − 56 KB, 24–160 KB) **and** a device guard that
+7. **Memory safety is two layers:** a per-app budget (free RAM − 40 KB, 24–160 KB) **and** a device guard that
    refuses any allocation that would leave < 40 KB free. Out-of-memory is a catchable Lua error, never a reboot.
 8. **32-bit Lua** (`LUA_32BITS`): ints are int32, floats single precision; halves value size. Don't round-trip
    64-bit ids through Lua/JSON.
@@ -145,7 +145,7 @@ AES binding; mbedtls/wolfSSL are already linked).
 App manifest/versioning (`min_api`), install via the existing file-transfer UI, shared `lib:` modules, docs, example repo.
 
 ## Risks
-- **RAM** remains the main constraint — WiFi alone eats 56 KB, so network apps must stay tiny (Study already uses ~65 of 81 KB; a release build, without the 9 KB capture buffers, gives ~9 KB more): WiFi/BLE apps will have far less headroom than the ~144 KB measured with the radio off.
+- **RAM** remains the main constraint (full accounting and the experiments that did not pay off: [MEMORY.md](MEMORY.md)) — WiFi alone eats 56 KB, so network apps must stay tiny (Study already uses ~65 of 81 KB; a release build, without the 9 KB capture buffers, gives ~9 KB more): WiFi/BLE apps will have far less headroom than the ~144 KB measured with the radio off.
 - **Upstream churn**: hooks are few and listed; merge `upstream/master` periodically and re-check the touchpoints.
 - **Dev firmware** has a serial control channel and screen capture; it is gated by `CROSSLUA_DEV` (only `env:default`)
   and must never ship in a release env.

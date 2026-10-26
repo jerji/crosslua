@@ -517,6 +517,13 @@ void enterDeepSleep(bool fromTimeout = false) {
   powerManager.startDeepSleep(gpio, wakeOnHeldButton);
 }
 
+#ifdef CROSSLUA_DEV
+// Boot memory profile (dev builds only): how much heap each init stage takes. See docs/lua/MEMORY.md.
+#define MEMPROBE(tag) LOG_INF("MEMP", "%-16s free=%6u  largest=%6u", tag, (unsigned)ESP.getFreeHeap(), (unsigned)ESP.getMaxAllocHeap())
+#else
+#define MEMPROBE(tag) ((void)0)
+#endif
+
 void setupDisplayAndFonts(bool seamless = false) {
 #if !FREEINK_MCU_C3
   // C3 resolves its controller in HalGPIO::begin() before SPI claims the
@@ -531,15 +538,20 @@ void setupDisplayAndFonts(bool seamless = false) {
   }
 #endif
 
+  MEMPROBE("pre-display");
   display.begin(seamless);
+  MEMPROBE("display.begin");
   renderer.begin();
+  MEMPROBE("renderer.begin");
   activityManager.begin();
+  MEMPROBE("activityMgr");
   LOG_DBG("MAIN", "Display initialized");
 
   // Initialize font decompressor for compressed reader fonts
   if (!fontDecompressor.init()) {
     LOG_ERR("MAIN", "Font decompressor init failed");
   }
+  MEMPROBE("fontDecompress");
   fontCacheManager.setFontDecompressor(&fontDecompressor);
   renderer.setFontCacheManager(&fontCacheManager);
   renderer.insertFont(NOTOSANS_14_FONT_ID, notosans14FontFamily);
@@ -554,12 +566,14 @@ void setupDisplayAndFonts(bool seamless = false) {
 
   // Discover and load SD card fonts
   sdFontSystem.begin(renderer);
+  MEMPROBE("sd fonts");
 
   LOG_DBG("MAIN", "Fonts setup");
 }
 
 void setup() {
   BoardConfig::holdPowerRails();
+  MEMPROBE("setup start");
 
 #ifdef ENABLE_SERIAL_LOG
 #ifdef CROSSPOINT_WAIT_FOR_USB_SERIAL
@@ -574,6 +588,7 @@ void setup() {
 #endif
 
   HalSystem::begin();
+  MEMPROBE("HalSystem");
   // checkPanic() clears the watchdog capture marker after a successful SD
   // dump, so retain the boot classification for the later activity route.
   const bool rebootedFromPanic = HalSystem::isRebootFromPanic();
@@ -590,6 +605,7 @@ void setup() {
 
   gpio.begin();
   powerManager.begin();
+  MEMPROBE("gpio+power");
 
   // Board TX-power ceiling. It can only be set once WiFi has started, so it is
   // applied on every STA/AP start rather than at each place that brings WiFi up.
@@ -638,6 +654,7 @@ void setup() {
   }
 
   HalSystem::checkPanic();
+  MEMPROBE("SD storage");
 
   APP_STATE.loadFromFile();
   const bool isSleepWake = wakeupReason == HalGPIO::WakeupReason::PowerButton;
@@ -656,6 +673,7 @@ void setup() {
     SETTINGS.readerMenuStyle = CrossPointSettings::READER_MENU_TOOLBAR;
   }
   SETTINGS.loadFromFile();
+  MEMPROBE("settings");
   // Push the saved timezone's POSIX rule into the clock (migrating the legacy
   // UTC-offset setting on first boot after the update).
   timezones::applyToClock();
@@ -665,7 +683,9 @@ void setup() {
   OPDS_STORE.loadFromFile();
   OPDS_TOKENS.loadFromFile();
   LCP_PASSPHRASES.loadFromFile();
+  MEMPROBE("stores");
   UITheme::getInstance().reload();
+  MEMPROBE("theme");
   ButtonNavigator::setMappedInputManager(mappedInputManager);
   pluginevents::refreshSubscriptions();
   // Seed the system clock from the battery-backed RTC: on RTC boards it is the
@@ -684,6 +704,7 @@ void setup() {
   // timestamps, loan-expiry checks).
   trustedtime::init();
   bleturner::begin(pageturner::host, SETTINGS.ble);
+  MEMPROBE("ble turner");
 
   // Brightness and warmth are always restored. A normal wake starts with the
   // light off unless Restore Light on Wake is enabled; silent maintenance

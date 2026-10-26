@@ -21,7 +21,7 @@ Libraries: base, `string`, `table`, `math`, `utf8`, `coroutine`. **No** `io`, `o
 `debug`, `dofile`, `loadfile`, `load` (and precompiled chunks are rejected). Files go through `fs`, code through `require`.
 `print(...)` goes to the serial/SD log (tag `LUA`).
 
-Memory: each app gets a hard heap cap computed at launch (free RAM − 56 KB, clamped 24–160 KB; ≈88 KB on a freshly booted X4; the collector starts a cycle at 130 % of live data),
+Memory: each app gets a hard heap cap computed at launch (free RAM − 40 KB, clamped 24–160 KB; ≈96 KB on a freshly booted X4; the collector starts a cycle at 130 % of live data),
 plus a device guard: no allocation may leave less than 40 KB of free RAM. Exceeding either raises a normal catchable `not enough memory` error.
 Speed on the X4: roughly 435k simple VM loop iterations per second. Script size limit: 64 KB.
 

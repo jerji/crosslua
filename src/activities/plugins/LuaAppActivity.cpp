@@ -32,7 +32,9 @@ constexpr const char* TAG = "LUA";
 // ---- memory policy ---------------------------------------------------------
 // The Lua heap is a hard cap carved out of whatever internal RAM is free when the
 // app starts. RESERVE stays untouched for the framework (WiFi, SD buffers, stacks).
-constexpr size_t LUA_RESERVE_BYTES = 56 * 1024;
+// 40 KB = the heap-guard floor below: the guard already refuses any allocation that would leave less, so a bigger
+// reserve only wasted 16 KB of the app's budget. (Apps with the network permission check their own, bigger need.)
+constexpr size_t LUA_RESERVE_BYTES = 40 * 1024;
 constexpr size_t LUA_MIN_BUDGET = 24 * 1024;
 constexpr size_t LUA_MAX_BUDGET = 160 * 1024;
 // Hard floor of free device RAM that an allocation may never eat into (see LuaVm::setHeapGuard). On-device
