@@ -131,4 +131,5 @@ if not __ok then
   gfx.clear(); gfx.text(10, 10, "Test error (see serial log)", "ui12", "b"); gfx.text(10, 50, tostring(__err):sub(1, 48), "small"); gfx.present()
   while input.wait() ~= "back" do end
 end
-app.restart("main.lua")
+-- this test used WiFi: leaving the app reboots the device (heap defrag), so the next test starts clean. Reopen the hub.
+app.exit()

@@ -2,8 +2,9 @@
 -- Selecting one does app.restart("tests/<name>.lua"): the test runs in a FRESH VM (lean heap, nothing left over from the
 -- menu or the previous test) and restarts back here when it ends (each test file is wrapped to do that, also after an
 -- early return or an error). The menu remembers the last selection in data:last.txt. Back exits to Home.
--- Note: tests that bring WiFi up keep ~20 KB of radio memory allocated until you leave the hub (Back to Home reboots),
--- so run WiFi tests first after a fresh start when RAM numbers matter.
+-- Tests that bring WiFi up end with app.exit() instead of returning here: the firmware reboots after any app that used the
+-- radio (the radio fragments the heap: measured, an EPUB test right after a WiFi test failed 12 bytes short of a 32 KB block).
+-- Reopen the hub afterwards; the menu remembers the selection.
 -- Not in the hub: grants_lua (it tests the manifest-level storage-grant approval flow, which a shared manifest would hide).
 local files = fs.list("app:tests") or {}
 local names = {}
