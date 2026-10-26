@@ -43,6 +43,7 @@ Lua heap). Verdicts in the per-fork files; here only the gaps.
 | `gfx.load_font(path)` TTF | custom fonts | Hard; FreeInkFont subsystem is deep. |
 | deep sleep with wake-timers/retained frame | sleep screens, alarms | Firmware power flow is invasive. |
 | decimal arithmetic for Calculator | biscuit/crossplay Calculator | Lua can do string-based decimal add/sub; only worth it if the Calculator gets ported. |
+| App categories / launcher for Lua apps (**parked by Angel, undecided**) | a flat Plugins list will not scale past a few dozen apps | Options discussed, no decision yet. **Mechanism is settled:** category = manifest `"category"` field only (not sub-folders: the Plugin Hub and `x4push` install flat at `/plugins/<name>`, data dirs are keyed by app name, `app.dir()` would change). **A.** native "Lua apps" screen (C++): fast, no VM RAM, but more C++ UI + one upstream entry point, not replaceable. **B (recommended).** a launcher that is itself a Lua app (`apps_lua`): zero upstream UI edits, replaceable, Recent/Favorites in plain Lua; needs new `app.list()` + `app.launch(name)` behind a `"launcher"` permission with an approval screen, costs ~15-20 KB RAM while browsing, one extra step; the flat list stays unless a tiny optional filter hides Lua apps (`"listed": false`). **C.** edit `PluginCatalogActivity` in place: one list, but risky (paging/index/uninstall-return logic in a 1,740-line upstream file, merge pain). Optional later: `/.crosslua/categories.json` override so users can re-sort without editing manifests. |
 
 ## Requested by Angel
 - **Per-folder storage grants** (IMPLEMENTED, host-tested, 10 mutants, verified on the X4: native approval screen, Deny keeps the app from starting, approval persists, grants_lua 14/14; see API.md "Storage grants"): manifest
@@ -51,18 +52,6 @@ Lua heap). Verdicts in the per-fork files; here only the gaps.
   update widens the grants). Hidden/dot paths and firmware images are NEVER grantable; `/plugins` (other apps' code) needs a
   separate louder warning. Enables `sd:` writes + `http save_to sd:Books/..`, `fs.rename/remove` inside grants, `app.open(path)`
   (reader today; text/image viewers later). File-browser apps additionally need `fs.stat` / detailed `fs.list` (size, type, mtime).
-
-## Requested by Angel: app folders / categories
-- **Problem:** with many apps, one flat Plugins list becomes impossible to browse.
-- **Plan (launcher side, native):**
-  - Manifest gains an optional `"category": "Games"` (free text, case-insensitive match; missing = "Other").
-  - Home -> Plugins shows categories first, each with an app count; confirm opens it, back returns. A single-category install skips the extra level.
-  - ONE mechanism only (decided with Angel): the manifest field. Sub-folders are NOT categories: the Plugin Hub and x4push install flat at
-    `/plugins/<name>`, data dirs are keyed by app name (same-named apps in two folders would collide) and `app.dir()` would change.
-    A later optional override file (`/.crosslua/categories.json`, app -> category) could let the user re-sort without editing manifests.
-  - Extras: a "Recent" pseudo-category (last 5 launched, stored in the firmware-owned hidden state file) and a "Favorites" pin (long-press confirm).
-  - Needs: recursive plugin discovery one level deep (bounded, so the scan stays cheap), a category-list activity, and the manifest field. Pure launcher work; no Lua API change.
-  - Test: host-test the discovery/grouping logic (folder vs manifest precedence, empty categories hidden, sort order, 100+ apps).
 
 ## Also requested by Angel, scheduled for later
 - **`app.restart(entry)` (implemented, host-tested, 6 mutants; verified on the X4 via the Grimoire launcher -> run.lua -> launcher round trip)** — the app quits itself and is relaunched immediately with a different entry script (`main.lua` by
