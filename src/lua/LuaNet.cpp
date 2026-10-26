@@ -253,7 +253,7 @@ int http_get(lua_State* L) {
   }
   lua_pushstring(L, url);
   lua_setfield(L, t, "url");
-  lua_pushvalue(L, lua_upvalueindex(2));  // http_request closure
+  lua_pushvalue(L, lua_upvalueindex(1));  // http_request
   lua_pushvalue(L, t);
   lua_call(L, 1, LUA_MULTRET);
   return lua_gettop(L) - t;
@@ -267,12 +267,11 @@ void registerNet(lua_State* L, Ctx* c) {
   regTable(L, c, "wifi", wifiFns);
   static const luaL_Reg httpFns[] = {{"request", http_request}, {nullptr, nullptr}};
   regTable(L, c, "http", httpFns);
-  // http.get needs the request function as a second upvalue.
+  // http.get needs the request function as its one upvalue.
   lua_getglobal(L, "http");
   lua_getfield(L, -1, "request");
-  lua_pushlightuserdata(L, c);
-  lua_pushvalue(L, -2);
-  lua_pushcclosure(L, http_get, 2);
+  lua_pushvalue(L, -1);
+  lua_pushcclosure(L, http_get, 1);
   lua_setfield(L, -3, "get");  // [http, request, closure] -> http.get = closure
   lua_pop(L, 2);
 }

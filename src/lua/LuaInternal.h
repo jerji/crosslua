@@ -15,10 +15,12 @@ struct Ctx {
   Backend* be;
   LuaVm* vm;
 };
-inline Ctx* ctx(lua_State* L) { return static_cast<Ctx*>(lua_touserdata(L, lua_upvalueindex(1))); }
+// The context lives in the state's extra space (copied into every coroutine at creation), so every binding is a LIGHT C function:
+// no closure object and no upvalue on the heap (saves ~32 bytes per function).
+inline Ctx* ctx(lua_State* L) { return *static_cast<Ctx**>(lua_getextraspace(L)); }
 inline Backend& be(lua_State* L) { return *ctx(L)->be; }
 
-// Registers a global table of C functions that all share the Ctx upvalue.
+// Registers a global table of light C functions (they find the Ctx through the state's extra space).
 void regTable(lua_State* L, Ctx* c, const char* name, const luaL_Reg* funcs);
 
 constexpr size_t MAX_PATH_LEN = 200;

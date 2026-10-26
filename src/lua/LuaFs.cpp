@@ -548,21 +548,20 @@ void registerFs(lua_State* L, Ctx* c) {
   regTable(L, c, "fs", fs);
   lua_getglobal(L, "gfx");  // gfx.save_bmp lives here because it shares fs.write's path rules
   if (lua_istable(L, -1)) {
-    lua_pushlightuserdata(L, c);
-    lua_pushcclosure(L, gfx_save_bmp, 1);
+    lua_pushcfunction(L, gfx_save_bmp);
     lua_setfield(L, -2, "save_bmp");
   }
   lua_pop(L, 1);
 }
 
 void registerRequire(lua_State* L, Ctx* c) {
+  (void)c;
   // Loader written in Lua so a module's top-level code may yield (input.wait etc.).
   if (luaL_loadbufferx(L, REQUIRE_PRELUDE, strlen(REQUIRE_PRELUDE), "=require", "t") != LUA_OK) {
     lua_pop(L, 1);
     return;
   }
-  lua_pushlightuserdata(L, c);
-  lua_pushcclosure(L, mod_find, 1);
+  lua_pushcfunction(L, mod_find);
   if (lua_pcall(L, 1, 1, 0) != LUA_OK) {
     lua_pop(L, 1);
     return;

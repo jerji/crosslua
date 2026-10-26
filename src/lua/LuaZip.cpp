@@ -220,8 +220,7 @@ void registerZip(lua_State* L, Ctx* c) {
   regTable(L, c, "epub", epubFns);
   lua_getglobal(L, "gfx");  // gfx.image lives here because it shares the path sandbox with zip/fs
   if (lua_istable(L, -1)) {
-    lua_pushlightuserdata(L, c);
-    lua_pushcclosure(L, gfx_image, 1);
+    lua_pushcfunction(L, gfx_image);
     lua_setfield(L, -2, "image");
   }
   lua_pop(L, 1);

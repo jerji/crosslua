@@ -2859,6 +2859,34 @@ int main() {
     CHECK(be.connectOpts.size() == 3 && be.connectOpts[1] == 250 && be.connectOpts[0] == 5000);  // timeout default and explicit
   }
   {
+    TEST("API calls from inside coroutines (nested, wrapped, after a yield) find the context through the inherited extra space");
+    MockBackend be;
+    be.net = true;
+    LuaVm vm;
+    CHECK(vm.open(128 * 1024));
+    registerApi(vm, be);
+    const char* script = R"LUA(
+      local co = coroutine.wrap(function()
+        local w = gfx.size()
+        coroutine.yield(type(w), crypto.hex("A"))
+        local inner = coroutine.wrap(function() return system.millis() >= 0, fs.exists("data:nope.txt"), json.encode({1}) end)
+        return inner()
+      end)
+      print(co())
+      print(co())
+      local t = coroutine.create(function() return gfx.size() end)
+      print(coroutine.resume(t))
+    )LUA";
+    CHECK(vm.load("t", script, strlen(script)));
+    CHECK(run(vm, be, 200000) == Status::Finished);
+    CHECK(be.logs.size() == 3);
+    if (be.logs.size() == 3) {
+      CHECK(be.logs[0] == "number\t41");
+      CHECK(be.logs[1] == "true\tfalse\t[1]");
+      CHECK(be.logs[2] == "true\t800\t480");
+    }
+  }
+  {
     TEST("net.read: the heap floor is relaxed for the one allocation that drains the stack and ALWAYS restored (even on out-of-memory)");
     MockBackend be;
     be.net = true;

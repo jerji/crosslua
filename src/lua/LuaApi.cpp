@@ -697,9 +697,9 @@ int api_print(lua_State* L) {
 }  // namespace
 
 void regTable(lua_State* L, Ctx* c, const char* name, const luaL_Reg* funcs) {
+  (void)c;
   lua_newtable(L);
-  lua_pushlightuserdata(L, c);
-  luaL_setfuncs(L, funcs, 1);
+  luaL_setfuncs(L, funcs, 0);
   lua_setglobal(L, name);
 }
 
@@ -709,7 +709,8 @@ void registerApi(LuaVm& vm, Backend& backend) {
   Ctx* c = static_cast<Ctx*>(lua_newuserdatauv(L, sizeof(Ctx), 0));
   c->be = &backend;
   c->vm = &vm;
-  lua_setfield(L, LUA_REGISTRYINDEX, "crosslua.ctx");
+  lua_setfield(L, LUA_REGISTRYINDEX, "crosslua.ctx");  // keeps the Ctx alive for the life of the state
+  *static_cast<Ctx**>(lua_getextraspace(L)) = c;       // where ctx(L) finds it (also inherited by coroutines)
 
   static const luaL_Reg gfx[] = {{"size", gfx_size},     {"clear", gfx_clear},   {"pixel", gfx_pixel},
                                  {"line", gfx_line},     {"rect", gfx_rect},     {"text", gfx_text},
@@ -748,8 +749,7 @@ void registerApi(LuaVm& vm, Backend& backend) {
   registerCrypto(L, c);
   registerRequire(L, c);
 
-  lua_pushlightuserdata(L, c);
-  lua_pushcclosure(L, api_print, 1);
+  lua_pushcfunction(L, api_print);
   lua_setglobal(L, "print");
 }
 

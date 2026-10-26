@@ -234,7 +234,7 @@ typedef l_uint32 Instruction;
 ** makes a direct cache.)
 */
 #if !defined(STRCACHE_N)
-#define STRCACHE_N		53
+#define STRCACHE_N		11
 #define STRCACHE_M		2
 #endif
 
