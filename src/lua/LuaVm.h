@@ -55,6 +55,17 @@ class LuaVm {
   size_t usedBytes() const { return alloc_.used; }
   size_t peakBytes() const { return alloc_.peak; }
   size_t budgetBytes() const { return alloc_.budget; }
+  // Device-level guard on top of the budget. The budget counts NET Lua bytes, but a realloc that grows a block
+  // transiently needs old+new at once (a growing table can briefly cost 2x), which the budget can't see. With a guard
+  // installed, any allocation that would leave less than `floorBytes` of free device RAM fails (-> Lua "not enough
+  // memory", a normal catchable error). freeFn must be cheap: it runs on every growing allocation.
+  using FreeHeapFn = size_t (*)(void* ud);
+  void setHeapGuard(FreeHeapFn fn, void* ud, size_t floorBytes) {
+    alloc_.guardFn = fn;
+    alloc_.guardUd = ud;
+    alloc_.floor = floorBytes;
+  }
+
   // Collect garbage now (apps may call collectgarbage too; host does it on idle).
   void gc();
 
@@ -69,6 +80,9 @@ class LuaVm {
     size_t used = 0;
     size_t peak = 0;
     size_t budget = 0;
+    FreeHeapFn guardFn = nullptr;
+    void* guardUd = nullptr;
+    size_t floor = 0;
   };
   static void* allocFn(void* ud, void* ptr, size_t osize, size_t nsize);
   static void hookFn(lua_State* L, void* ar);

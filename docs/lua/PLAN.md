@@ -67,6 +67,19 @@ Original scope (kept for reference):
 - Hello-world app from SD card renders text and exits on Back
 - Measure flash delta and heap cost; compare with Phase 0 baseline
 
+### Measured on the real X4 (ESP32-C3, Angel's device, dev build) — authoritative numbers
+- Boots our firmware, settings/library/WiFi creds intact; original firmware untouched in app1 (backup: /root/x4/backup/).
+- Free internal RAM at app launch: **~144 KB** (WiFi off, Home screen) -> default Lua budget 88 KB (free - 56 KB reserve).
+- hello_lua steady state: Lua 14 KB used / 16 KB peak; device free 123 KB (min 119 KB).
+- **Speed: ~435k simple loop iterations/s** (`for i=1,3e5 do acc=acc+(i&255) end` = 690 ms). Fine for UI/turn-based; chess-class search must be depth-limited.
+- On-device self-test (12 checks: fs, atomic write, sandbox, json, require, fonts, OOM, preemption, sleep timing, coroutines): **12/12 pass**.
+- Silent restart: leaving File Transfer/WiFi mode reboots the device to reclaim RAM (uptime resets) — expected CrossPoint behaviour.
+- Bugs found ONLY on hardware (host tests could not see them): (1) CrossPoint font IDs are hashes and can be negative —
+  `unknown font` false positive for the `small` font (contract fixed: 0 = unknown); (2) the budget counts net bytes but realloc
+  needs old+new at once, so a table-growth stress dropped lifetime min free heap to **7 KB** — fixed with `LuaVm::setHeapGuard`
+  (refuse any allocation leaving < 40 KB free): min free is now **39 KB**.
+- Dev tooling proven end-to-end: x4ctl (ping/btn/shot/log/flash/restore-stock), x4push (WiFi upload), screenshots read by vision.
+
 ### Phase 2 — Core API  (**fs / require / json done; zip, time, ui helpers remaining**)
 Done: `fs` (app:/data:/lib: sandbox, atomic writes), `require` (written in Lua so modules can yield), `json`,
 example app `counter_lua`, dev serial channel + `tools/x4ctl.py`. Cost: +~10 KB flash over Phase 1.

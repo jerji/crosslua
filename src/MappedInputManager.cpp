@@ -17,10 +17,6 @@ namespace fui = freeink::ui;
 
 void MappedInputManager::update(const bool deferHomeButtonAction) const {
   remoteInput.reset();
-#ifdef CROSSLUA_DEV
-  testFrame = testPending;
-  testPending = 0;
-#endif
   gpio.update();
   const bool pagePressed =
       SETTINGS.vibration == CrossPointSettings::VIBRATION_TOUCH_PAGE && gpio.wasCapacitivePagePressed();
@@ -393,9 +389,6 @@ bool MappedInputManager::injectRemoteClick(const RemoteButton button) {
 }
 
 bool MappedInputManager::wasPressed(const Button button) const {
-#ifdef CROSSLUA_DEV
-  if (testFrame & (1u << static_cast<uint8_t>(button))) return true;
-#endif
   if (button == Button::Confirm && remoteInput.button == RemoteButton::Confirm) return true;
   if (button == Button::Back && remoteInput.button == RemoteButton::Back) return true;
   if ((button == Button::NavNext || button == Button::Right) && remoteInput.button == RemoteButton::Next) return true;
@@ -410,9 +403,6 @@ bool MappedInputManager::wasPressed(const Button button) const {
 }
 
 bool MappedInputManager::wasReleased(const Button button) const {
-#ifdef CROSSLUA_DEV
-  if (testFrame & (1u << static_cast<uint8_t>(button))) return true;
-#endif
   if (button == Button::Confirm && remoteInput.button == RemoteButton::Confirm) return true;
   if (button == Button::Back && remoteInput.button == RemoteButton::Back) return true;
   if ((button == Button::NavNext || button == Button::Right) && remoteInput.button == RemoteButton::Next) return true;

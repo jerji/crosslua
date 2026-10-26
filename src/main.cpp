@@ -913,18 +913,24 @@ void loop() {
         logSerial.printf("SCREENSHOT_END\n");
 #ifdef CROSSLUA_DEV
       } else if (cmd.startsWith("BTN:")) {
-        // CrossLua dev/test channel: CMD:BTN:<back|confirm|left|right|up|down>
-        using B = MappedInputManager::Button;
-        const String name = cmd.substring(4);
+        // CrossLua dev/test channel: CMD:BTN:<back|confirm|left|right|up|down|power>[:holdMs] -- physical buttons.
+        String name = cmd.substring(4);
+        unsigned long hold = 120;
+        const int colon = name.indexOf(':');
+        if (colon > 0) {
+          hold = static_cast<unsigned long>(name.substring(colon + 1).toInt());
+          name = name.substring(0, colon);
+          if (hold < 30 || hold > 5000) hold = 120;
+        }
         const struct {
           const char* n;
-          B b;
-        } map[] = {{"back", B::Back}, {"confirm", B::Confirm}, {"left", B::Left},
-                   {"right", B::Right}, {"up", B::Up},         {"down", B::Down}};
+          uint8_t idx;
+        } map[] = {{"back", HalGPIO::BTN_BACK}, {"confirm", HalGPIO::BTN_CONFIRM}, {"left", HalGPIO::BTN_LEFT},
+                   {"right", HalGPIO::BTN_RIGHT}, {"up", HalGPIO::BTN_UP},         {"down", HalGPIO::BTN_DOWN}};
         bool ok = false;
         for (const auto& m : map) {
           if (name == m.n) {
-            mappedInputManager.injectTestButton(m.b);
+            gpio.injectButton(m.idx, hold);
             ok = true;
           }
         }

@@ -30,7 +30,7 @@ TextOpts parseTextOpts(lua_State* L, int fontArg) {
   TextOpts o{be(L).fontId("ui"), true, 0, 'l'};
   if (lua_isstring(L, fontArg)) {
     const int f = be(L).fontId(lua_tostring(L, fontArg));
-    if (f < 0) luaL_error(L, "unknown font '%s'", lua_tostring(L, fontArg));
+    if (f == 0) luaL_error(L, "unknown font '%s'", lua_tostring(L, fontArg));
     o.font = f;
   }
   if (lua_isstring(L, fontArg + 1)) {

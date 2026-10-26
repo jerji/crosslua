@@ -107,8 +107,29 @@ void HalGPIO::begin() {
   inputMgr.begin();
 }
 
+#ifdef CROSSLUA_DEV
+void HalGPIO::injectButton(uint8_t buttonIndex, unsigned long holdMs) {
+  if (injPhase != InjPhase::None) return;  // one at a time; x4ctl waits for the ack + gap
+  injIndex = buttonIndex;
+  injHoldMs = holdMs;
+  injPhase = InjPhase::Pending;
+}
+#endif
+
 void HalGPIO::update() {
   inputMgr.update();
+#ifdef CROSSLUA_DEV
+  injPressedEdge = false;
+  injReleasedEdge = false;
+  if (injPhase == InjPhase::Pending) {
+    injPhase = InjPhase::Down;
+    injStartMs = millis();
+    injPressedEdge = true;
+  } else if (injPhase == InjPhase::Down && millis() - injStartMs >= injHoldMs) {
+    injPhase = InjPhase::None;
+    injReleasedEdge = true;
+  }
+#endif
   const uint8_t pageButtons = inputMgr.capacitivePageButtonMask();
   capacitivePagePressed = (pageButtons & ~previousCapacitivePageButtons) != 0;
   previousCapacitivePageButtons = pageButtons;
@@ -119,19 +140,44 @@ void HalGPIO::update() {
 
 bool HalGPIO::wasUsbStateChanged() const { return usbStateChanged; }
 
-bool HalGPIO::isPressed(uint8_t buttonIndex) const { return inputMgr.isPressed(buttonIndex); }
+bool HalGPIO::isPressed(uint8_t buttonIndex) const {
+#ifdef CROSSLUA_DEV
+  if (injActive(buttonIndex)) return true;
+#endif
+  return inputMgr.isPressed(buttonIndex);
+}
 
 void HalGPIO::prepareForDeepSleep() {
   if (!inputMgr.prepareForDeepSleep()) LOG_ERR("GPIO", "Failed to put touch controller to sleep");
 }
 
-bool HalGPIO::wasPressed(uint8_t buttonIndex) const { return inputMgr.wasPressed(buttonIndex); }
+bool HalGPIO::wasPressed(uint8_t buttonIndex) const {
+#ifdef CROSSLUA_DEV
+  if (injPressedEdge && injIndex == buttonIndex) return true;
+#endif
+  return inputMgr.wasPressed(buttonIndex);
+}
 
-bool HalGPIO::wasAnyPressed() const { return inputMgr.wasAnyPressed(); }
+bool HalGPIO::wasAnyPressed() const {
+#ifdef CROSSLUA_DEV
+  if (injPressedEdge) return true;
+#endif
+  return inputMgr.wasAnyPressed();
+}
 
-bool HalGPIO::wasReleased(uint8_t buttonIndex) const { return inputMgr.wasReleased(buttonIndex); }
+bool HalGPIO::wasReleased(uint8_t buttonIndex) const {
+#ifdef CROSSLUA_DEV
+  if (injReleasedEdge && injIndex == buttonIndex) return true;
+#endif
+  return inputMgr.wasReleased(buttonIndex);
+}
 
-bool HalGPIO::wasAnyReleased() const { return inputMgr.wasAnyReleased(); }
+bool HalGPIO::wasAnyReleased() const {
+#ifdef CROSSLUA_DEV
+  if (injReleasedEdge) return true;
+#endif
+  return inputMgr.wasAnyReleased();
+}
 
 bool HalGPIO::rawInputActive() {
   if (inputMgr.isPowerButtonPhysicallyPressed()) return true;
@@ -142,7 +188,12 @@ bool HalGPIO::rawInputActive() {
   return (g1.raw >= 0 && g1.raw < kIdleRailMin) || (g2.raw >= 0 && g2.raw < kIdleRailMin);
 }
 
-unsigned long HalGPIO::getHeldTime() const { return inputMgr.getHeldTime(); }
+unsigned long HalGPIO::getHeldTime() const {
+#ifdef CROSSLUA_DEV
+  if (injPhase == InjPhase::Down) return millis() - injStartMs;
+#endif
+  return inputMgr.getHeldTime();
+}
 
 unsigned long HalGPIO::getPowerButtonHeldTime() const { return inputMgr.getPowerButtonHeldTime(); }
 

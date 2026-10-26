@@ -25,7 +25,11 @@ void* LuaVm::allocFn(void* ud, void* ptr, size_t osize, size_t nsize) {
   }
   // When ptr==nullptr, osize encodes the object type, not a size (Lua manual).
   const size_t old = ptr ? osize : 0;
-  if (nsize > old && st->used + (nsize - old) > st->budget) return nullptr;  // Lua raises "not enough memory"
+  if (nsize > old) {
+    if (st->used + (nsize - old) > st->budget) return nullptr;  // Lua raises "not enough memory"
+    // Real device RAM: the new block must fit while the old one still exists, and leave the floor free.
+    if (st->guardFn && st->guardFn(st->guardUd) < nsize + st->floor) return nullptr;
+  }
   void* np = realloc(ptr, nsize);
   if (!np) return nullptr;
   st->used = st->used - old + nsize;

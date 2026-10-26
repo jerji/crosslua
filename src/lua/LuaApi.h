@@ -28,7 +28,8 @@ class Backend {
   virtual void text(int font, int x, int y, const char* s, bool black, int style) = 0;
   virtual int textWidth(int font, const char* s, int style) = 0;
   virtual int lineHeight(int font) = 0;
-  // Resolve a font name ("ui", "ui12", "small", "sans12".."sans18"); -1 if unknown.
+  // Resolve a font name ("ui", "ui12", "small", "sans12".."sans18"). Returns 0 if unknown: font IDs are
+  // hashes and may be NEGATIVE, so only 0 (CrossPoint's own "not found" sentinel) means failure.
   virtual int fontId(const char* name) = 0;
   // mode: 0 = fast, 1 = half, 2 = full (clears ghosting).
   virtual void present(int mode) = 0;
@@ -41,6 +42,8 @@ class Backend {
   // --- system --------------------------------------------------------------
   virtual uint32_t millis() = 0;
   virtual size_t freeHeap() = 0;
+  // Cheap free-RAM read for the allocator guard (runs on every growing allocation); defaults to freeHeap().
+  virtual size_t freeHeapQuick() { return freeHeap(); }
   virtual size_t minFreeHeap() = 0;
   virtual int battery() = 0;  // percent, or -1
   virtual void log(const char* msg) = 0;

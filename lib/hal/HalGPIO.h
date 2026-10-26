@@ -53,6 +53,16 @@ class HalGPIO {
 
  private:
   DeviceType _deviceType = DeviceType::X4;
+#ifdef CROSSLUA_DEV
+  enum class InjPhase : uint8_t { None, Pending, Down };
+  InjPhase injPhase = InjPhase::None;
+  uint8_t injIndex = 0xFF;
+  unsigned long injHoldMs = 120;
+  unsigned long injStartMs = 0;
+  bool injPressedEdge = false;
+  bool injReleasedEdge = false;
+  bool injActive(uint8_t i) const { return injPhase == InjPhase::Down && injIndex == i; }
+#endif
 
  public:
   HalGPIO() = default;
@@ -71,6 +81,13 @@ class HalGPIO {
   // Start button GPIO and setup SPI for screen and SD card
   void begin();
   void prepareForDeepSleep();
+
+#ifdef CROSSLUA_DEV
+  // CrossLua dev/test hook (serial `CMD:BTN:<name>[:holdMs]`): simulates a physical press that lasts holdMs, so every
+  // consumer (button remapping, ButtonNavigator, long-press logic) sees what a real finger would produce.
+  // Compiled out of release builds.
+  void injectButton(uint8_t buttonIndex, unsigned long holdMs = 120);
+#endif
 
   // Button input methods
   void update();

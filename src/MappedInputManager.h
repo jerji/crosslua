@@ -53,11 +53,6 @@ class MappedInputManager {
 #endif
   bool injectRemoteClick(RemoteButton button);
   bool hasRemoteClick() const { return remoteInput.button != RemoteButton::None; }
-#ifdef CROSSLUA_DEV
-  // CrossLua dev/test hook (serial `CMD:BTN:<name>`): the button reads as released/pressed for exactly
-  // one main-loop frame, starting at the next update(). Compiled out of release builds.
-  void injectTestButton(Button button) const { testPending |= 1u << static_cast<uint8_t>(button); }
-#endif
   bool wasPressed(Button button) const;
   bool wasReleased(Button button) const;
   // One-shot threshold event while the button is down; consumes its release.
@@ -157,10 +152,6 @@ class MappedInputManager {
   void suppressNextRelease(Button button) const;
 
   mutable RemoteButtonInput remoteInput;
-#ifdef CROSSLUA_DEV
-  mutable uint16_t testPending = 0;
-  mutable uint16_t testFrame = 0;
-#endif
   mutable HomeButtonInput homeButtonInput;
   mutable HomeButtonAction homeAction = HomeButtonAction::Ignore;
   mutable HomeButtonAction deferredHomeAction = HomeButtonAction::Ignore;

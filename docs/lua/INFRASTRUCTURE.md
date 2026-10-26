@@ -60,10 +60,12 @@ uv run --with pyserial --with pillow tools/x4ctl.py ping                 # PONG 
 uv run --with pyserial --with pillow tools/x4ctl.py btn right confirm    # press buttons
 uv run --with pyserial --with pillow tools/x4ctl.py shot out.png         # screen -> PNG (portrait; --landscape for native)
 uv run --with pyserial --with pillow tools/x4ctl.py log 10 --grep LUA    # heap / app logs
-uv run --with pyserial --with pillow tools/x4ctl.py flash firmware.bin   # app slot only (0x10000)
+uv run --with pyserial --with pillow tools/x4ctl.py flash firmware.bin   # app0 + erase otadata; app1 (previous fw) untouched
+uv run --with pyserial --with pillow tools/x4ctl.py restore-stock /root/x4/backup/x4-original-full-16MB.bin   # boot the original fw again
 ```
-Serial protocol (dev builds): `CMD:SCREENSHOT` (upstream), `CMD:BTN:<back|confirm|left|right|up|down>` -> `BTN_OK:<name>`,
-`CMD:PING` -> `PONG:<ms>:<activity>`. Opening the port does not toggle DTR/RTS (that would reset the C3).
+Serial protocol (dev builds): `CMD:SCREENSHOT` (upstream), `CMD:BTN:<back|confirm|left|right|up|down>[:holdMs]` (physical buttons; hold >=1000 = long press) -> `BTN_OK:<name>`,
+`CMD:PING` -> `PONG:<ms>:<activity>`. Never set DTR/RTS after opening: clearing DTR while RTS is high is the esptool reset pattern and reboots the C3.
+**Device state (Angel's X4, MAC f8:5b:1b:5b:a6:a8):** original firmware = CrossPoint 5.5.2-729-g87912cd in app1; full 16 MB backup in `/root/x4/backup/`. otadata originally selected app1 (seq 6).
 Apps and data reach the SD card over WiFi (CrossPoint's file-transfer web UI / WebDAV) or by moving the card.
 Protocol/decoder test without hardware: `uv run --with pyserial --with pillow test/lua_host/test_x4ctl.py` (fake device on a pty).
 

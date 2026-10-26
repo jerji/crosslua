@@ -41,11 +41,13 @@ struct MockBackend : Backend {
   int textWidth(int, const char* s, int) override { return static_cast<int>(strlen(s)) * 10; }
   int lineHeight(int) override { return 20; }
   int fontId(const char* n) override {
-    // Same names as the firmware backend (LuaAppActivity.cpp). "ui"=1 and "small"=2 are asserted by tests.
+    // Same names as the firmware backend (LuaAppActivity.cpp). Real font IDs are hashes and often NEGATIVE
+    // (SMALL_FONT_ID is), so the mock uses negative ids for half of them; 0 = unknown.
     static const char* const names[] = {"ui", "small", "ui12", "sans12", "sans14", "sans16", "sans18"};
+    static const int ids[] = {1, -2, 3, -4, 5, -6, 7};
     for (int i = 0; i < 7; i++)
-      if (!strcmp(n, names[i])) return i + 1;
-    return -1;
+      if (!strcmp(n, names[i])) return ids[i];
+    return 0;
   }
   void present(int m) override { calls.push_back("present:" + std::to_string(m)); }
   const char* popEvent() override {
@@ -57,6 +59,9 @@ struct MockBackend : Backend {
   }
   uint32_t millis() override { return now; }
   size_t freeHeap() override { return 123456; }
+  size_t simTotal = 0;  // >0: freeHeapQuick() simulates a device heap of this size minus what Lua holds
+  const LuaVm* simVm = nullptr;
+  size_t freeHeapQuick() override { return simTotal ? simTotal - simVm->usedBytes() : freeHeap(); }
   size_t minFreeHeap() override { return 100000; }
   int battery() override { return 77; }
   void log(const char* m) override { logs.push_back(m); }
@@ -154,7 +159,8 @@ static Status run(LuaVm& vm, MockBackend& be, int maxSteps = 100000, bool feedEv
         be.events.pop_front();
         vm.resume(e.c_str());
       } else if (vm.timeoutMs() >= 0) {
-        vm.resume(nullptr);  // pretend timeout elapsed
+        be.now += static_cast<uint32_t>(vm.timeoutMs());  // the timeout really elapses on the mock clock
+        vm.resume(nullptr);
       } else {
         return s;  // would wait forever
       }
@@ -191,7 +197,7 @@ int main() {
     LuaVm vm; MockBackend be;
     setup(vm, be, "gfx.text(400.0/1,10,'abcd','small','bcw') gfx.text(100,0,'ab','ui','r')");
     CHECK(run(vm, be) == Status::Finished);
-    CHECK(be.calls[0] == "text:380,10:abcd:f2:s1:w");  // 400 - 40/2
+    CHECK(be.calls[0] == "text:380,10:abcd:f-2:s1:w");  // 400 - 40/2
     CHECK(be.calls[1] == "text:80,0:ab:f1:s0:b");      // 100 - 20
   }
   {
@@ -306,6 +312,23 @@ int main() {
   }
 
   {
+    TEST("heap guard: allocations never leave less than the floor free on the (simulated) device");
+    LuaVm vm; MockBackend be;
+    be.simTotal = 150 * 1024;
+    be.simVm = &vm;
+    const size_t floor = 40 * 1024;
+    CHECK(vm.open(1024 * 1024));  // budget alone would allow far more than the device has
+    vm.setHeapGuard([](void* ud) -> size_t { return static_cast<MockBackend*>(ud)->freeHeapQuick(); }, &be, floor);
+    registerApi(vm, be);
+    const char* src = "local t = {} local ok, e = pcall(function() for i = 1, 1e6 do t[i] = {i} end end) t = nil collectgarbage() print(ok, tostring(e):sub(1, 17)) print(#string.rep('z', 1000))";
+    CHECK(vm.load("guard", src, strlen(src)));
+    CHECK(run(vm, be, 1000000) == Status::Finished);
+    CHECK(be.logs[0] == "false\tnot enough memory");
+    CHECK(be.logs[1] == "1000");  // VM still usable after hitting the guard
+    CHECK(vm.peakBytes() <= be.simTotal - floor);
+    CHECK(vm.peakBytes() > 60 * 1024);  // and it did use most of what was allowed
+  }
+  {
     TEST("regression: script dying of uncaught OOM is reported, no panic/abort");
     LuaVm vm; MockBackend be;
     setup(vm, be, "local t = {} while true do t[#t + 1] = {} end", 64 * 1024);
@@ -350,6 +373,21 @@ int main() {
     CHECK(vm.resume("right") == Status::Waiting);
     CHECK(vm.resume(nullptr) == Status::Waiting);  // timeout refresh
     CHECK(vm.resume("back") == Status::Finished);
+  }
+  {
+    TEST("example app selftest_lua: every on-device check also passes on the host mock");
+    LuaVm vm; MockBackend be;
+    std::string src = loadApp(be, "selftest_lua");
+    CHECK(!src.empty());
+    CHECK(vm.open(300 * 1024));
+    registerApi(vm, be);
+    CHECK(vm.load("selftest_lua", src.data(), src.size()));
+    Status st = run(vm, be, 2000000);
+    CHECK(st == Status::Waiting);  // finished all checks, parked on input.wait()
+    int pass = 0, fail = 0;
+    for (auto& l : be.logs) { if (l.rfind("PASS", 0) == 0) pass++; if (l.rfind("FAIL", 0) == 0) { fail++; printf("    %s\n", l.c_str()); } }
+    CHECK(fail == 0);
+    CHECK(pass == 12);
   }
   {
     TEST("example app counter_lua: require + json + fs persistence across launches");

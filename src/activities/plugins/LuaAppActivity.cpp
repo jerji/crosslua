@@ -25,6 +25,9 @@ constexpr const char* TAG = "LUA";
 constexpr size_t LUA_RESERVE_BYTES = 56 * 1024;
 constexpr size_t LUA_MIN_BUDGET = 24 * 1024;
 constexpr size_t LUA_MAX_BUDGET = 160 * 1024;
+// Hard floor of free device RAM that an allocation may never eat into (see LuaVm::setHeapGuard). On-device
+// measurement: without it a table-growth stress test drove lifetime min-free heap down to 7 KB.
+constexpr size_t LUA_HEAP_FLOOR = 40 * 1024;
 constexpr size_t MAX_SCRIPT_BYTES = 64 * 1024;
 
 constexpr uint32_t SLICE_MS = 25;          // max time one loop() pass spends inside Lua
@@ -68,7 +71,7 @@ class LuaAppActivity::Backend final : public crosslua::Backend {
                               {"sans18", NOTOSANS_18_FONT_ID}};
     for (const auto& f : fonts)
       if (!strcmp(f.name, n)) return f.id;
-    return -1;
+    return 0;  // 0 = unknown (real IDs are hashes and can be negative)
   }
   void present(int mode) override {
     r_.displayBuffer(mode == 2   ? HalDisplay::FULL_REFRESH
@@ -85,6 +88,7 @@ class LuaAppActivity::Backend final : public crosslua::Backend {
 
   uint32_t millis() override { return ::millis(); }
   size_t freeHeap() override { return HalMemory::getInternalHeap().freeBytes; }
+  size_t freeHeapQuick() override { return ESP.getFreeHeap(); }  // O(1); getInternalHeap() also walks for the largest block
   size_t minFreeHeap() override { return HalMemory::getInternalHeap().minFreeBytes; }
   int battery() override { return powerManager.getBatteryPercentage(); }
   void log(const char* msg) override { LOG_INF(TAG, "[%s] %s", name_.c_str(), msg); }
@@ -209,6 +213,8 @@ void LuaAppActivity::onEnter() {
     showError("Out of memory", "Could not create the Lua state.");
     return;
   }
+  vm_->setHeapGuard([](void* ud) -> size_t { return static_cast<Backend*>(ud)->freeHeapQuick(); }, backend_.get(),
+                    LUA_HEAP_FLOOR);
   crosslua::registerApi(*vm_, *backend_);
   if (!vm_->load(path.c_str(), src.data(), src.size())) {
     showError("Script error", vm_->error());

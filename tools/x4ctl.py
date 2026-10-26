@@ -7,17 +7,21 @@ Needs a dev firmware (env:default: CROSSLUA_DEV) on the device. Run with:
 Commands
   ports                       list serial ports
   ping                        round-trip check; prints the current screen/activity name
-  btn <name> [name...]        press buttons: back confirm left right up down  (0.4 s apart; --gap to change)
+  btn <name[:holdMs]>...      press PHYSICAL buttons: back confirm left right up down (0.4 s apart; --gap to change).
+                              e.g. `btn right right confirm`, `btn back:1300` (1.3 s hold = long press)
   shot [out.png] [--landscape]  grab the screen (default shot.png, portrait like CrossPoint's default orientation)
   log [seconds] [--grep RE]   print device log lines for N seconds (default 5)
   expect <regex> [seconds]    wait until a log line matches; exit 1 on timeout
-  flash <firmware.bin>        write the app slot at 0x10000 (never touches bootloader/partitions/NVS)
+  flash <firmware.bin>        write app0 (0x10000) and erase otadata so the bootloader picks app0. Leaves app1 (the
+                              previous firmware), bootloader, partition table and NVS settings untouched.
+  restore-stock <backup.bin>  put back the otadata from a full-flash backup -> boots the original firmware in app1
 
 Global: --port /dev/ttyACM0 (default: auto-detect Espressif 303a:*), --baud 115200
 """
 import argparse
 import glob
 import io
+import os
 import re
 import subprocess
 import sys
@@ -43,16 +47,25 @@ def find_port():
 
 class Device:
     def __init__(self, port, baud=115200, timeout=0.2):
-        # Don't toggle DTR/RTS on open: on the C3's USB-CDC that resets the chip.
+        # Do NOT touch DTR/RTS. The kernel raises both together on open (= "run"); clearing DTR while RTS is still
+        # high is the esptool reset pattern and reboots the C3's USB-Serial/JTAG.
         self.ser = serial.Serial()
         self.ser.port, self.ser.baudrate, self.ser.timeout = port, baud, timeout
-        self.ser.dtr = False
-        self.ser.rts = False
         self.ser.open()
 
     def send(self, cmd):
         self.ser.write(f"CMD:{cmd}\n".encode())
         self.ser.flush()
+
+    def _record(self, line):
+        # Every line any command sees is appended here, so `grep LUA /root/x4/serial.log` works after the fact.
+        path = os.environ.get("X4_LOG", "/root/x4/serial.log")
+        if path:
+            try:
+                with open(path, "a", errors="replace") as f:
+                    f.write(line + "\n")
+            except OSError:
+                pass
 
     def lines(self, seconds):
         """Yield decoded log lines for `seconds`."""
@@ -60,7 +73,10 @@ class Device:
         while time.time() < end:
             raw = self.ser.readline()
             if raw:
-                yield raw.decode("utf-8", errors="replace").rstrip("\r\n")
+                line = raw.decode("utf-8", errors="replace").rstrip("\r\n")
+                if not line.startswith("SCREENSHOT_"):
+                    self._record(line)
+                yield line
 
     def wait_for(self, regex, seconds):
         rx = re.compile(regex)
@@ -79,13 +95,15 @@ class Device:
 
     def press(self, names, gap=0.4):
         for n in names:
-            if n not in BUTTONS:
-                raise SystemExit(f"unknown button {n!r}; use one of {BUTTONS}")
+            base, _, hold = n.partition(":")
+            if base not in BUTTONS or (hold and not hold.isdigit()):
+                raise SystemExit(f"unknown button {n!r}; use one of {BUTTONS}, optionally name:holdMs")
             self.send(f"BTN:{n}")
             line = self.wait_for(r"^BTN_(OK|ERR):", 2.0)
             if not line or line.startswith("BTN_ERR"):
                 raise SystemExit(f"button {n!r} not acknowledged (dev firmware flashed?)")
-            time.sleep(gap)
+            for _ in self.lines(gap + (int(hold) / 1000.0 if hold else 0.12)):  # keep logging while we wait
+                pass
 
     def screenshot_raw(self, seconds=10.0):
         """Returns the raw 1bpp 800x480 framebuffer (48000 bytes) or None."""
@@ -139,9 +157,31 @@ def main(argv=None):
         port = a.port or find_port()
         if not port:
             raise SystemExit("no serial port found")
-        cmd = ["esptool", "--chip", "esp32c3", "--port", port, "--baud", "460800", "write-flash", "0x10000", a.args[0]]
-        print("+", " ".join(cmd))
-        return subprocess.call(cmd)
+        base = ["esptool", "--chip", "esp32c3", "--port", port, "--baud", "460800"]
+        # otadata decides which app slot boots; a device whose last OTA landed in app1 would ignore a plain
+        # write to app0. Erased otadata = bootloader falls back to app0.
+        for cmd in (base + ["erase-region", "0xe000", "0x2000"], base + ["write-flash", "0x10000", a.args[0]]):
+            print("+", " ".join(cmd))
+            rc = subprocess.call(cmd)
+            if rc:
+                return rc
+        return 0
+    if a.cmd == "restore-stock":
+        if not a.args:
+            raise SystemExit("restore-stock <full-flash-backup.bin>")
+        port = a.port or find_port()
+        if not port:
+            raise SystemExit("no serial port found")
+        with open(a.args[0], "rb") as f:
+            f.seek(0xE000)
+            ota = f.read(0x2000)
+        import tempfile
+        with tempfile.NamedTemporaryFile(suffix=".bin") as t:
+            t.write(ota)
+            t.flush()
+            cmd = ["esptool", "--chip", "esp32c3", "--port", port, "--baud", "460800", "write-flash", "0xe000", t.name]
+            print("+", " ".join(cmd))
+            return subprocess.call(cmd)
 
     port = a.port or find_port()
     if not port:
