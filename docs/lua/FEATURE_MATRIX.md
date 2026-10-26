@@ -45,7 +45,7 @@ Lua heap). Verdicts in the per-fork files; here only the gaps.
 | decimal arithmetic for Calculator | biscuit/crossplay Calculator | Lua can do string-based decimal add/sub; only worth it if the Calculator gets ported. |
 
 ## Requested by Angel
-- **Per-folder storage grants** (IMPLEMENTED: host-tested + mutation-checked; on-device approval screen test pending; see API.md "Storage grants"): manifest
+- **Per-folder storage grants** (IMPLEMENTED, host-tested, 10 mutants, verified on the X4: native approval screen, Deny keeps the app from starting, approval persists, grants_lua 14/14; see API.md "Storage grants"): manifest
   `"storage": {"read": ["Books"], "write": ["Books/AO3","Downloads"]}` (`"/"` allowed for file managers). First launch shows a NATIVE
   confirmation listing the grants in plain words; approval stored in a hidden firmware-owned file (re-prompt when an
   update widens the grants). Hidden/dot paths and firmware images are NEVER grantable; `/plugins` (other apps' code) needs a
@@ -63,7 +63,7 @@ Lua heap). Verdicts in the per-fork files; here only the gaps.
   - Test: host-test the discovery/grouping logic (folder vs manifest precedence, empty categories hidden, sort order, 100+ apps).
 
 ## Also requested by Angel, scheduled for later
-- **`app.restart(entry)` (implemented, host-tested; on-device test pending)** — the app quits itself and is relaunched immediately with a different entry script (`main.lua` by
+- **`app.restart(entry)` (implemented, host-tested, 6 mutants; verified on the X4 via the Grimoire launcher -> run.lua -> launcher round trip)** — the app quits itself and is relaunched immediately with a different entry script (`main.lua` by
   default), giving a fresh VM and a fresh budget while still being ONE plugin entry. Use case: a menu shell (browse /
   update / about) whose network sub-app needs a lean start. Needs a small `LuaAppActivity` change (re-enter with a new
   entry name; WiFi radio torn down first). Alternative/complement: manifest `"apps": [...]` listing several entry
