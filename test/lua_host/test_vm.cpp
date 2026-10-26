@@ -1435,6 +1435,64 @@ int main() {
     CHECK(!be.wifiAsked);
   }
   {
+    TEST("net: wifi.connect{tls=false} needs 80K free instead of 96K (plain TCP apps); the default and tls=true still need 96K");
+    {
+      MockBackend be;
+      be.freeHeapVal = 90 * 1024;
+      LuaVm vm;
+      CHECK(vm.open(128 * 1024));
+      registerApi(vm, be);
+      const char* script = "print(wifi.connect())\nprint(wifi.connect{tls = true})\nprint(wifi.connect{})\nprint(pcall(wifi.connect, 5))\nprint(pcall(wifi.connect, {tls = 'no'}))";
+      CHECK(vm.load("t", script, strlen(script)));
+      CHECK(run(vm, be) == Status::Finished);
+      CHECK(be.logs.size() == 5);
+      if (be.logs.size() == 5) {
+        const char* refused = "false\tnot enough free RAM for WiFi + TLS (free 90K, need 96K): this app is too big for network use";
+        CHECK(be.logs[0] == refused && be.logs[1] == refused);
+        CHECK(be.logs[2] == "false\tnot enough free RAM for WiFi + TLS (free 90K, need 96K): this app is too big for network use");
+        CHECK(be.logs[3].rfind("false", 0) == 0 && be.logs[3].find("table expected") != std::string::npos);
+        CHECK(be.logs[4].rfind("false", 0) == 0);
+        CHECK(be.logs[4].find("tls must be a boolean") != std::string::npos);
+      }
+      CHECK(!be.wifiAsked);
+    }
+    {
+      MockBackend be;
+      be.freeHeapVal = 90 * 1024;  // enough for plain TCP, not for TLS
+      LuaVm vm;
+      CHECK(vm.open(128 * 1024));
+      registerApi(vm, be);
+      const char* script = "print(wifi.connect{tls = false})";
+      CHECK(vm.load("t", script, strlen(script)));
+      CHECK(run(vm, be) == Status::Waiting);  // it passed the gate and parked in the system's WiFi flow
+      CHECK(be.wifiAsked);
+    }
+    {
+      MockBackend be;
+      be.freeHeapVal = 70 * 1024;  // not even enough for plain TCP
+      LuaVm vm;
+      CHECK(vm.open(128 * 1024));
+      registerApi(vm, be);
+      const char* script = "print(wifi.connect{tls = false})";
+      CHECK(vm.load("t", script, strlen(script)));
+      CHECK(run(vm, be) == Status::Finished);
+      CHECK(be.logs.size() == 1 && be.logs[0] == "false\tnot enough free RAM for WiFi (free 70K, need 80K): this app is too big for network use");
+      CHECK(!be.wifiAsked);
+    }
+    {
+      MockBackend be;
+      be.freeHeapVal = 10 * 1024;
+      be.wifiUp = true;  // already connected: the RAM gate does not apply and the options are irrelevant
+      LuaVm vm;
+      CHECK(vm.open(128 * 1024));
+      registerApi(vm, be);
+      const char* script = "print(wifi.connect{tls = false})\nprint(wifi.connect())";
+      CHECK(vm.load("t", script, strlen(script)));
+      CHECK(run(vm, be) == Status::Finished);
+      CHECK(be.logs.size() == 2 && be.logs[0] == "true" && be.logs[1] == "true");
+    }
+  }
+  {
     TEST("sd: scope: needs the library permission, read-only, hidden paths do not exist, no escapes");
     MockBackend be;
     be.files["/Books/a.epub"] = "PK-fake";

@@ -14,7 +14,10 @@ namespace crosslua {
 namespace {
 
 // WiFi radio ~56 KB + TLS floor 40 KB (see HttpDownloader::MIN_TLS_FREE_HEAP), measured on hardware.
-constexpr size_t NET_MIN_FREE_BYTES = 96 * 1024;
+constexpr size_t NET_MIN_FREE_BYTES = 96 * 1024;  // WiFi (~57 KB measured) + the 40 KB a TLS session wants
+// wifi.connect{tls=false}: apps that only use plain TCP/UDP never open a TLS session. Radio ~57 KB + the 16 KB the socket layer
+// refuses to go below (SOCK_MIN_FREE_BYTES in LuaSock.cpp) + ~7 KB margin. https then fails at request time with its own message.
+constexpr size_t NET_MIN_FREE_BYTES_PLAIN = 80 * 1024;
 constexpr size_t MAX_URL = 600;
 constexpr int MAX_HEADERS = 12;
 constexpr size_t MAX_HEADER_LEN = 400;
@@ -47,9 +50,20 @@ int wifi_connect_k(lua_State* L, int, lua_KContext) {
   return pushNo(L, "not connected (no network joined)");
 }
 
-// wifi.connect() -> true | false, reason. Parks the script while the system's WiFi screen (usually just an auto-join of the
-// saved network) runs; the screen is then the system's, so the app must redraw afterwards.
+// wifi.connect([{tls = false}]) -> true | false, reason. Parks the script while the system's WiFi screen (usually just an auto-join
+// of the saved network) runs; the screen is then the system's, so the app must redraw afterwards. The default demands enough RAM
+// for https; {tls=false} (plain TCP/UDP apps) demands less and leaves https to fail cleanly at request time.
 int wifi_connect(lua_State* L) {
+  bool needTls = true;
+  if (!lua_isnoneornil(L, 1)) {
+    luaL_checktype(L, 1, LUA_TTABLE);
+    lua_getfield(L, 1, "tls");
+    if (!lua_isnil(L, -1)) {
+      if (!lua_isboolean(L, -1)) return luaL_argerror(L, 1, "tls must be a boolean");
+      needTls = lua_toboolean(L, -1) != 0;
+    }
+    lua_pop(L, 1);
+  }
   if (!allowed(L)) return pushNo(L, DENIED);
   if (be(L).wifiConnected()) {
     lua_pushboolean(L, 1);
@@ -58,10 +72,11 @@ int wifi_connect(lua_State* L) {
   // Measured on the X4: bringing WiFi up costs ~56 KB of RAM and a TLS session wants >= 40 KB free on top of that.
   // Fail NOW with a clear reason rather than half-way through a request.
   const size_t freeNow = be(L).freeHeap();
-  if (freeNow < NET_MIN_FREE_BYTES) {
+  const size_t need = needTls ? NET_MIN_FREE_BYTES : NET_MIN_FREE_BYTES_PLAIN;
+  if (freeNow < need) {
     char msg[160];
-    snprintf(msg, sizeof(msg), "not enough free RAM for WiFi + TLS (free %uK, need %uK): this app is too big for network use",
-             static_cast<unsigned>(freeNow / 1024), static_cast<unsigned>(NET_MIN_FREE_BYTES / 1024));
+    snprintf(msg, sizeof(msg), "not enough free RAM for WiFi%s (free %uK, need %uK): this app is too big for network use",
+             needTls ? " + TLS" : "", static_cast<unsigned>(freeNow / 1024), static_cast<unsigned>(need / 1024));
     return pushNo(L, msg);
   }
   be(L).wifiRequestConnect();

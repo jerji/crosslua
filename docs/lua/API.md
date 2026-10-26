@@ -1,4 +1,4 @@
-# CrossLua app API (v0.14)
+# CrossLua app API (v0.15)
 
 An app is a plugin folder containing `main.lua`, in any plugin root
 (`/plugins`, `/.plugins`, `/.crosspoint/plugins`):
@@ -14,6 +14,10 @@ with a `>` and a "Lua app" subtitle unless the manifest gives a description.
 
 **Quit:** `return` from the main chunk, call `app.exit()`, or *hold Back for 1 s* (always works,
 even if the app is stuck in a loop). A runtime error shows an on-screen error + traceback; Back returns.
+
+## Namespaces are built on first use
+
+Only `gfx` (including `gfx.image` and `gfx.save_bmp`), `input`, `app`, `system`, `print`, `require` and `load` exist at start. `time`, `device`, `led`, `fs`, `json`, `wifi`, `http`, `net`, `zip`, `epub`, `crypto`, `coroutine` and `utf8` are built the first time a script reads the global (`crypto.sha1(...)` just works). Measured on the X4: Lua heap at start 19,278 B before this change, 11,577 B after (free heap +10.9 KB); touching every namespace costs 17,356 B in total, still below the old figure. Consequences: `pairs(_G)` does not list namespaces nobody has used yet, `rawget(_G, "crypto")` is nil until first use, and `_G` has a protected metatable, so `setmetatable(_G, ...)` fails with "cannot change a protected metatable". The first touch of a namespace needs a little free Lua heap (about 0.1-1 KB each); if that is not available you get a normal `not enough memory` error and the same access works again once memory is free.
 
 ## Language / sandbox
 Lua 5.4.7, **32-bit** build: integers are `int32`, floats are single precision. Use `//` for integer division.
@@ -160,7 +164,7 @@ An app must declare it in `manifest.json`, or every call below fails with a clea
 ```
 | call | notes |
 |---|---|
-| `wifi.connect()` → true \| false, reason | Parks your script and hands the screen to the system's WiFi flow, which auto-joins the last saved network (usually no UI at all; otherwise the normal network picker/keyboard). **The screen is the system's afterwards: redraw.** Returns immediately with `true` if already connected. Input events do not wake it. **Refuses up front** (`false, "not enough free RAM for WiFi + TLS (free 86K, need 96K)…"`) when less than 96 KB is free: WiFi costs ~56 KB and TLS wants 40 KB on top. Always show `reason`. |
+| `wifi.connect([{tls=false}])` → true \| false, reason | Parks your script and hands the screen to the system's WiFi flow, which auto-joins the last saved network (usually no UI at all; otherwise the normal network picker/keyboard). **The screen is the system's afterwards: redraw.** Returns immediately with `true` if already connected. Input events do not wake it. **Refuses up front** (`false, "not enough free RAM for WiFi + TLS (free 86K, need 96K)…"`) when less than 96 KB is free: WiFi costs ~57 KB and TLS wants 40 KB on top. **`wifi.connect{tls=false}`** is for apps that only use plain TCP (`net.*`): it needs 80 KB free instead (radio ~57 KB + the 16 KB the socket layer refuses to go below + ~7 KB margin), and `https` then fails at request time with its own "not enough free RAM for TLS" message instead of crashing (verified on the X4 at ~90 KB free). `tls` must be a boolean; the default is `true`. Always show `reason`. |
 | `wifi.status()` → `{connected, ssid, ip, rssi}` | |
 | `wifi.off()` | radio off now (frees RAM). Leaving the app always tears WiFi down anyway. |
 | `http.request{url, method, headers, body, save_to, max_body}` → `{status, ok, bytes, body}` \| nil, err | see below |
