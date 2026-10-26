@@ -20,6 +20,8 @@
 
 #include <Memory.h>
 
+#include <Bitmap.h>
+
 #include "Epub/converters/ImageDecoderFactory.h"
 #include "activities/util/ConfirmationActivity.h"
 #include "MappedInputManager.h"
@@ -219,6 +221,7 @@ class LuaAppActivity::Backend final : public crosslua::Backend {
   // *_DECODER_APPROX_SIZE constants in lib/Epub/Epub/converters) plus a little slack for its line buffers.
   static constexpr size_t PNG_MIN_BLOCK = 62 * 1024;  // sizeof(PNG) = 59.5 KB: PNGdec 45.7 KB + the build raises PNG_MAX_BUFFERED_PIXELS to 16416
   static constexpr size_t JPEG_MIN_BLOCK = 24 * 1024;
+  static constexpr size_t BMP_MIN_BLOCK = 16 * 1024;  // Bitmap row buffers (<= 2048 px wide) + dither state
   int zipList(const char* path, crosslua::Backend::ZipEntryInfo* out, int maxEntries, int* total, char* err,
               size_t errCap) override {
     const std::string p(path);
@@ -544,20 +547,64 @@ class LuaAppActivity::Backend final : public crosslua::Backend {
     QrUtils::drawQrCode(r_, Rect(x, y, side, side), text);
     return true;
   }
+  static bool endsWithCI(const char* s, const char* ext) {  // ext lower-case, e.g. ".bmp"
+    const size_t n = strlen(s), e = strlen(ext);
+    if (n < e) return false;
+    for (size_t i = 0; i < e; i++)
+      if (tolower(static_cast<unsigned char>(s[n - e + i])) != ext[i]) return false;
+    return true;
+  }
+  // Fit, never upscale, centre in the box.
+  static void fitInBox(int srcW, int srcH, int x, int y, int maxW, int maxH, int* ox, int* oy, int* dw, int* dh) {
+    int w = srcW, h = srcH;
+    if (w > maxW || h > maxH) {
+      const float sc = std::min(static_cast<float>(maxW) / w, static_cast<float>(maxH) / h);
+      w = std::max(1, static_cast<int>(w * sc));
+      h = std::max(1, static_cast<int>(h * sc));
+    }
+    *dw = w;
+    *dh = h;
+    *ox = x + (maxW - w) / 2;
+    *oy = y + (maxH - h) / 2;
+  }
   bool drawImage(const char* absPath, int x, int y, int maxW, int maxH, int* outW, int* outH, char* err,
                  size_t errCap) override {
+    const auto h = HalMemory::getInternalHeap();
+    if (endsWithCI(absPath, ".bmp")) {
+      // BMP: no decoder object, just a row buffer (Bitmap reads row by row), so it works in a tight heap.
+      if (h.largestBlockBytes < BMP_MIN_BLOCK) {
+        snprintf(err, errCap, "not enough free RAM to draw (largest block %uK, need %uK)",
+                 static_cast<unsigned>(h.largestBlockBytes / 1024), static_cast<unsigned>(BMP_MIN_BLOCK / 1024));
+        return false;
+      }
+      HalFile file;
+      if (!Storage.openFileForRead(TAG, absPath, file)) {
+        snprintf(err, errCap, "cannot open the file");
+        return false;
+      }
+      Bitmap bitmap(file, true, false);
+      const BmpReaderError be = bitmap.parseHeaders();
+      if (be != BmpReaderError::Ok) {
+        snprintf(err, errCap, "cannot read the BMP: %s", Bitmap::errorToString(be));
+        return false;
+      }
+      int ox, oy, dw, dh;
+      fitInBox(bitmap.getWidth(), bitmap.getHeight(), x, y, maxW, maxH, &ox, &oy, &dw, &dh);
+      if (!r_.drawBitmap(bitmap, ox, oy, dw, dh)) {
+        snprintf(err, errCap, "BMP draw failed (corrupt file or not enough RAM)");
+        return false;
+      }
+      *outW = dw;
+      *outH = dh;
+      return true;
+    }
     ImageToFramebufferDecoder* dec = ImageDecoderFactory::getDecoder(absPath);
     if (!dec) {
       snprintf(err, errCap, "no decoder for this image type");
       return false;
     }
     // The decoders stream (RAM never scales with the source) but need working buffers of their own.
-    const auto h = HalMemory::getInternalHeap();
-    const size_t pl = strlen(absPath);
-    const bool isPng = pl >= 4 && tolower(static_cast<unsigned char>(absPath[pl - 1])) == 'g' &&
-                       tolower(static_cast<unsigned char>(absPath[pl - 2])) == 'n' &&
-                       tolower(static_cast<unsigned char>(absPath[pl - 3])) == 'p' && absPath[pl - 4] == '.';
-    const size_t need = isPng ? PNG_MIN_BLOCK : JPEG_MIN_BLOCK;
+    const size_t need = endsWithCI(absPath, ".png") ? PNG_MIN_BLOCK : JPEG_MIN_BLOCK;
     if (h.largestBlockBytes < need) {
       snprintf(err, errCap, "not enough free RAM to decode (largest block %uK, need %uK)",
                static_cast<unsigned>(h.largestBlockBytes / 1024), static_cast<unsigned>(need / 1024));
@@ -569,16 +616,9 @@ class LuaAppActivity::Backend final : public crosslua::Backend {
                static_cast<unsigned>(HalMemory::getInternalHeap().largestBlockBytes / 1024));
       return false;
     }
-    // Fit, never upscale, centre in the box.
-    int dw = d.width, dh = d.height;
-    if (dw > maxW || dh > maxH) {
-      const float sc = std::min(static_cast<float>(maxW) / dw, static_cast<float>(maxH) / dh);
-      dw = std::max(1, static_cast<int>(dw * sc));
-      dh = std::max(1, static_cast<int>(dh * sc));
-    }
     RenderConfig cfg;
-    cfg.x = x + (maxW - dw) / 2;
-    cfg.y = y + (maxH - dh) / 2;
+    int dw, dh;
+    fitInBox(d.width, d.height, x, y, maxW, maxH, &cfg.x, &cfg.y, &dw, &dh);
     cfg.maxWidth = dw;
     cfg.maxHeight = dh;
     cfg.useGrayscale = false;

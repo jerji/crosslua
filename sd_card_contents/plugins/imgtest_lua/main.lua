@@ -31,6 +31,13 @@ r, e = gfx.image("sd:spells/images/test.png", W, 0); check("off-screen x refused
 -- a tiny box: still decodes, just scaled down
 local sw, sh = gfx.image("sd:spells/images/test.png", 10, 10, 120, 120)
 check("small box scales down", sw ~= nil and sw <= 120 and sh <= 120, sw and (sw .. "x" .. sh) or "failed")
+-- BMP: no decoder object, so it must work with little RAM (1-bit and 24-bit, scaled and not)
+local bw, bh, be = gfx.image("sd:spells/images/test1bit.bmp", 0, 400)
+check("1-bit bmp drawn (fits 480 wide, unscaled 400x150)", bw == 400 and bh == 150, bw and (bw .. "x" .. bh) or be)
+local cw, ch, ce = gfx.image("sd:spells/images/test24.bmp", 0, 600, 200, 100)
+check("24-bit bmp scaled into a 200x100 box", cw ~= nil and cw <= 200 and ch <= 100, cw and (cw .. "x" .. ch) or ce)
+local nw, ne = gfx.image("sd:spells/images/missing.bmp", 0, 0); check("missing bmp is nil,err", nw == nil, ne)
+gfx.present("fast")
 local f2 = mem("end")
 check("no leak after repeated draws", f2 >= f0 - 2048)
 print(fails == 0 and "ALL PASSED" or (fails .. " FAILED"))

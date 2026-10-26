@@ -303,9 +303,11 @@ gfx.qr = function(text, x, y, side) log("qr", text, x, y, side) end
 gfx.image = function(path, x, y, bw, bh)
     local f = M.appEnv and M.appEnv.fs
     if f and not f.exists(path) then return nil, "no such file" end
-    local hdr = f and f.read(path, 0, 24)
+    local hdr = f and f.read(path, 0, 26)
     local w, h = 100, 100
-    if hdr and #hdr >= 24 then w, h = string.unpack(">I4I4", hdr, 17) end
+    if hdr and #hdr >= 26 and hdr:sub(1, 2) == "BM" then
+        w, h = string.unpack("<i4i4", hdr, 19); h = math.abs(h)
+    elseif hdr and #hdr >= 24 then w, h = string.unpack(">I4I4", hdr, 17) end
     bw, bh = bw or (M.screenW - x), bh or (M.screenH - y)
     local dw, dh = w, h
     if dw > bw or dh > bh then

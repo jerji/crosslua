@@ -390,11 +390,17 @@ function EmuImage.open(path)
     local rel, e = grimPath(path)
     if not rel then return nil, e end
     local p = "sd:" .. rel
-    local hdr, err = fs.read(p, 0, 24)
+    local hdr, err = fs.read(p, 0, 26)
     if not hdr then return nil, err or "cannot open image" end
-    if #hdr < 24 or hdr:sub(1, 8) ~= PNG_SIG then return nil, "not a PNG file" end
-    local w, h = string.unpack(">I4I4", hdr, 17)
-    return { p = p, w = w, h = h }
+    if #hdr >= 24 and hdr:sub(1, 8) == PNG_SIG then
+        local w, h = string.unpack(">I4I4", hdr, 17)
+        return { p = p, w = w, h = h }
+    end
+    if #hdr >= 26 and hdr:sub(1, 2) == "BM" then   -- BMP: width/height are little-endian int32 at offset 18 (height < 0 = top-down)
+        local w, h = string.unpack("<i4i4", hdr, 19)
+        return { p = p, w = w, h = math.abs(h) }
+    end
+    return nil, "not a PNG or BMP file"
 end
 function EmuImage.width(img) return img.w end
 function EmuImage.height(img) return img.h end

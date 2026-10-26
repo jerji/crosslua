@@ -139,7 +139,7 @@ int zip_inflate(lua_State* L) {
 }
 
 // gfx.image(path, x, y [, box_w, box_h]) -> drawn_w, drawn_h | nil, err
-// PNG/JPEG from app:/data:/sd: (sd: needs "library"), decoded row by row into the current frame, fitted into the box
+// PNG/JPEG/BMP from app:/data:/sd: (sd: needs "library"), decoded row by row into the current frame, fitted into the box
 // (default: from x,y to the screen edge), never upscaled, centred in the box, dithered to black/white. Call
 // gfx.present() afterwards like for any drawing.
 static int gfx_image(lua_State* L) {
@@ -162,7 +162,8 @@ static int gfx_image(lua_State* L) {
       if (tolower(static_cast<unsigned char>(path[pl - el + i])) != ext[i]) return false;
     return true;
   };
-  if (!endsWith(".png") && !endsWith(".jpg") && !endsWith(".jpeg")) return pushFail(L, "unsupported image type (png, jpg)");
+  if (!endsWith(".png") && !endsWith(".jpg") && !endsWith(".jpeg") && !endsWith(".bmp"))
+    return pushFail(L, "unsupported image type (png, jpg, bmp)");
   const int64_t size = be(L).fsSize(path);
   if (size == -1) return pushFail(L, "no such file");
   if (size == -2) return pushFail(L, "is a directory");

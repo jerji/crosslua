@@ -134,6 +134,10 @@ display.text(0, 0,  "A:" .. tostring(a) .. ":" .. tostring(ea), 1, true)
 display.text(0, 20, "B:" .. tostring(b) .. ":" .. tostring(eb), 1, true)
 display.text(0, 40, "C:" .. image.width(c) .. "x" .. image.height(c) .. ":" .. tostring(ok), 1, true)
 display.text(0, 60, "D:" .. tostring(ok2) .. ":" .. tostring(e2), 1, true)
+local e1 = image.open("/spells/images/test.bmp")
+display.text(0, 80, "E:" .. image.width(e1) .. "x" .. image.height(e1) .. ":" .. tostring(image.draw(e1, 0, 0)), 1, true)
+local f1 = image.open("/spells/images/topdown.bmp")   -- negative height = top-down
+display.text(0, 100, "F:" .. image.width(f1) .. "x" .. image.height(f1) .. ":" .. tostring(image.draw(f1, 0, 0)), 1, true)
 ]]
 
 FIXTURES["z_wifi_creds_test.lua"] = [[
@@ -235,6 +239,13 @@ local function setupScenario(autoRun)
     do  -- the REAL test.png (800x300) so image.width/height read a genuine IHDR
         local rf = io.open("/root/x4/Grimoire/sd_card_contents/spells/images/test.png", "rb")
         writeFile(HOST_ROOT .. "/sd/spells/images/test.png", rf and rf:read("a") or "")
+        local function bmp(w, h)   -- 62-byte header of a 1-bit BMP (+ pixel padding); only the header matters here
+            return "BM" .. string.pack("<I4I2I2I4", 62 + 4 * math.abs(h), 0, 0, 62)
+                .. string.pack("<I4i4i4I2I2I4I4i4i4I4I4", 40, w, h, 1, 1, 0, 0, 2835, 2835, 2, 2)
+                .. string.rep("\0", 8) .. string.rep("\0", 4 * math.abs(h))
+        end
+        writeFile(HOST_ROOT .. "/sd/spells/images/test.bmp", bmp(40, 20))
+        writeFile(HOST_ROOT .. "/sd/spells/images/topdown.bmp", bmp(12, -7))
         if rf then rf:close() end
     end
 
@@ -414,7 +425,8 @@ local function runAllDirect()
         local shown = logTextMessages(log)
         check("(h) image fixture finishes", st == "finished", "status=" .. tostring(st) .. " msg=" .. tostring(msg))
         check("(h) image.open missing file -> nil, err", shown:find("A:nil:", 1, true) ~= nil and shown:find("A:nil:nil", 1, true) == nil, shown:sub(1, 160))
-        check("(h) image.open non-PNG -> nil, 'not a PNG file'", shown:find("B:nil:not a PNG file", 1, true) ~= nil, shown:sub(1, 160))
+        check("(h) image.open non-image -> nil, 'not a PNG or BMP file'", shown:find("B:nil:not a PNG or BMP file", 1, true) ~= nil, shown:sub(1, 160))
+        check("(h) BMP header gives width/height (top-down BMP too) and draw works", shown:find("E:40x20:true", 1, true) ~= nil and shown:find("F:12x7:true", 1, true) ~= nil, shown:sub(1, 200))
         check("(h) width/height from the IHDR and draw succeeds", shown:find("C:800x300:true", 1, true) ~= nil, shown:sub(1, 160))
         check("(h) draw after close raises 'image is closed'", shown:find("D:false:image is closed", 1, true) ~= nil, shown:gsub("\n", " | "))
     end

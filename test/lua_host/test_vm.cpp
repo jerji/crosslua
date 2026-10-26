@@ -1869,7 +1869,7 @@ int main() {
           CHECK(be.imageCalls[0].path == "/Books/cover.PNG");
           CHECK(be.imageCalls[5].path == "/Books/photo.jpg" && be.imageCalls[5].w == 80 && be.imageCalls[5].h == 40 && be.imageCalls[5].y == 380 + (100 - 40) / 2);
         }
-        CHECK(be.logs[5] == "nil\tunsupported image type (png, jpg)");
+        CHECK(be.logs[5] == "nil\tunsupported image type (png, jpg, bmp)");
         CHECK(be.logs[6] == "nil\timage file is empty or over 6 MB");
         CHECK(be.logs[7] == "nil\tno such file" && be.logs[8] == "nil\tis a directory");
         CHECK(be.logs[9] == "nil\thidden files and folders are not accessible");
@@ -2073,6 +2073,28 @@ int main() {
       CHECK(be.logs[3].find("nil\tlibrary access not permitted: this path is outside") == 0 && be.logs[4] == "200");
     }
     CHECK(be.files["/Books/AO3/dl.epub"] == "hello" && !be.files.count("/Books/dl.epub") && !be.files.count("/Books/AO3/fw.bin") && !be.files.count("/top.txt"));
+  }
+  {
+    TEST("gfx.image: .bmp (any case) is accepted and fitted like png/jpg; other types still refused");
+    MockBackend be;
+    be.library = true;
+    be.files["/Books/pic.bmp"] = "BM";
+    be.files["/Books/UP.BMP"] = "BM";
+    be.files["/Books/pic.gif"] = "GIF";
+    be.images["/Books/pic.bmp"] = {64, 32};
+    be.images["/Books/UP.BMP"] = {10, 10};
+    LuaVm vm;
+    CHECK(vm.open(128 * 1024));
+    registerApi(vm, be);
+    const char* script = R"LUA(
+      print(gfx.image("sd:Books/pic.bmp", 0, 0, 30, 30))
+      print(gfx.image("sd:Books/UP.BMP", 5, 5, 50, 50))
+      print(gfx.image("sd:Books/pic.gif", 0, 0))
+    )LUA";
+    CHECK(vm.load("t", script, strlen(script)));
+    CHECK(run(vm, be, 100000) == Status::Finished);
+    CHECK(be.logs.size() == 3 && be.logs[0] == "30\t15" && be.logs[1] == "10\t10" && be.logs[2] == "nil\tunsupported image type (png, jpg, bmp)");
+    CHECK(be.imageCalls.size() == 2 && be.imageCalls[0].path == "/Books/pic.bmp" && be.imageCalls[1].x == 5 + (50 - 10) / 2);
   }
   {
     TEST("require: a big module loads in a tight heap (the unstripped copy is dropped before the stripped one loads)");
