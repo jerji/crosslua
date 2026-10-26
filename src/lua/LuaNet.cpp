@@ -29,7 +29,7 @@ int pushFail(lua_State* L, const char* msg) {
 }
 
 bool allowed(lua_State* L) { return be(L).netAllowed(); }
-constexpr const char* DENIED = "network not permitted: add \"permissions\": [\"network\"] to this app's manifest.json";
+constexpr const char* DENIED = NET_DENIED;
 
 // ---- wifi -----------------------------------------------------------------
 int pushNo(lua_State* L, const char* why) {  // wifi.connect() failures: false, reason

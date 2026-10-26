@@ -4,6 +4,9 @@
 #include <Buzzer.h>
 #include <EnvironmentSensor.h>
 #include <Epub.h>
+#include <functional>
+#include <sys/socket.h>
+#include <cerrno>
 #include <GfxRenderer.h>
 #include <Imu.h>
 #include <LedManager.h>
@@ -63,6 +66,14 @@ constexpr size_t LUA_MAX_BUDGET = 160 * 1024;
 // Hard floor of free device RAM that an allocation may never eat into (see LuaVm::setHeapGuard). On-device
 // measurement: without it a table-growth stress test drove lifetime min-free heap down to 7 KB.
 constexpr size_t LUA_HEAP_FLOOR = 40 * 1024;
+// Once wifi.connect() has succeeded the radio owns ~57 KB and only ~44 KB remain free, so the 40 KB floor would leave Lua about
+// 1 KB. Measured on the X4 (memprobe_lua, development knob system.dev_floor): any floor above ~16 KB makes ordinary
+// reads fail mid-stream because TCP buffering alone drives free heap down to ~16.7 KB during a 64 KB burst; 16, 12 and 8 KB all
+// completed with a matching hash. 12 KB leaves Lua ~32 KB to work with. One-way for the app's lifetime: apps that touched
+// WiFi restart the device on exit (heap defrag), so the framework is not left starved.
+constexpr size_t LUA_HEAP_FLOOR_ONLINE = 12 * 1024;
+// net.read may go this low for the single allocation that copies data OUT of the network stack (which relieves the pressure).
+constexpr size_t LUA_HEAP_FLOOR_DRAIN = 6 * 1024;
 constexpr size_t MAX_SCRIPT_BYTES = 64 * 1024;
 
 constexpr uint32_t SLICE_MS = 25;          // max time one loop() pass spends inside Lua
@@ -250,6 +261,29 @@ class LuaAppActivity::Backend final : public crosslua::Backend {
     c->tls13 = FREEINK_CAP_NET_TLS13;
   }
   bool usbConnected() override { return gpio.isUsbConnected(); }
+  std::function<void(size_t)> setFloorFn;  // set by the Activity: applies a new heap-guard floor to the VM
+  std::function<size_t()> getFloorFn;
+  size_t savedFloor_ = 0;
+  bool devSetFloor(size_t bytes) override {
+#ifdef CROSSLUA_DEV
+    if (!setFloorFn) return false;
+    setFloorFn(bytes);
+    return true;
+#else
+    (void)bytes;
+    return false;
+#endif
+  }
+  void heapRelax(bool on) override {
+    if (!setFloorFn || !getFloorFn) return;
+    if (on) {
+      savedFloor_ = getFloorFn();
+      if (savedFloor_ > LUA_HEAP_FLOOR_DRAIN) setFloorFn(LUA_HEAP_FLOOR_DRAIN);
+    } else if (savedFloor_) {
+      setFloorFn(savedFloor_);
+      savedFloor_ = 0;
+    }
+  }
 
   // --- sensors / outputs. Each SDK lib is begun on first use and put back to rest when the app ends (see ~Backend). ---
   freeink::Imu imu_;
@@ -258,6 +292,8 @@ class LuaAppActivity::Backend final : public crosslua::Backend {
   freeink::LedManager led_;
   bool imuTried_ = false, envTried_ = false, buzzerTried_ = false, ledTried_ = false;
   ~Backend() override {
+    for (int i = 0; i < crosslua::Backend::MAX_SOCKETS; i++)
+      if (sockUsed_[i]) socks_[i].stop();  // an app that exits with sockets open must not leak them
     if (buzzer_.present()) {
       buzzer_.noTone();
       buzzer_.end();
@@ -368,6 +404,74 @@ class LuaAppActivity::Backend final : public crosslua::Backend {
   static constexpr size_t JPEG_MIN_BLOCK = 24 * 1024;
   static constexpr size_t EPUB_META_MIN_FREE = 64 * 1024;  // measured on the X4: the metadata parse peaks at ~55 KB (epubtest_lua PEAK line)
   static constexpr size_t BMP_MIN_BLOCK = 16 * 1024;  // Bitmap row buffers (<= 2048 px wide) + dither state
+  // --- raw TCP client sockets (net.*): Arduino WiFiClient (NetworkClient over lwIP), already linked for the web server ---
+  WiFiClient socks_[crosslua::Backend::MAX_SOCKETS];
+  bool sockUsed_[crosslua::Backend::MAX_SOCKETS] = {};
+  static void fmtIp(char* out, size_t cap, const IPAddress& ip) { snprintf(out, cap, "%u.%u.%u.%u", ip[0], ip[1], ip[2], ip[3]); }
+  bool netLocal(char* ip, char* mask, char* gw, char* dns, size_t cap) override {
+    if (WiFi.status() != WL_CONNECTED) return false;
+    fmtIp(ip, cap, WiFi.localIP());
+    fmtIp(mask, cap, WiFi.subnetMask());
+    fmtIp(gw, cap, WiFi.gatewayIP());
+    fmtIp(dns, cap, WiFi.dnsIP());
+    return true;
+  }
+  bool netResolve(const char* host, char* ip, size_t ipCap, char* err, size_t errCap) override {
+    IPAddress a;
+    if (WiFi.hostByName(host, a) != 1) {
+      snprintf(err, errCap, "cannot resolve '%s' (no such host or DNS unreachable)", host);
+      return false;
+    }
+    fmtIp(ip, ipCap, a);
+    return true;
+  }
+  int netConnect(const char* host, int port, int timeoutMs, char* err, size_t errCap) override {
+    int slot = -1;
+    for (int i = 0; i < crosslua::Backend::MAX_SOCKETS && slot < 0; i++)
+      if (!sockUsed_[i]) slot = i;
+    if (slot < 0) {
+      snprintf(err, errCap, "too many open sockets (max 4)");
+      return -1;
+    }
+    if (!socks_[slot].connect(host, static_cast<uint16_t>(port), timeoutMs)) {
+      socks_[slot].stop();
+      snprintf(err, errCap, "cannot connect to %s:%d (refused, unreachable or timed out)", host, port);
+      return -1;
+    }
+    socks_[slot].setNoDelay(true);
+    sockUsed_[slot] = true;
+    return slot;
+  }
+  bool netIsOpen(int s) override { return s >= 0 && s < crosslua::Backend::MAX_SOCKETS && sockUsed_[s]; }
+  // Arduino's NetworkClient::connected() does not notice a graceful close (FIN) until a later read, so ask the socket directly:
+  // a non-destructive peek returns 0 on an orderly shutdown, > 0 if data waits, and -1/EWOULDBLOCK when simply idle.
+  bool peerAlive(int s) {
+    const int fd = socks_[s].fd();
+    if (fd < 0) return false;
+    uint8_t b;
+    const int r = recv(fd, &b, 1, MSG_PEEK | MSG_DONTWAIT);
+    if (r == 0) return false;
+    if (r < 0 && errno != EWOULDBLOCK && errno != EAGAIN) return false;
+    return true;
+  }
+  int netAvailable(int s) override { return netIsOpen(s) ? socks_[s].available() : -1; }
+  int netRead(int s, void* buf, size_t max) override {
+    if (!netIsOpen(s)) return -1;
+    const int a = socks_[s].available();
+    if (a <= 0) return peerAlive(s) ? 0 : -1;
+    return socks_[s].read(static_cast<uint8_t*>(buf), std::min(max, static_cast<size_t>(a)));
+  }
+  int netWrite(int s, const void* d, size_t n) override {
+    if (!netIsOpen(s) || (socks_[s].available() == 0 && !peerAlive(s))) return -1;
+    const size_t w = socks_[s].write(static_cast<const uint8_t*>(d), n);
+    return (w == 0 && n > 0) ? -1 : static_cast<int>(w);
+  }
+  bool netConnected(int s) override { return netIsOpen(s) && (socks_[s].available() > 0 || peerAlive(s)); }
+  void netClose(int s) override {
+    if (!netIsOpen(s)) return;
+    socks_[s].stop();
+    sockUsed_[s] = false;
+  }
   bool saveScreenBmp(const char* path, char* err, size_t errCap) override {
     // The firmware's own screenshot writer: rotates to the panel's portrait orientation while streaming rows (68-byte buffer).
     const uint8_t* fb = r_.getFrameBuffer();
@@ -995,6 +1099,10 @@ void LuaAppActivity::startVm() {
   }
   vm_->setHeapGuard([](void* ud) -> size_t { return static_cast<Backend*>(ud)->freeHeapQuick(); }, backend_.get(),
                     LUA_HEAP_FLOOR);
+  backend_->setFloorFn = [this](size_t b) {
+    if (vm_) vm_->setHeapFloor(b);
+  };
+  backend_->getFloorFn = [this]() -> size_t { return vm_ ? vm_->heapFloor() : 0; };
   crosslua::registerApi(*vm_, *backend_);
   if (!vm_->load(path.c_str(), src.data(), src.size())) {
     showError("Script error", vm_->error());
@@ -1053,6 +1161,7 @@ void LuaAppActivity::launchWifi() {
   startActivityForResult(std::make_unique<WifiSelectionActivity>(renderer, mappedInput), [this](const ActivityResult& r) {
     const bool ok = !r.isCancelled;
     LOG_INF(TAG, "wifi.connect -> %s", ok ? "connected" : "not connected");
+    if (ok && vm_) vm_->setHeapFloor(LUA_HEAP_FLOOR_ONLINE);
     renderer.clearScreen();
     if (vm_ && vm_->status() == crosslua::Status::Waiting) {
       vm_->resume(ok ? "wifi:ok" : "wifi:fail");

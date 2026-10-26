@@ -53,5 +53,9 @@ void registerRequire(lua_State* L, Ctx* c);
 void registerNet(lua_State* L, Ctx* c);
 void registerZip(lua_State* L, Ctx* c);
 void registerCrypto(lua_State* L, Ctx* c);
+void registerSock(lua_State* L, Ctx* c);
+
+// Shared by wifi.*, http.* and net.*: what an app sees when its manifest lacks the permission.
+inline constexpr const char* NET_DENIED = "network not permitted: add \"permissions\": [\"network\"] to this app's manifest.json";
 
 }  // namespace crosslua

@@ -30,7 +30,7 @@ No reference firmware implements ICMP or raw sockets; "ping" everywhere is a TCP
 
 ## 3. Proposed Lua API (needs the manifest `"permissions": ["network"]`, like `http`/`wifi`)
 ```
-net.local()                          -> { ip, mask, gateway, dns } | nil, err          (WiFi must be up)
+net.info()                           -> { ip, mask, gateway, dns } | nil, err          (WiFi must be up)
 net.resolve(host [, timeout_ms])     -> ip string | nil, err                           WiFi.hostByName
 net.connect(host, port [, opts])     -> handle | nil, err      opts = { timeout_ms = 5000, tls = false, insecure = false }
                                         blocking with Back-to-cancel (same pump as http); TLS -> SecureClient
@@ -58,3 +58,22 @@ Mock backend with scripted sockets (partial reads, closes mid-read, timeouts, re
 before the backend is touched; handle-table exhaustion and reuse after close; mutants on every limit and on the permission
 gate; on the X4: connect to a throwaway echo server on the LAN (this Linux box), measure RAM per connection and the leak over
 200 open/close cycles, then port a biscuit tool (host scanner or DNS lookup) as a Lua app as the end-to-end proof.
+
+## 5. Built (client-side TCP) and measured on the X4 (2026-10-26)
+
+Shipped as `net.info / resolve / connect / read / write / available / connected / close` (see API.md "net"). Decisions taken with the defaults proposed in section 4: client-only, plain TCP first, one `net.*` namespace.
+
+Differences from the proposal above:
+- `net.local()` became **`net.info()`**: `local` is a Lua keyword, so `net.local()` does not parse.
+- `net.resolve(host)` has no timeout argument: `WiFi.hostByName` in this Arduino core takes none (it uses the system DNS timeout).
+- `{tls=true}` / `{insecure=true}` are accepted as option names but **refused with a clear message**: TLS sockets are the next step.
+
+What the device told us (WiFi up, memprobe_lua / socktest_lua against `echo_server.py` on the LAN):
+- The 40 KB guard floor is wrong once the radio is up: free heap is ~44 KB, so Lua could allocate ~1.3 KB. Any floor above ~16 KB made reads fail mid-stream (TCP buffering alone dips free heap to ~16.7 KB in a 64 KB burst). Floors of 16, 12 and 8 KB all completed with a matching SHA-256. **Shipped: 12 KB after a successful `wifi.connect()`** (one-way; WiFi apps restart the device on exit).
+- Copying data out of the stack relieves memory pressure, so `net.read` relaxes the floor to 6 KB for that one allocation (restored inside a protected call, even on out-of-memory).
+- Per-socket heap: idle 3.4-3.8 KB; after an echo 6.8 KB; receive window full ~16 KB. One flooded socket is survivable, two or more flooded at once ran out of memory (the system survived; Lua got `not enough memory`).
+- `NetworkClient::connected()` does not notice a graceful FIN until a later read; the backend uses `recv(MSG_PEEK)` instead.
+- Closed connections sit in TIME_WAIT: ~4.6 KB for the first ~40 cycles, then a plateau (+212 bytes over the next 120).
+- Timings: connect to a LAN host 16-26 ms; DNS 30-52 ms; refused port 18-19 ms; a blackhole host with `timeout_ms=1500` failed after 1504-1505 ms.
+
+Still open: UDP, `net.mdns_query`, TLS sockets (`SecureClient`, needs ~60 KB: that does not fit next to a socket-using Lua heap on the X4 without measurement), `listen/accept`, and a way for Back to interrupt a blocking `connect`.

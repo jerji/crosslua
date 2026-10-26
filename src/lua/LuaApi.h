@@ -100,6 +100,18 @@ class Backend {
     char error[96] = {0};      // set when the call failed (no/aborted response)
   };
   virtual bool netAllowed() = 0;  // the app's manifest declares "network"
+
+  // --- raw TCP client sockets (net.*): a fixed table of MAX_SOCKETS slots; handles seen by Lua are slot + 1 -------------
+  static constexpr int MAX_SOCKETS = 4;
+  virtual bool netLocal(char* ip, char* mask, char* gateway, char* dns, size_t cap) = 0;  // false: WiFi is down
+  virtual bool netResolve(const char* host, char* ip, size_t ipCap, char* err, size_t errCap) = 0;
+  virtual int netConnect(const char* host, int port, int timeoutMs, char* err, size_t errCap) = 0;  // slot, or -1 + err
+  virtual bool netIsOpen(int slot) = 0;                              // the handle is allocated (even if the peer closed)
+  virtual int netAvailable(int slot) = 0;                            // bytes waiting; -1 when the slot is not open
+  virtual int netRead(int slot, void* buf, size_t max) = 0;          // > 0 bytes; 0 nothing now; -1 closed
+  virtual int netWrite(int slot, const void* data, size_t n) = 0;    // bytes written; -1 error / closed
+  virtual bool netConnected(int slot) = 0;                           // false once the peer closed and nothing is left to read
+  virtual void netClose(int slot) = 0;
   virtual bool wifiConnected() = 0;
   // Ask the system to bring WiFi up (it may show its own network picker). Non-blocking: the script is parked and
   // resumed with "wifi:ok" / "wifi:fail" once the system UI has finished.
@@ -130,6 +142,11 @@ class Backend {
   // --- storage grants: manifest "storage": {"read": [...], "write": [...]}. Only grants the user APPROVED are visible
   // here (an unapproved request reads as zero grants). Paths are normalised, relative, never hidden; "" = the whole card.
   virtual void randomBytes(uint8_t* out, size_t n) = 0;  // hardware RNG
+  // DEV BUILDS ONLY (CROSSLUA_DEV): change the heap-guard floor at runtime to MEASURE a safe value. Release builds: false.
+  virtual bool devSetFloor(size_t bytes) { (void)bytes; return false; }
+  // net.read copies data OUT of the network stack's buffers, which is what relieves memory pressure: for that one allocation
+  // the host lowers the heap-guard floor (on=true) and restores it right after (on=false), even if the allocation failed.
+  virtual void heapRelax(bool on) { (void)on; }
 
   // --- what this board has (CrossPoint runs on many boards: apps adapt, they do not guess the model) ---------------
   struct DeviceCaps {

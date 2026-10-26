@@ -138,6 +138,80 @@ struct MockBackend : Backend {
   struct SeenReq { std::string method, url, body, savePath; std::vector<std::pair<std::string, std::string>> headers; size_t maxBody = 0; };
   std::vector<SeenReq> seen;
   bool netAllowed() override { return net; }
+
+  // raw TCP sockets: scripted peers
+  struct MockSock { bool used = false; std::string host; int port = 0; std::string rx, tx; bool peerClosed = false; };
+  MockSock socks[Backend::MAX_SOCKETS];
+  std::map<std::string, std::string> sockReply, dnsMap;  // "host:port" -> bytes the peer sends right after connect; name -> ip
+  std::set<std::string> sockRefused, sockClosesAfterReply;
+  std::vector<std::string> dnsAsked;
+  std::vector<int> connectOpts;  // timeout_ms of every connect that reached the backend
+  std::string txLog;             // "host:port<-data" for every write
+  int connectCalls = 0;
+  bool netReadFail = false;  // netRead reports "closed" although bytes were pending (the peer vanished between the two calls)
+  int relaxOn = 0, relaxOff = 0;  // heapRelax(true/false) calls: must always balance
+  void heapRelax(bool on) override { (on ? relaxOn : relaxOff)++; }
+  size_t writeChunk = 0;  // 0 = accept everything; otherwise at most this many bytes per write (partial writes)
+  bool netLocal(char* ip, char* mask, char* gw, char* dns, size_t cap) override {
+    if (!wifiUp) return false;
+    snprintf(ip, cap, "192.168.1.50");
+    snprintf(mask, cap, "255.255.255.0");
+    snprintf(gw, cap, "192.168.1.1");
+    snprintf(dns, cap, "1.1.1.1");
+    return true;
+  }
+  bool netResolve(const char* host, char* ip, size_t ipCap, char* err, size_t errCap) override {
+    dnsAsked.push_back(host);
+    auto it = dnsMap.find(host);
+    if (it == dnsMap.end()) {
+      snprintf(err, errCap, "cannot resolve host (mock)");
+      return false;
+    }
+    snprintf(ip, ipCap, "%s", it->second.c_str());
+    return true;
+  }
+  int netConnect(const char* host, int port, int timeoutMs, char* err, size_t errCap) override {
+    connectCalls++;
+    connectOpts.push_back(timeoutMs);
+    const std::string key = std::string(host) + ":" + std::to_string(port);
+    if (sockRefused.count(key)) {
+      snprintf(err, errCap, "connection refused (mock)");
+      return -1;
+    }
+    for (int i = 0; i < Backend::MAX_SOCKETS; i++) {
+      if (socks[i].used) continue;
+      socks[i] = MockSock{};
+      socks[i].used = true;
+      socks[i].host = host;
+      socks[i].port = port;
+      auto r = sockReply.find(key);
+      if (r != sockReply.end()) socks[i].rx = r->second;
+      socks[i].peerClosed = sockClosesAfterReply.count(key) != 0;
+      return i;
+    }
+    snprintf(err, errCap, "no free slot (mock)");
+    return -1;
+  }
+  bool netIsOpen(int s) override { return s >= 0 && s < Backend::MAX_SOCKETS && socks[s].used; }
+  int netAvailable(int s) override { return netIsOpen(s) ? static_cast<int>(socks[s].rx.size()) : -1; }
+  int netRead(int s, void* buf, size_t max) override {
+    if (!netIsOpen(s) || netReadFail) return -1;
+    const size_t n = std::min(max, socks[s].rx.size());
+    memcpy(buf, socks[s].rx.data(), n);
+    socks[s].rx.erase(0, n);
+    return static_cast<int>(n);
+  }
+  int netWrite(int s, const void* d, size_t n) override {
+    if (!netIsOpen(s) || (socks[s].peerClosed && socks[s].rx.empty())) return -1;
+    if (writeChunk && n > writeChunk) n = writeChunk;
+    socks[s].tx.append(static_cast<const char*>(d), n);
+    txLog += socks[s].host + ":" + std::to_string(socks[s].port) + "<-" + std::string(static_cast<const char*>(d), n);
+    return static_cast<int>(n);
+  }
+  bool netConnected(int s) override { return netIsOpen(s) && !(socks[s].peerClosed && socks[s].rx.empty()); }
+  void netClose(int s) override {
+    if (netIsOpen(s)) socks[s] = MockSock{};
+  }
   bool wifiConnected() override { return wifiUp; }
   void wifiRequestConnect() override { wifiAsked = true; }
   bool wifiInfo(char* ssid, size_t sc, char* ip, size_t ic, int* rssi) override {
@@ -644,6 +718,22 @@ int main() {
     CHECK(be.logs[1] == "1000");  // VM still usable after hitting the guard
     CHECK(vm.peakBytes() <= be.simTotal - floor);
     CHECK(vm.peakBytes() > 60 * 1024);  // and it did use most of what was allowed
+  }
+  {
+    TEST("heap guard: setHeapFloor changes the floor while the app runs (lowered after wifi.connect, as the activity does)");
+    LuaVm vm; MockBackend be;
+    be.simTotal = 150 * 1024;
+    be.simVm = &vm;
+    CHECK(vm.open(1024 * 1024));
+    vm.setHeapGuard([](void* ud) -> size_t { return static_cast<MockBackend*>(ud)->freeHeapQuick(); }, &be, 40 * 1024);
+    vm.setHeapFloor(12 * 1024);  // what LuaAppActivity does once WiFi is up
+    registerApi(vm, be);
+    const char* src = "local t = {} local ok, e = pcall(function() for i = 1, 1e6 do t[i] = {i} end end) t = nil collectgarbage() print(ok, tostring(e):sub(1, 17)) print(#string.rep('z', 1000))";
+    CHECK(vm.load("guard", src, strlen(src)));
+    CHECK(run(vm, be, 1000000) == Status::Finished);
+    CHECK(be.logs[0] == "false\tnot enough memory");
+    CHECK(vm.peakBytes() <= be.simTotal - 12 * 1024);   // the new floor is still enforced...
+    CHECK(vm.peakBytes() > be.simTotal - 40 * 1024);    // ...and the VM used memory the old 40 KB floor would have refused
   }
   {
     TEST("regression: script dying of uncaught OOM is reported, no panic/abort");
@@ -1646,7 +1736,7 @@ int main() {
     TEST("load: text-only, env honoured, size limit, no bytecode, errors are values not crashes");
     MockBackend be;
     LuaVm vm;
-    CHECK(vm.open(160 * 1024));
+    CHECK(vm.open(192 * 1024));
     registerApi(vm, be);
     const char* script = R"LUA(
       local function show(...) print(...) end
@@ -2720,6 +2810,244 @@ int main() {
     const std::vector<std::string> saved = {"/.crosslua/data/test/shots/a.bmp", "/.crosslua/data/test/B.BMP"};
     CHECK(be.bmpSaved == saved);  // only the two good saves; the refused paths never reached the backend, fail.bmp failed
     CHECK(be.dirs.count("/.crosslua/data/test/shots") == 1);  // the parent folder is created like fs.write does
+  }
+  {
+    TEST("net: TCP client sockets: connect/read/write/close, partial reads, peer close, slot reuse, tx recorded");
+    MockBackend be;
+    be.net = true;
+    be.wifiUp = true;
+    be.writeChunk = 3;  // the socket takes only 3 bytes per write: net.write must report the real count
+    be.sockReply["example.test:80"] = "0123456789ab";
+    be.sockReply["closing.test:80"] = "bye";
+    be.sockClosesAfterReply.insert("closing.test:80");
+    LuaVm vm;
+    CHECK(vm.open(128 * 1024));
+    registerApi(vm, be);
+    const char* script = R"LUA(
+      local h = net.connect("example.test", 80)
+      print(h)
+      print(net.available(h), net.connected(h))
+      print(net.read(h, 4))
+      print(net.read(h))
+      print("[" .. net.read(h) .. "]", net.connected(h))
+      print(net.write(h, "ping"))
+      print(net.write(h, ""))
+      local g = net.connect("closing.test", 80, {timeout_ms = 250})
+      print(g)
+      print(net.read(g))
+      print(net.read(g))
+      print(net.connected(g))
+      print(net.close(g))
+      print(net.read(g))
+      print(net.close(g))
+      local g2 = net.connect("example.test", 80)
+      print(g2)
+      print(net.close(h), net.close(g2))
+    )LUA";
+    CHECK(vm.load("t", script, strlen(script)));
+    CHECK(run(vm, be, 200000) == Status::Finished);
+    const char* want[] = {"1", "12\ttrue", "0123", "456789ab", "[]\ttrue", "3", "0", "2", "bye", "nil\tclosed", "false", "true",
+                          "nil\tnot an open socket handle", "nil\tnot an open socket handle", "2", "true\ttrue"};
+    const size_t N = sizeof(want) / sizeof(want[0]);
+    CHECK(be.logs.size() == N);
+    for (size_t i = 0; i < N && i < be.logs.size(); i++) {
+      CHECK(be.logs[i] == want[i]);
+      if (be.logs[i] != want[i]) printf("    net #%zu got '%s' want '%s'\n", i + 1, be.logs[i].c_str(), want[i]);
+    }
+    CHECK(be.socks[0].tx.empty() && !be.socks[0].used);  // closed by the script: the table is clean
+    CHECK(be.txLog == "example.test:80<-pin");            // exactly one non-empty write reached the backend (cut to 3 bytes)
+    CHECK(be.connectOpts.size() == 3 && be.connectOpts[1] == 250 && be.connectOpts[0] == 5000);  // timeout default and explicit
+  }
+  {
+    TEST("net.read: the heap floor is relaxed for the one allocation that drains the stack and ALWAYS restored (even on out-of-memory)");
+    MockBackend be;
+    be.net = true;
+    be.wifiUp = true;
+    be.sockReply["big.test:80"] = std::string(8192, 'z');
+    LuaVm vm;
+    CHECK(vm.open(40 * 1024));  // small Lua budget: the junk string below leaves no room for a 4 KB read
+    registerApi(vm, be);
+    const char* script = R"LUA(
+      local h = net.connect("big.test", 80)
+      print(#net.read(h, 100))                                -- a normal read
+      print(net.read(h, 100) ~= nil, #net.read(h, 100))       -- two more
+      local junk = {}                                         -- eat the budget, leaving ~3 KB: a 4 KB read cannot fit
+      while collectgarbage("count") * 1024 < 40 * 1024 - 3500 do junk[#junk + 1] = ("j"):rep(400) .. #junk end
+      local ok, e = pcall(net.read, h, 4096)                  -- cannot allocate: raises, floor must still be restored
+      print(ok, tostring(e):sub(1, 17))
+      junk = nil; collectgarbage()
+      print(#net.read(h, 100))                                -- and reading works again afterwards
+    )LUA";
+    CHECK(vm.load("t", script, strlen(script)));
+    CHECK(run(vm, be, 400000) == Status::Finished);
+    CHECK(be.logs.size() == 4);
+    if (be.logs.size() == 4) {
+      CHECK(be.logs[0] == "100" && be.logs[1] == "true\t100");
+      CHECK(be.logs[2] == "false\tnot enough memory");
+      CHECK(be.logs[3] == "100");
+    }
+    CHECK(be.relaxOn == 5 && be.relaxOff == 5);  // 3 + the failing one + 1 after: every relax(true) has its relax(false)
+  }
+  {
+    TEST("net.read: the peer vanishing between available() and the copy yields nil, closed (two values through the protected call)");
+    MockBackend be;
+    be.net = true;
+    be.wifiUp = true;
+    be.sockReply["example.test:80"] = "abc";
+    be.netReadFail = true;
+    LuaVm vm;
+    CHECK(vm.open(128 * 1024));
+    registerApi(vm, be);
+    const char* script = "local h = net.connect('example.test', 80)\nprint(net.read(h))\nprint(select('#', net.read(h)))";
+    CHECK(vm.load("t", script, strlen(script)));
+    CHECK(run(vm, be, 100000) == Status::Finished);
+    CHECK(be.logs.size() == 2 && be.logs[0] == "nil\tclosed" && be.logs[1] == "2");
+    CHECK(be.relaxOn == 2 && be.relaxOff == 2);
+  }
+  {
+    TEST("net: argument validation, table exhaustion, errors: nothing invalid reaches the backend");
+    MockBackend be;
+    be.net = true;
+    be.wifiUp = true;
+    be.sockRefused.insert("closed.test:81");
+    LuaVm vm;
+    CHECK(vm.open(128 * 1024));
+    registerApi(vm, be);
+    const char* script = R"LUA(
+      print(net.connect("", 80))
+      print(net.connect("bad host", 80))
+      print(net.connect(("a"):rep(254), 80))
+      print(net.connect("example.test", 0))
+      print(net.connect("example.test", 65536))
+      print(net.connect("example.test", 80.5))
+      print(net.connect("example.test", 80, {timeout_ms = 99}))
+      print(net.connect("example.test", 80, {timeout_ms = 15001}))
+      print(net.connect("example.test", 80, {timeout_ms = 1.5}))
+      print(net.connect("example.test", 80, {tls = true}))
+      print(net.connect("example.test", 80, {insecure = true}))
+      print((pcall(net.connect, "example.test", 80, 5)))
+      print((pcall(net.connect)))
+      print(net.connect("closed.test", 81))
+      local hs = {}
+      for i = 1, 4 do hs[i] = net.connect("example.test", 80) end
+      print(hs[1], hs[2], hs[3], hs[4])
+      print(net.connect("example.test", 80))
+      print(net.close(hs[2]))
+      print(net.connect("example.test", 80))
+      print(net.read(hs[1], 0))
+      print(net.read(hs[1], 4097))
+      print(net.read(hs[1], 1.5))
+      print(net.write(hs[1], ("x"):rep(16385)))
+      print(net.read(0))
+      print(net.read(5))
+      print(net.read(1.5))
+      print(net.write(7, "x"))
+      print(net.available(9))
+      print((pcall(net.read)))
+    )LUA";
+    CHECK(vm.load("t", script, strlen(script)));
+    CHECK(run(vm, be, 400000) == Status::Finished);
+    const char* want[] = {
+        "nil\tinvalid host name", "nil\tinvalid host name", "nil\tinvalid host name",
+        "nil\tport must be an integer 1..65535", "nil\tport must be an integer 1..65535", "nil\tport must be an integer 1..65535",
+        "nil\ttimeout_ms must be an integer 100..15000", "nil\ttimeout_ms must be an integer 100..15000",
+        "nil\ttimeout_ms must be an integer 100..15000",
+        "nil\ttls sockets are not implemented yet (plain TCP only)", "nil\ttls sockets are not implemented yet (plain TCP only)",
+        "false", "false", "nil\tconnection refused (mock)", "1\t2\t3\t4", "nil\ttoo many open sockets (max 4)", "true", "2",
+        "nil\tmax must be an integer 1..4096", "nil\tmax must be an integer 1..4096", "nil\tmax must be an integer 1..4096",
+        "nil\tdata too large (max 16384 per call; loop on the returned count)",
+        "nil\tnot an open socket handle", "nil\tnot an open socket handle", "nil\tnot an open socket handle",
+        "nil\tnot an open socket handle", "nil\tnot an open socket handle", "false"};
+    const size_t N = sizeof(want) / sizeof(want[0]);
+    CHECK(be.logs.size() == N);
+    for (size_t i = 0; i < N && i < be.logs.size(); i++) {
+      CHECK(be.logs[i] == want[i]);
+      if (be.logs[i] != want[i]) printf("    net #%zu got '%s' want '%s'\n", i + 1, be.logs[i].c_str(), want[i]);
+    }
+    CHECK(be.connectCalls == 6);  // refused one + 4 + the reuse: every invalid call stopped in the binding
+    CHECK(be.txLog.empty());
+  }
+  {
+    TEST("net: gates: permission, WiFi up, free RAM; resolve (literal passthrough, DNS) and local()");
+    {
+      MockBackend be;  // no "network" permission at all
+      be.net = false;
+      be.wifiUp = true;
+      LuaVm vm;
+      CHECK(vm.open(128 * 1024));
+      registerApi(vm, be);
+      const char* script = "print(net.info())\nprint(net.resolve('example.test'))\nprint(net.connect('example.test', 80))\nprint(net.read(1))\nprint(net.write(1, 'x'))\nprint(net.close(1))";
+      CHECK(vm.load("t", script, strlen(script)));
+      CHECK(run(vm, be, 100000) == Status::Finished);
+      CHECK(be.logs.size() == 6);
+      for (size_t i = 0; i < be.logs.size(); i++) CHECK(be.logs[i].rfind("nil\tnetwork not permitted", 0) == 0);
+      CHECK(be.connectCalls == 0 && be.dnsAsked.empty());
+    }
+    {
+      MockBackend be;  // permitted but WiFi is down
+      be.net = true;
+      be.wifiUp = false;
+      LuaVm vm;
+      CHECK(vm.open(128 * 1024));
+      registerApi(vm, be);
+      const char* script = "print(net.info())\nprint(net.resolve('example.test'))\nprint(net.connect('example.test', 80))\nprint(net.read(1))";
+      CHECK(vm.load("t", script, strlen(script)));
+      CHECK(run(vm, be, 100000) == Status::Finished);
+      CHECK(be.logs.size() == 4);
+      if (be.logs.size() == 4) {
+        const char* nc = "nil\tnot connected (no network joined): call wifi.connect() first";
+        CHECK(be.logs[0] == nc && be.logs[1] == nc && be.logs[2] == nc);
+        CHECK(be.logs[3] == "nil\tnot an open socket handle");  // handle ops need no WiFi check
+      }
+      CHECK(be.connectCalls == 0 && be.dnsAsked.empty());
+    }
+    {
+      MockBackend be;  // WiFi up but the heap is nearly gone
+      be.net = true;
+      be.wifiUp = true;
+      be.freeHeapVal = 10 * 1024;
+      LuaVm vm;
+      CHECK(vm.open(128 * 1024));
+      registerApi(vm, be);
+      const char* script = "print(net.connect('example.test', 80))";
+      CHECK(vm.load("t", script, strlen(script)));
+      CHECK(run(vm, be, 100000) == Status::Finished);
+      CHECK(be.logs.size() == 1 && be.logs[0] == "nil\tnot enough free RAM for a socket (free 10K, need 16K)");
+      CHECK(be.connectCalls == 0);
+    }
+    {
+      MockBackend be;
+      be.net = true;
+      be.wifiUp = true;
+      be.dnsMap["example.test"] = "93.184.216.34";
+      LuaVm vm;
+      CHECK(vm.open(128 * 1024));
+      registerApi(vm, be);
+      const char* script = R"LUA(
+        print(net.resolve("example.test"))
+        print(net.resolve("10.0.0.7"))
+        print(net.resolve("999.1.1.1"))
+        print(net.resolve("1.2.3"))
+        print(net.resolve("nope.test"))
+        print(net.resolve("bad host"))
+        print(net.resolve(""))
+        local l = net.info()
+        print(l.ip, l.mask, l.gateway, l.dns)
+      )LUA";
+      CHECK(vm.load("t", script, strlen(script)));
+      CHECK(run(vm, be, 100000) == Status::Finished);
+      const char* want[] = {"93.184.216.34", "10.0.0.7", "nil\tcannot resolve host (mock)", "nil\tcannot resolve host (mock)",
+                            "nil\tcannot resolve host (mock)", "nil\tinvalid host name", "nil\tinvalid host name",
+                            "192.168.1.50\t255.255.255.0\t192.168.1.1\t1.1.1.1"};
+      const size_t N = sizeof(want) / sizeof(want[0]);
+      CHECK(be.logs.size() == N);
+      for (size_t i = 0; i < N && i < be.logs.size(); i++) {
+        CHECK(be.logs[i] == want[i]);
+        if (be.logs[i] != want[i]) printf("    net #%zu got '%s' want '%s'\n", i + 1, be.logs[i].c_str(), want[i]);
+      }
+      const std::vector<std::string> asked = {"example.test", "999.1.1.1", "1.2.3", "nope.test"};
+      CHECK(be.dnsAsked == asked);  // the literal 10.0.0.7 never went to DNS
+    }
   }
   {
     TEST("require: a big module loads in a tight heap (the unstripped copy is dropped before the stripped one loads)");

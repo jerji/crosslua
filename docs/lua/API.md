@@ -1,4 +1,4 @@
-# CrossLua app API (v0.13)
+# CrossLua app API (v0.14)
 
 An app is a plugin folder containing `main.lua`, in any plugin root
 (`/plugins`, `/.plugins`, `/.crosspoint/plugins`):
@@ -31,6 +31,7 @@ needs transient RAM: check `system.heap()` before loading anything near the limi
 
 Memory: each app gets a hard heap cap computed at launch (free RAM − 40 KB, clamped 24–160 KB; ≈96 KB on a freshly booted X4; the collector starts a cycle at 130 % of live data),
 plus a device guard: no allocation may leave less than 40 KB of free RAM. Exceeding either raises a normal catchable `not enough memory` error.
+**After a successful `wifi.connect()` the device guard drops to 12 KB** (the radio then owns ~57 KB and only ~44 KB are free; a 40 KB floor would leave Lua about 1 KB). Measured on the X4: any floor above ~16 KB makes reads fail mid-stream because TCP buffering alone dips free heap to ~16.7 KB during a 64 KB burst. The drop lasts for the rest of the app (apps that used WiFi restart the device on exit).
 Speed on the X4: roughly 435k simple VM loop iterations per second. Script size limit: 64 KB.
 
 **Debug info is stripped** from every loaded script (line tables and local-variable names are ~1/3 of a compiled script's RAM;
@@ -222,6 +223,27 @@ CrossPoint runs on more boards than the X4. Hardware features are gated by the f
 | `input.poll()` / `input.wait()` touch events | on touch boards also `"press"` (finger down), `"long"` (held), `"tap"` (quick touch), `"release"` (finger up). **UNTESTED on hardware** (needs a touch board; compiles and links for `x4pro` and `metalio_eink4`) |
 | `input.pos()` → `x, y` \| `nil` | screen-pixel position of the touch event `poll`/`wait` returned last; `nil` after a button event or an empty poll. A `"release"` reports where the finger last was |
 | `input.text(title [, initial [, max_len [, mode]]])` → `string` \| `nil, "cancelled"` \| `nil, err` | the system on-screen keyboard (touch or buttons, whatever the board offers). `title` ≤ 60 chars, `initial` ≤ 256 bytes and ≤ `max_len`, `max_len` 1..256 (default 128), `mode` `"text"` (default) \| `"password"` (masked) \| `"url"` (URL helper keys). Parks the script while the keyboard is up (like `wifi.connect`), so redraw afterwards; an empty string means the user confirmed an empty field |
+
+## net — raw TCP client sockets (needs the `network` permission and WiFi up)
+
+Plain TCP over the Arduino `NetworkClient` that CrossPoint already links for its web server (no extra network code). Join WiFi first with `wifi.connect()`. Same permission and "WiFi up" rules as `http.*`. Not implemented yet: TLS sockets (`{tls=true}` is refused, never silently ignored), UDP, mDNS, listening/accepting.
+
+| call | |
+|---|---|
+| `net.info()` -> `{ip, mask, gateway, dns}` \| nil, err | The device's own addressing. (Not `net.local`: `local` is a Lua keyword.) |
+| `net.resolve(host)` -> `"a.b.c.d"` \| nil, err | DNS (system timeout, blocks). An IPv4 literal is returned as is with no DNS traffic. Host names: letters, digits, `.` `-` `_`, at most 253 characters. |
+| `net.connect(host, port [, {timeout_ms=5000}])` -> handle \| nil, err | Blocks up to `timeout_ms` (100..15000); Back does not interrupt it. Handles are small integers 1..4. Refused when 4 are open or under 16 KB free RAM. |
+| `net.read(h [, max=512])` -> string \| nil, "closed" | Never blocks. `""` means nothing has arrived yet. `max` 1..4096. After the peer closes you still get everything it sent, then `nil, "closed"`. |
+| `net.write(h, data)` -> n \| nil, err | `data` at most 16384 bytes per call; **n can be less than `#data`**: loop on the returned count. |
+| `net.available(h)` -> n | Bytes waiting (0 when none or closed). |
+| `net.connected(h)` -> boolean | False once the peer closed and everything it sent has been read. |
+| `net.close(h)` -> true \| nil, err | A handle that is not open (including one already closed) is an error value, not a crash. |
+
+Sockets still open when the app ends are closed (the radio is shut down then anyway).
+
+**RAM, measured on the X4 with WiFi up (44.7 KB free):** an open idle socket costs 3.4-3.8 KB (4 idle sockets: 14.3 KB, all returned on close); one after a ping/echo 6.8 KB; one whose receive window is full about 16 KB. Streaming 64 KB with prompt reads dips free heap to ~16.7 KB with a small script (to ~5.8 KB with a 13 KB-larger Lua heap, which still completed with a matching hash) and took 212-856 ms across runs (74-301 KB/s: WiFi and LAN variance). Closed sockets sit in lwIP TIME_WAIT: the first ~40 connect/close cycles cost ~4.6 KB, then the cost plateaus (the next 120 cycles: +212 bytes). **Two or more sockets being flooded at once while the app does not read can exhaust memory**: read promptly, and treat one busy socket as the norm. `net.read` may go down to a 6 KB floor for the single allocation that copies data out of the stack (that relieves the pressure; the floor is restored right after).
+
+`wifi.connect()` itself still needs 96 KB free to start (sized for TLS), so keep `main.lua` small and load bigger code after the radio is up (`load(fs.read("app:tests.lua"))`), as `socktest_lua` does.
 
 ## epub — book metadata without opening the book
 | call | notes |

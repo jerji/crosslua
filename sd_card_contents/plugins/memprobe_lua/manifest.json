@@ -1,0 +1,1 @@
+{"title": "Mem probe", "description": "how much Lua can allocate before/after WiFi and with sockets open", "permissions": ["network"]}

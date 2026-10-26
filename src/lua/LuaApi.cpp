@@ -650,6 +650,22 @@ int time_set(lua_State* L) {
 }
 
 // ---- system additions ------------------------------------------------------
+// system.dev_floor(kb) -> true | nil, err   (development builds only: the heap-guard floor in KB, 8..64)
+int sys_dev_floor(lua_State* L) {
+  const lua_Number kb = luaL_checknumber(L, 1);
+  if (kb < 8 || kb > 64 || kb != static_cast<int>(kb)) {
+    lua_pushnil(L);
+    lua_pushstring(L, "kb must be an integer 8..64");
+    return 2;
+  }
+  if (!be(L).devSetFloor(static_cast<size_t>(kb) * 1024)) {
+    lua_pushnil(L);
+    lua_pushstring(L, "not available (development builds only)");
+    return 2;
+  }
+  lua_pushboolean(L, 1);
+  return 1;
+}
 // system.mac() -> "AA:BB:CC:DD:EE:FF" (the device's own WiFi MAC; fine to show, it is not a secret)
 int sys_mac(lua_State* L) {
   char m[18];
@@ -705,7 +721,7 @@ void registerApi(LuaVm& vm, Backend& backend) {
                                  {"dir", app_dir},     {"open_book", app_open_book},
                                  {"restart", app_restart}, {"entry", app_entry}, {nullptr, nullptr}};
   static const luaL_Reg sys[] = {{"millis", sys_millis}, {"heap", sys_heap},       {"lua_mem", sys_lua_mem},
-                                 {"battery", sys_battery}, {"mac", sys_mac}, {"usb", sys_usb}, {nullptr, nullptr}};
+                                 {"battery", sys_battery}, {"mac", sys_mac}, {"usb", sys_usb}, {"dev_floor", sys_dev_floor}, {nullptr, nullptr}};
   regTable(L, c, "gfx", gfx);
   regTable(L, c, "input", input);
   regTable(L, c, "app", app);
@@ -727,6 +743,7 @@ void registerApi(LuaVm& vm, Backend& backend) {
   registerFs(L, c);
   registerJson(L, c);
   registerNet(L, c);
+  registerSock(L, c);
   registerZip(L, c);
   registerCrypto(L, c);
   registerRequire(L, c);

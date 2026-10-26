@@ -75,6 +75,10 @@ class LuaVm {
     alloc_.floor = floorBytes;
   }
 
+  // Change the guard floor while the app runs (after WiFi is up the framework needs a different reserve than before).
+  void setHeapFloor(size_t floorBytes) { alloc_.floor = floorBytes; }
+  size_t heapFloor() const { return alloc_.floor; }
+
   // Collect garbage now (apps may call collectgarbage too; host does it on idle).
   void gc();
 
