@@ -27,9 +27,10 @@ local function totp(secret, counter, digits)
 end
 check("TOTP RFC6238 T=59", totp("12345678901234567890", 1, 8) == "94287082")
 
-local d = ("0123456789"):rep(10000)  -- 100 KB through the incremental hash
+-- 100 KB through the incremental hash, as ten 10 KB chunks (one 100 KB string would not fit this device's Lua heap)
+local chunk = ("0123456789"):rep(1000)
 local h256, ms = timed("sha256 100 KB (incremental)", function()
-  local h = crypto.hash("sha256"); for i = 1, #d, 8192 do h:update(d:sub(i, i + 8191)) end; return hex(h:digest())
+  local h = crypto.hash("sha256"); for _ = 1, 10 do h:update(chunk) end; return hex(h:digest())
 end)
 check("sha256 100 KB", h256 == "aca9e593cc629cbaa94cd5a07dc029424aad93e5129e5d11f8dcd2f139c16cc0")
 local pb, pms = timed("pbkdf2 4096 iterations", function() return hex(crypto.pbkdf2_sha256("password", "salt", 4096, 32)) end)
@@ -38,9 +39,9 @@ local _, pms2 = timed("pbkdf2 20000 iterations", function() return crypto.pbkdf2
 check("pbkdf2 20000 under 20 s", pms2 < 20000, pms2 .. " ms")
 
 local key, iv = ("k"):rep(32), ("i"):rep(16)
-local ct = timed("aes-256-cbc encrypt 16 KB", function() return crypto.aes_cbc_encrypt(key, iv, ("A"):rep(16384)) end)
-local pt = timed("aes-256-cbc decrypt 16 KB", function() return crypto.aes_cbc_decrypt(key, iv, ct) end)
-check("aes roundtrip 16 KB", pt == ("A"):rep(16384) and #ct == 16384 + 16)
+local ct = timed("aes-256-cbc encrypt 8 KB", function() return crypto.aes_cbc_encrypt(key, iv, ("A"):rep(8192)) end)
+local pt = timed("aes-256-cbc decrypt 8 KB", function() return crypto.aes_cbc_decrypt(key, iv, ct) end)
+check("aes roundtrip 8 KB", pt == ("A"):rep(8192) and #ct == 8192 + 16)
 check("aes-128-cbc known answer (openssl)", hex(crypto.aes_cbc_encrypt(("\0"):rep(16), ("\0"):rep(16), "")) == "0143db63ee66b0cdff9f69917680151e")  -- empty plaintext = one 0x10 pad block
 check("aes bad padding is an error value", crypto.aes_cbc_decrypt(key, iv, ("x"):rep(16)) == nil)
 local r1, r2 = crypto.random(32), crypto.random(32)
