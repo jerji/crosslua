@@ -52,5 +52,6 @@ void registerJson(lua_State* L, Ctx* c);
 void registerRequire(lua_State* L, Ctx* c);
 void registerNet(lua_State* L, Ctx* c);
 void registerZip(lua_State* L, Ctx* c);
+void registerCrypto(lua_State* L, Ctx* c);
 
 }  // namespace crosslua

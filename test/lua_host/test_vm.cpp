@@ -73,10 +73,18 @@ struct MockBackend : Backend {
   }
   void present(int m) override { calls.push_back("present:" + std::to_string(m)); }
   const char* popEvent() override {
+    havePos = false;  // an empty poll or a button event has no position
     if (events.empty()) return nullptr;
     static std::string hold;
     hold = events.front();
     events.pop_front();
+    if (!evPos.empty()) {
+      const auto p = evPos.front();
+      evPos.pop_front();
+      havePos = p.first >= 0;
+      posX = p.first;
+      posY = p.second;
+    }
     return hold.c_str();
   }
   uint32_t millis() override { return now; }
@@ -292,6 +300,37 @@ struct MockBackend : Backend {
   }
   // ---- storage grants mock: (relative path, write?) pairs the "user approved" ---------------------------------------
   std::vector<std::pair<std::string, bool>> grants;
+  // device capabilities / usb / haptics / touch positions / text prompt
+  Backend::DeviceCaps caps;
+  bool usb = false, hapticPresent = false, textAsked = false;
+  std::vector<std::pair<int, int>> hapticCalls;
+  std::deque<std::pair<int, int>> evPos;  // aligned with `events` (only consulted when non-empty)
+  bool havePos = false;
+  int posX = 0, posY = 0;
+  std::string textTitle, textInitial;
+  int textMax = 0, textMode = -1;
+  void deviceCaps(Backend::DeviceCaps* out) override { *out = caps; }
+  bool usbConnected() override { return usb; }
+  bool hapticPulse(int ms, int strength) override {
+    if (!hapticPresent) return false;
+    hapticCalls.push_back({ms, strength});
+    return true;
+  }
+  bool eventPos(int* x, int* y) override {
+    if (!havePos) return false;
+    *x = posX;
+    *y = posY;
+    return true;
+  }
+  void textRequest(const char* title, const char* initial, int maxLen, int mode) override {
+    textAsked = true;
+    textTitle = title;
+    textInitial = initial;
+    textMax = maxLen;
+    textMode = mode;
+  }
+  uint64_t rng = 0x9e3779b97f4a7c15ull;  // xorshift: deterministic but different on every call
+  void randomBytes(uint8_t* out, size_t n) override { for (size_t i = 0; i < n; i++) { rng ^= rng << 13; rng ^= rng >> 7; rng ^= rng << 17; out[i] = (uint8_t)(rng >> 24); } }
   int grantCount() override { return (int)grants.size(); }
   const char* grantPath(int i, bool* write) override { *write = grants[i].second; return grants[i].first.c_str(); }
   // ---- restart mock: records the requested entry script ---------------------------------------------------------
@@ -2095,6 +2134,306 @@ int main() {
     CHECK(run(vm, be, 100000) == Status::Finished);
     CHECK(be.logs.size() == 3 && be.logs[0] == "30\t15" && be.logs[1] == "10\t10" && be.logs[2] == "nil\tunsupported image type (png, jpg, bmp)");
     CHECK(be.imageCalls.size() == 2 && be.imageCalls[0].path == "/Books/pic.bmp" && be.imageCalls[1].x == 5 + (50 - 10) / 2);
+  }
+  {
+    TEST("crypto: mbedtls hashes/HMAC/PBKDF2/AES-CBC vs hashlib+openssl vectors, RFC 4231/6238/7914/4648, limits, errors");
+    MockBackend be;
+    LuaVm vm;
+    CHECK(vm.open(512 * 1024));
+    registerApi(vm, be);
+    const char* script = R"LUA(
+      local function show(...) print(...) end
+      show(crypto.hex(crypto.sha256("abc")))
+      show(crypto.hex(crypto.sha256("")))
+      show(crypto.hex(crypto.sha1("abc")))
+      show(crypto.hex(crypto.hmac_sha256("key", "The quick brown fox jumps over the lazy dog")))
+      show(crypto.hex(crypto.hmac_sha1("key", "The quick brown fox jumps over the lazy dog")))
+      show(crypto.hex(crypto.hmac_sha256(("\11"):rep(20), "Hi There")))
+      show(crypto.hex(crypto.hmac_sha256(("k"):rep(131), "long key is hashed first")))
+      local function totp(secret, counter, digits)
+        local h = crypto.hmac_sha1(secret, string.pack(">I4I4", 0, counter))
+        local o = h:byte(20) & 15
+        local n = ((h:byte(o + 1) & 0x7f) << 24) | (h:byte(o + 2) << 16) | (h:byte(o + 3) << 8) | h:byte(o + 4)
+        return string.format("%0" .. digits .. "d", n % math.tointeger(10 ^ digits))
+      end
+      show(totp("12345678901234567890", 1, 8))
+      show(totp("12345678901234567890", 37037036, 8))
+      show((function() local h = crypto.hash("sha256"); h:update("a"):update("bc"); return crypto.hex(h:digest()) end)())
+      local hh = crypto.hash("sha1"); hh:update("x"); hh:digest()
+      show(hh:digest())
+      show(hh:update("y"))
+      show(crypto.hash("md5"))
+      show((function() local h = crypto.hash("sha256"); local d = ("0123456789"):rep(10000); for i = 1, #d, 7777 do h:update(d:sub(i, i + 7776)) end; return crypto.hex(h:digest()) end)())
+      show(crypto.hex(crypto.pbkdf2_sha256("passwd", "salt", 1, 64)))
+      show(crypto.hex(crypto.pbkdf2_sha256("password", "salt", 2, 32)))
+      show(crypto.hex(crypto.pbkdf2_sha256("password", "salt", 4096, 32)))
+      show(crypto.hex(crypto.pbkdf2_sha256("pw", "s", 20000, 32)))
+      show(crypto.hex(crypto.pbkdf2_sha256("pw", "s", 10000, 64)))
+      show(crypto.pbkdf2_sha256("pw", "s", 0, 32))
+      show(crypto.pbkdf2_sha256("pw", "s", 20001, 32))
+      show(crypto.pbkdf2_sha256("pw", "s", 1.5, 32))
+      show(crypto.pbkdf2_sha256("pw", "s", 10, 0))
+      show(crypto.pbkdf2_sha256("pw", "s", 10, 65))
+      show(crypto.pbkdf2_sha256("pw", "s", 10001, 64))
+      show(crypto.pbkdf2_sha256(("p"):rep(1025), "s", 1, 32))
+      show((function() local a, b = crypto.random(16), crypto.random(16); return #a, #b, a ~= b end)())
+      show(crypto.random(0))
+      show(crypto.random(257))
+      show(crypto.random(1.5))
+      show((function() local r = crypto.random(256); return #r end)())
+      show(crypto.hex("\0\1\255abc"))
+      show(crypto.hex(""))
+      show(crypto.unhex("0001FFab") == "\0\1\255\171")
+      show(crypto.unhex("abc"))
+      show(crypto.unhex("zz"))
+      show(crypto.b64encode(""))
+      show(crypto.b64encode("f"))
+      show(crypto.b64encode("fo"))
+      show(crypto.b64encode("foo"))
+      show(crypto.b64encode("foob"))
+      show(crypto.b64encode("fooba"))
+      show(crypto.b64encode("foobar"))
+      show(crypto.b64decode("Zm9vYmFy") .. "|" .. crypto.b64decode("Zm9vYg==") .. "|" .. crypto.b64decode("Zm9vYmE=") .. "|" .. crypto.b64decode("Zg==") .. "|" .. crypto.b64decode(""))
+      show((function() local all = {} for i = 0, 255 do all[#all + 1] = string.char(i) end local s = table.concat(all); return crypto.b64decode(crypto.b64encode(s)) == s end)())
+      show(crypto.b64decode("Zg="))
+      show(crypto.b64decode("Zg==Zg=="))
+      show(crypto.b64decode("Z!=="))
+      show(crypto.b64decode("A==="))
+      show(crypto.b64decode("Zm9v\n"))
+      show(crypto.b64decode("Zm9\n"))
+      show(crypto.equal("abc", "abc"), crypto.equal("abc", "abd"), crypto.equal("abc", "ab"), crypto.equal("", ""), crypto.equal("abc", ""), crypto.equal("", "abc"))
+      show(crypto.equal("ab", "abab"), crypto.equal("abab", "ab"))
+      show(crypto.sha256(("x"):rep(65537)))
+      show((function() local ok = pcall(crypto.sha256, {}) return ok end)())
+      show((function() local h = crypto.hash("sha256"); local ok = pcall(h.update, {}, "x"); return ok end)())
+      show(crypto.hex(crypto.aes_cbc_encrypt("\000\001\002\003\004\005\006\007\008\009\010\011\012\013\014\015\016\017\018\019\020\021\022\023\024\025\026\027\028\029\030\031", "\016\017\018\019\020\021\022\023\024\025\026\027\028\029\030\031", "\084\104\101\032\113\117\105\099\107\032\098\114\111\119\110\032\102\111\120\032\106\117\109\112\115\032\111\118\101\114\032\116\104\101\032\108\097\122\121\032\100\111\103")) == "b746e4f1bce2352d20440b8a2e0eb8fd68c1fcd0d00fcac779ecaadacde7e51a41da205eac66749510362db1c9f3e6d5")
+      show(crypto.aes_cbc_decrypt("\000\001\002\003\004\005\006\007\008\009\010\011\012\013\014\015\016\017\018\019\020\021\022\023\024\025\026\027\028\029\030\031", "\016\017\018\019\020\021\022\023\024\025\026\027\028\029\030\031", crypto.unhex("b746e4f1bce2352d20440b8a2e0eb8fd68c1fcd0d00fcac779ecaadacde7e51a41da205eac66749510362db1c9f3e6d5")) == "\084\104\101\032\113\117\105\099\107\032\098\114\111\119\110\032\102\111\120\032\106\117\109\112\115\032\111\118\101\114\032\116\104\101\032\108\097\122\121\032\100\111\103")
+      show(crypto.hex(crypto.aes_cbc_encrypt("\100\101\102\103\104\105\106\107\108\109\110\111\112\113\114\115", "\016\017\018\019\020\021\022\023\024\025\026\027\028\029\030\031", "")) == "b47a9582cb53c4f78750542bb26f748d")
+      show(crypto.aes_cbc_decrypt("\100\101\102\103\104\105\106\107\108\109\110\111\112\113\114\115", "\016\017\018\019\020\021\022\023\024\025\026\027\028\029\030\031", crypto.unhex("b47a9582cb53c4f78750542bb26f748d")) == "")
+      show(crypto.hex(crypto.aes_cbc_encrypt("\050\051\052\053\054\055\056\057\058\059\060\061\062\063\064\065\066\067\068\069\070\071\072\073", "\016\017\018\019\020\021\022\023\024\025\026\027\028\029\030\031", "\120\120\120\120\120\120\120\120\120\120\120\120\120\120\120\120")) == "7414e9dde9efc656b99aa2c799004f84ab90f6844fec4c12ff3e88f9b713167d")
+      show(crypto.aes_cbc_decrypt("\050\051\052\053\054\055\056\057\058\059\060\061\062\063\064\065\066\067\068\069\070\071\072\073", "\016\017\018\019\020\021\022\023\024\025\026\027\028\029\030\031", crypto.unhex("7414e9dde9efc656b99aa2c799004f84ab90f6844fec4c12ff3e88f9b713167d")) == "\120\120\120\120\120\120\120\120\120\120\120\120\120\120\120\120")
+      show(crypto.hex(crypto.aes_cbc_encrypt("\000\001\002\003\004\005\006\007\008\009\010\011\012\013\014\015\016\017\018\019\020\021\022\023\024\025\026\027\028\029\030\031", "\016\017\018\019\020\021\022\023\024\025\026\027\028\029\030\031", "\121\121\121\121\121\121\121\121\121\121\121\121\121\121\121\121\121")) == "b24c426288a55384b4163857ba5752e4607c835760de94cd2c2882cae71e97c7")
+      show(crypto.aes_cbc_decrypt("\000\001\002\003\004\005\006\007\008\009\010\011\012\013\014\015\016\017\018\019\020\021\022\023\024\025\026\027\028\029\030\031", "\016\017\018\019\020\021\022\023\024\025\026\027\028\029\030\031", crypto.unhex("b24c426288a55384b4163857ba5752e4607c835760de94cd2c2882cae71e97c7")) == "\121\121\121\121\121\121\121\121\121\121\121\121\121\121\121\121\121")
+      show(crypto.hex(crypto.aes_cbc_encrypt("\100\101\102\103\104\105\106\107\108\109\110\111\112\113\114\115", "\016\017\018\019\020\021\022\023\024\025\026\027\028\029\030\031", "\000\001\002\003\004\005\006\007\008\009\010\011\012\013\014\015\016\017\018\019\020\021\022\023\024\025\026\027\028\029\030\031\032\033\034\035\036\037\038\039\040\041\042\043\044\045\046\047\048\049\050\051\052\053\054\055\056\057\058\059\060\061\062\063\064\065\066\067\068\069\070\071\072\073\074\075\076\077\078\079\080\081\082\083\084\085\086\087\088\089\090\091\092\093\094\095\096\097\098\099\100\101\102\103\104\105\106\107\108\109\110\111\112\113\114\115\116\117\118\119\120\121\122\123\124\125\126\127\128\129\130\131\132\133\134\135\136\137\138\139\140\141\142\143\144\145\146\147\148\149\150\151\152\153\154\155\156\157\158\159\160\161\162\163\164\165\166\167\168\169\170\171\172\173\174\175\176\177\178\179\180\181\182\183\184\185\186\187\188\189\190\191\192\193\194\195\196\197\198\199\200\201\202\203\204\205\206\207\208\209\210\211\212\213\214\215\216\217\218\219\220\221\222\223\224\225\226\227\228\229\230\231\232\233\234\235\236\237\238\239\240\241\242\243\244\245\246\247\248\249\250\251\252\253\254\255")) == "edf8c35c8098bd6b40e26794154d52dedefe47391afa64ecfb4eb1f998741d81e2acfab7df2f6e41a282506659017c23f77c34ae90465556e61c9be2b3b7616e25101bc421cea7d2e64700b2c4e2dfebf399f2ea7551011efeec6e8602aed4e8689f6956accb5a04fe96f278f0fa6b9b49813b02899644f145b7d5e2c5f62528e5b21786395072297decc3e87cf3a0c337b9df064c3cbd655b6b8a8689bca4ea402abf9cc3bec5b1893d7d7f6b219b97afbe52d8f875a6d89859458041f9f731198031799d381733597bcae4079343e3d3942c5e4d7db00e167d0c26c3e5e7e9ff4aa76961194b7064fb4e7318d7cf42acc1ce312cb451c04f693ed2db66252a28a6615d85d8bade32997685ebf8ecc9")
+      show(crypto.aes_cbc_decrypt("\100\101\102\103\104\105\106\107\108\109\110\111\112\113\114\115", "\016\017\018\019\020\021\022\023\024\025\026\027\028\029\030\031", crypto.unhex("edf8c35c8098bd6b40e26794154d52dedefe47391afa64ecfb4eb1f998741d81e2acfab7df2f6e41a282506659017c23f77c34ae90465556e61c9be2b3b7616e25101bc421cea7d2e64700b2c4e2dfebf399f2ea7551011efeec6e8602aed4e8689f6956accb5a04fe96f278f0fa6b9b49813b02899644f145b7d5e2c5f62528e5b21786395072297decc3e87cf3a0c337b9df064c3cbd655b6b8a8689bca4ea402abf9cc3bec5b1893d7d7f6b219b97afbe52d8f875a6d89859458041f9f731198031799d381733597bcae4079343e3d3942c5e4d7db00e167d0c26c3e5e7e9ff4aa76961194b7064fb4e7318d7cf42acc1ce312cb451c04f693ed2db66252a28a6615d85d8bade32997685ebf8ecc9")) == "\000\001\002\003\004\005\006\007\008\009\010\011\012\013\014\015\016\017\018\019\020\021\022\023\024\025\026\027\028\029\030\031\032\033\034\035\036\037\038\039\040\041\042\043\044\045\046\047\048\049\050\051\052\053\054\055\056\057\058\059\060\061\062\063\064\065\066\067\068\069\070\071\072\073\074\075\076\077\078\079\080\081\082\083\084\085\086\087\088\089\090\091\092\093\094\095\096\097\098\099\100\101\102\103\104\105\106\107\108\109\110\111\112\113\114\115\116\117\118\119\120\121\122\123\124\125\126\127\128\129\130\131\132\133\134\135\136\137\138\139\140\141\142\143\144\145\146\147\148\149\150\151\152\153\154\155\156\157\158\159\160\161\162\163\164\165\166\167\168\169\170\171\172\173\174\175\176\177\178\179\180\181\182\183\184\185\186\187\188\189\190\191\192\193\194\195\196\197\198\199\200\201\202\203\204\205\206\207\208\209\210\211\212\213\214\215\216\217\218\219\220\221\222\223\224\225\226\227\228\229\230\231\232\233\234\235\236\237\238\239\240\241\242\243\244\245\246\247\248\249\250\251\252\253\254\255")
+      show(crypto.aes_cbc_encrypt("short", "\016\017\018\019\020\021\022\023\024\025\026\027\028\029\030\031", "x"))
+      show(crypto.aes_cbc_encrypt("\000\001\002\003\004\005\006\007\008\009\010\011\012\013\014\015\016\017\018\019\020\021\022\023\024\025\026\027\028\029\030\031", "short", "x"))
+      show(crypto.aes_cbc_decrypt("\000\001\002\003\004\005\006\007\008\009\010\011\012\013\014\015\016\017\018\019\020\021\022\023\024\025\026\027\028\029\030\031", "\016\017\018\019\020\021\022\023\024\025\026\027\028\029\030\031", ""))
+      show(crypto.aes_cbc_decrypt("\000\001\002\003\004\005\006\007\008\009\010\011\012\013\014\015\016\017\018\019\020\021\022\023\024\025\026\027\028\029\030\031", "\016\017\018\019\020\021\022\023\024\025\026\027\028\029\030\031", ("x"):rep(17)))
+      show(crypto.aes_cbc_decrypt("\000\001\002\003\004\005\006\007\008\009\010\011\012\013\014\015\016\017\018\019\020\021\022\023\024\025\026\027\028\029\030\031", "\016\017\018\019\020\021\022\023\024\025\026\027\028\029\030\031", crypto.unhex("b746e4f1bce2352d20440b8a2e0eb8fd68c1fcd0d00fcac779ecaadacde7e51a41da205eac66749510362db1c9f3e6d4")))
+      show(crypto.aes_cbc_encrypt("\000\001\002\003\004\005\006\007\008\009\010\011\012\013\014\015\016\017\018\019\020\021\022\023\024\025\026\027\028\029\030\031", "\016\017\018\019\020\021\022\023\024\025\026\027\028\029\030\031", ("x"):rep(32769)))
+    )LUA";
+    CHECK(vm.load("t", script, strlen(script)));
+    CHECK(run(vm, be, 20000000) == Status::Finished);
+    const char* want[] = {
+        "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad",
+        "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "a9993e364706816aba3e25717850c26c9cd0d89d",
+        "f7bc83f430538424b13298e6aa6fb143ef4d59a14946175997479dbc2d1a3cd8",
+        "de7c9b85b8b78aa6bc8a7a36f70a90701c9db4d9",
+        "b0344c61d8db38535ca8afceaf0bf12b881dc200c9833da726e9376c2e32cff7",
+        "58c39cb23be2c42a45858a15d8a27efdab8e27605b04b156381425ba728e223e",
+        "94287082",
+        "07081804",
+        "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad",
+        "nil\thash already finished (digest() was called)",
+        "nil\thash already finished (digest() was called)",
+        "nil\tunknown algorithm (sha1, sha256)",
+        "aca9e593cc629cbaa94cd5a07dc029424aad93e5129e5d11f8dcd2f139c16cc0",
+        "55ac046e56e3089fec1691c22544b605f94185216dde0465e68b9d57c20dacbc49ca9cccf179b645991664b39d77ef317c71b845b1e30bd509112041d3a19783",
+        "ae4d0c95af6b46d32d0adff928f06dd02a303f8ef3c251dfd6e2d85a95474c43",
+        "c5e478d59288c841aa530db6845c4c8d962893a001ce4e11a4963873aa98134a",
+        "eeebc7819be4c9aaf68e56623a98047198c8dae5220986b4ed483510e57f8718",
+        "f33af7b585171cd70c33fd304a46fe216a8a4c0e6101cbea5cdb9bd8f361da6f0c4b6897ec2cd60be49b19eefa285ebcc471f58d3561fd378568093c78e7079f",
+        "nil\titerations must be an integer 1..20000",
+        "nil\titerations must be an integer 1..20000",
+        "nil\titerations must be an integer 1..20000",
+        "nil\tlen must be an integer 1..64",
+        "nil\tlen must be an integer 1..64",
+        "nil\ttoo much work: iterations x ceil(len/32) must be <= 20000",
+        "nil\tpassword and salt must be at most 1 KB",
+        "16\t16\ttrue",
+        "nil\tn must be an integer 1..256",
+        "nil\tn must be an integer 1..256",
+        "nil\tn must be an integer 1..256",
+        "256",
+        "0001ff616263",
+        "",
+        "true",
+        "nil\todd number of hex digits",
+        "nil\tnot a hex string",
+        "",
+        "Zg==",
+        "Zm8=",
+        "Zm9v",
+        "Zm9vYg==",
+        "Zm9vYmE=",
+        "Zm9vYmFy",
+        "foobar|foob|fooba|f|",
+        "true",
+        "nil\tnot valid base64 (length must be a multiple of 4)",
+        "nil\tnot valid base64",
+        "nil\tnot valid base64",
+        "nil\tnot valid base64",
+        "nil\tnot valid base64 (length must be a multiple of 4)",
+        "nil\tnot valid base64",
+        "true\tfalse\tfalse\ttrue\tfalse\tfalse",
+        "false\tfalse",
+        "nil\tdata must be at most 64 KB (use crypto.hash for more)",
+        "false",
+        "false",
+        "true",
+        "true",
+        "true",
+        "true",
+        "true",
+        "true",
+        "true",
+        "true",
+        "true",
+        "true",
+        "nil\tkey must be 16, 24 or 32 bytes",
+        "nil\tiv must be 16 bytes",
+        "nil\tciphertext length must be a non-zero multiple of 16",
+        "nil\tciphertext length must be a non-zero multiple of 16",
+        "nil\tbad padding (wrong key, wrong iv or corrupted data)",
+        "nil\tdata must be at most 32 KB",
+    };
+    const size_t N = sizeof(want) / sizeof(want[0]);
+    CHECK(be.logs.size() == N);
+    for (size_t i = 0; i < N && i < be.logs.size(); i++) {
+      CHECK(be.logs[i] == want[i]);
+      if (be.logs[i] != want[i]) printf("    crypto #%zu got '%s' want '%s'\n", i + 1, be.logs[i].c_str(), want[i]);
+    }
+  }
+  {
+    TEST("device.caps / system.usb / device.haptic / input.pos: plumbing, limits, honest 'not on this device'");
+    for (int usb = 0; usb < 2; usb++) {
+      MockBackend be;
+      be.usb = usb == 1;
+      be.caps.touch = true;
+      be.caps.audio = true;
+      be.caps.usbMsc = true;
+      be.caps.frontlight = true;
+      LuaVm vm;
+      CHECK(vm.open(128 * 1024));
+      registerApi(vm, be);
+      const char* script = R"LUA(
+        local c = device.caps()
+        print(c.touch, c.haptic, c.frontlight, c.warmlight, c.color, c.audio, c.ble_keyboard, c.usb_msc, c.width, c.height)
+        print(system.usb())
+        print(input.pos())
+        print(device.haptic(50))
+        print(device.haptic(5))
+        print(device.haptic(1001))
+        print(device.haptic(50, 300))
+        print(device.haptic(50.5))
+      )LUA";
+      CHECK(vm.load("t", script, strlen(script)));
+      CHECK(run(vm, be, 100000) == Status::Finished);
+      CHECK(be.logs.size() == 8);
+      if (be.logs.size() == 8) {
+        CHECK(be.logs[0] == "true\tfalse\ttrue\tfalse\tfalse\ttrue\tfalse\ttrue\t800\t480");
+                CHECK(be.logs[1] == (usb ? "true" : "false"));
+        CHECK(be.logs[2] == "nil");  // no touch event yet
+        CHECK(be.logs[3] == "false\tno vibration motor on this device (or vibration is off in settings)");
+        CHECK(be.logs[4] == "nil\tms must be an integer 10..1000" && be.logs[5] == "nil\tms must be an integer 10..1000");
+        CHECK(be.logs[6] == "nil\tstrength must be an integer 0..255" && be.logs[7] == "nil\tms must be an integer 10..1000");
+      }
+      CHECK(be.hapticCalls.empty());  // nothing reached the motor: absent hardware and every bad argument stopped earlier
+    }
+    MockBackend be;  // a board WITH a motor
+    be.hapticPresent = true;
+    LuaVm vm;
+    CHECK(vm.open(128 * 1024));
+    registerApi(vm, be);
+    const char* script = "print(device.haptic(50))\nprint(device.haptic(30, 128))\nprint(device.haptic(10, 0))\nprint(device.haptic(1000))\nprint(device.haptic(5))";
+    CHECK(vm.load("t", script, strlen(script)));
+    CHECK(run(vm, be, 100000) == Status::Finished);
+    CHECK(be.logs.size() == 5 && be.logs[0] == "true" && be.logs[3] == "true" && be.logs[4] == "nil\tms must be an integer 10..1000");
+    CHECK(be.hapticCalls.size() == 4);
+    if (be.hapticCalls.size() == 4) {
+      CHECK(be.hapticCalls[0] == std::make_pair(50, 255) && be.hapticCalls[1] == std::make_pair(30, 128));
+      CHECK(be.hapticCalls[2] == std::make_pair(10, 0) && be.hapticCalls[3] == std::make_pair(1000, 255));
+    }
+  }
+  {
+    TEST("input: touch events carry a position (input.pos), button events do not");
+    MockBackend be;
+    be.events = {"tap", "press", "back", "long", "release"};
+    be.evPos = {{100, 200}, {7, 8}, {-1, -1}, {40, 50}, {41, 51}};
+    LuaVm vm;
+    CHECK(vm.open(128 * 1024));
+    registerApi(vm, be);
+    const char* script = R"LUA(
+      for i = 1, 5 do local e = input.poll(); print(e, input.pos()) end
+      print(input.poll(), input.pos())
+    )LUA";
+    CHECK(vm.load("t", script, strlen(script)));
+    CHECK(run(vm, be, 100000) == Status::Finished);
+    CHECK(be.logs.size() == 6);
+    if (be.logs.size() == 6) {
+      CHECK(be.logs[0] == "tap\t100\t200" && be.logs[1] == "press\t7\t8" && be.logs[2] == "back\tnil");
+      CHECK(be.logs[3] == "long\t40\t50" && be.logs[4] == "release\t41\t51");
+      CHECK(be.logs[5] == "nil\tnil");  // an empty poll clears the position too
+    }
+  }
+  {
+    TEST("input.text: parks the script (no wake on input), returns text / nil,cancelled, validates arguments");
+    for (int outcome = 0; outcome < 4; outcome++) {
+      MockBackend be;
+      LuaVm vm;
+      CHECK(vm.open(128 * 1024));
+      registerApi(vm, be);
+      const char* script = R"LUA(
+        local s, err = input.text("Name?", "bob", 20, "password")
+        print(s, err)
+      )LUA";
+      CHECK(vm.load("t", script, strlen(script)));
+      be.events = {"confirm", "back"};
+      CHECK(run(vm, be) == Status::Waiting);
+      CHECK(be.textAsked && be.textTitle == "Name?" && be.textInitial == "bob" && be.textMax == 20 && be.textMode == 1);
+      CHECK(be.events.size() == 2 && be.logs.empty());  // button presses did NOT wake it
+      CHECK(vm.timeoutMs() == -1 && !vm.wakesOnEvent());
+      const char* reply[] = {"text:ok:hello wörld", "text:cancel", "text:ok:", "garbage"};
+      CHECK(vm.resume(reply[outcome]) != Status::Error);
+      CHECK(run(vm, be, 1000, false) == Status::Finished);
+      const char* want[] = {"hello wörld\tnil", "nil\tcancelled", "\tnil", "nil\tcancelled"};
+      CHECK(be.logs.size() == 1 && be.logs[0] == want[outcome]);
+    }
+    {
+      MockBackend be;
+      LuaVm vm;
+      CHECK(vm.open(128 * 1024));
+      registerApi(vm, be);
+      const char* script = R"LUA(
+        print(input.text("T"))
+        print(input.text(("t"):rep(61)))
+        print(input.text("T", ("i"):rep(257)))
+        print(input.text("T", "", 0))
+        print(input.text("T", "", 257))
+        print(input.text("T", "", 10, "pin"))
+        print(input.text("T", ("i"):rep(30), 10))
+        print(pcall(input.text))
+      )LUA";
+      CHECK(vm.load("t", script, strlen(script)));
+      CHECK(run(vm, be, 100000, false) == Status::Waiting);   // the first call is valid and parks
+      CHECK(be.textAsked && be.textMax == 128 && be.textMode == 0 && be.textInitial.empty());  // defaults
+      be.textAsked = false;
+      CHECK(vm.resume("text:cancel") != Status::Error);
+      CHECK(run(vm, be, 100000, false) == Status::Finished);
+      CHECK(be.logs.size() == 8);
+      if (be.logs.size() == 8) {
+        CHECK(be.logs[0] == "nil\tcancelled");
+        CHECK(be.logs[1] == "nil\ttitle too long (max 60 characters)");
+        CHECK(be.logs[2] == "nil\tinitial text too long (max 256 bytes)");
+        CHECK(be.logs[3] == "nil\tmax_len must be an integer 1..256" && be.logs[4] == "nil\tmax_len must be an integer 1..256");
+        CHECK(be.logs[5] == "nil\tmode must be text, password or url");
+        CHECK(be.logs[6] == "nil\tinitial text is longer than max_len");
+        CHECK(be.logs[7].rfind("false\t", 0) == 0);  // missing title raises
+      }
+      CHECK(!be.textAsked);  // none of the invalid calls reached the host
+    }
   }
   {
     TEST("require: a big module loads in a tight heap (the unstripped copy is dropped before the stripped one loads)");

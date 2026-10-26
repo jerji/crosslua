@@ -1,4 +1,4 @@
-# CrossLua app API (v0.8)
+# CrossLua app API (v0.10)
 
 An app is a plugin folder containing `main.lua`, in any plugin root
 (`/plugins`, `/.plugins`, `/.crosspoint/plugins`):
@@ -181,6 +181,42 @@ larger than `max_body`, not enough RAM for TLS, user pressed **Back** (`"cancell
   keep your Lua heap small in network apps (`collectgarbage()` first).
 * After WiFi was used, leaving the app does a **silent reboot** to Home (the same defragmentation every WiFi screen does).
 * Redirects, `Content-Length` checks and `.part` staging for downloads are done by CrossPoint's `HttpDownloader`.
+
+## crypto — hashes, HMAC, key derivation, AES, random (mbedtls; hardware SHA/AES on the device)
+All byte strings are Lua strings (binary safe). Errors are `nil, err`; a wrong argument TYPE raises.
+| call | notes |
+|---|---|
+| `crypto.sha256(data)` / `crypto.sha1(data)` → 32 / 20 raw bytes | data ≤ 64 KB; for more use `crypto.hash` |
+| `crypto.hmac_sha256(key, data)` / `crypto.hmac_sha1(key, data)` → raw bytes | key and data ≤ 64 KB; keys longer than the block size are hashed first |
+| `crypto.hash("sha256"\|"sha1")` → `h`; `h:update(chunk)` → `h`; `h:digest()` → raw bytes | incremental: hash a file with `fs.read(path, off, 8192)` in a loop. `digest()` ends the hash (a second call or an `update` after it is `nil, err`) |
+| `crypto.pbkdf2_sha256(password, salt, iterations, len)` → raw bytes | iterations 1..20000, len 1..64, and iterations x ceil(len/32) ≤ 20000; blocks the app while it runs (timings in docs/lua/MEMORY.md) |
+| `crypto.aes_cbc_encrypt(key, iv, data)` / `crypto.aes_cbc_decrypt(key, iv, ciphertext)` | AES-128/192/256 (key 16/24/32 bytes), iv 16 bytes, PKCS#7 padding, data ≤ 32 KB. CBC does **not** authenticate: store `hmac_sha256(mac_key, iv .. ciphertext)` with it, check it with `crypto.equal` **before** decrypting, never reuse an iv with one key. A wrong key usually shows up as `nil, bad padding ...`, but not always: only the MAC is a reliable check |
+| `crypto.random(n)` → n raw bytes | n 1..256, the hardware RNG (`esp_fill_random`); WiFi/BT on gives true entropy |
+| `crypto.equal(a, b)` → boolean | constant time for the length of `a`: use it for MACs and PIN hashes, never `==` |
+| `crypto.hex(s)` / `crypto.unhex(hex)` | lowercase hex; `unhex` accepts either case, rejects odd length / non-hex |
+| `crypto.b64encode(s)` / `crypto.b64decode(b64)` | RFC 4648 standard alphabet with padding; decode is strict (no whitespace, `=` only at the end) |
+
+TOTP (RFC 6238) in six lines — what biscuit's authenticator does in C++:
+```lua
+local function totp(secret, t, digits)             -- secret: raw bytes (base32-decode it first), t: epoch seconds
+  local h = crypto.hmac_sha1(secret, string.pack(">I4I4", 0, t // 30))
+  local o = h:byte(20) & 15
+  local n = ((h:byte(o+1) & 0x7f) << 24) | (h:byte(o+2) << 16) | (h:byte(o+3) << 8) | h:byte(o+4)
+  return string.format("%0"..digits.."d", n % math.tointeger(10 ^ digits))
+end
+```
+PIN lock sketch: `salt = crypto.random(16)`; store `salt .. crypto.pbkdf2_sha256(pin, salt, 5000, 32)`; check with `crypto.equal`.
+
+## device / input / system additions for multi-board support
+CrossPoint runs on more boards than the X4. Hardware features are gated by the firmware's own `FREEINK_CAP_*` flags and report honestly when the hardware is missing. **Features marked UNTESTED were built and host-tested but never run on the physical hardware (we only own an X4): if you have the board, `devtest_lua` exercises them: please report.**
+| call | notes |
+|---|---|
+| `device.caps()` → `{touch, haptic, frontlight, warmlight, color, audio, ble_keyboard, usb_msc, width, height}` | booleans except width/height. Adapt to the board instead of guessing the model. `touch` is decided at runtime (e.g. X4 vs X4 Pro) |
+| `device.haptic(ms [, strength])` → `true` \| `false, why` \| `nil, err` | one non-blocking pulse, ms 10..1000, strength 0..255 (default 255). `false` when the board has no motor or the user turned vibration off in Settings. **UNTESTED on hardware** (Metalio E-Ink 4 has the motor; compiles and links in that env) |
+| `system.usb()` → boolean | USB cable connected (a GPIO read on the X4) |
+| `input.poll()` / `input.wait()` touch events | on touch boards also `"press"` (finger down), `"long"` (held), `"tap"` (quick touch), `"release"` (finger up). **UNTESTED on hardware** (needs a touch board; compiles and links for `x4pro` and `metalio_eink4`) |
+| `input.pos()` → `x, y` \| `nil` | screen-pixel position of the touch event `poll`/`wait` returned last; `nil` after a button event or an empty poll. A `"release"` reports where the finger last was |
+| `input.text(title [, initial [, max_len [, mode]]])` → `string` \| `nil, "cancelled"` \| `nil, err` | the system on-screen keyboard (touch or buttons, whatever the board offers). `title` ≤ 60 chars, `initial` ≤ 256 bytes and ≤ `max_len`, `max_len` 1..256 (default 128), `mode` `"text"` (default) \| `"password"` (masked) \| `"url"` (URL helper keys). Parks the script while the keyboard is up (like `wifi.connect`), so redraw afterwards; an empty string means the user confirmed an empty field |
 
 ## json
 `json.encode(value)` → string \| nil, err · `json.decode(string)` → value \| nil, "msg at byte N" · `json.null` (sentinel for JSON null).

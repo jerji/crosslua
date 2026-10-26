@@ -1,0 +1,48 @@
+-- Interactive check of the hardware-dependent APIs. Safe on every board: absent hardware reports itself, it never crashes.
+local W, H = gfx.size()
+local caps = device.caps()
+local log = {}
+local function note(s) log[#log + 1] = s; if #log > 9 then table.remove(log, 1) end; print(s) end
+
+local names = { "touch", "haptic", "frontlight", "warmlight", "color", "audio", "ble_keyboard", "usb_msc" }
+local capline = {}
+for _, k in ipairs(names) do capline[#capline + 1] = k .. "=" .. (caps[k] and "yes" or "no") end
+print("caps: " .. table.concat(capline, " ") .. " " .. caps.width .. "x" .. caps.height)
+
+local function draw()
+  gfx.clear()
+  gfx.text(16, 8, "Device test", "ui12", "b"); gfx.line(0, 40, W - 1, 40)
+  local y = 48
+  for i = 1, #capline, 2 do
+    gfx.text(12, y, capline[i] .. (capline[i + 1] and ("   " .. capline[i + 1]) or ""), "small"); y = y + 22
+  end
+  gfx.text(12, y, "usb cable: " .. tostring(system.usb()) .. "  size " .. caps.width .. "x" .. caps.height, "small"); y = y + 30
+  gfx.text(12, y, "Up: haptic   Down: type text   Confirm: usb   Back: quit", "small"); y = y + 24
+  if caps.touch then gfx.text(12, y, "touch the screen: events below", "small"); y = y + 24 end
+  gfx.line(0, y, W - 1, y); y = y + 6
+  for _, l in ipairs(log) do gfx.text(12, y, l, "small"); y = y + 22 end
+  gfx.present("fast")
+end
+
+draw()
+while true do
+  local e = input.wait()
+  if e == "back" then break
+  elseif e == "up" then
+    local ok, why = device.haptic(80)
+    note("haptic(80) -> " .. tostring(ok) .. (why and (" (" .. why .. ")") or ""))
+  elseif e == "confirm" then
+    note("usb cable: " .. tostring(system.usb()))
+  elseif e == "down" then
+    local s, err = input.text("Type something", "hello", 40)
+    note("text -> " .. (s and ('"' .. s .. '"') or ("nil, " .. tostring(err))))
+    local p, perr = input.text("A password (masked)", "", 20, "password")
+    note("password -> " .. (p and (#p .. " chars") or ("nil, " .. tostring(perr))))
+  elseif e == "tap" or e == "press" or e == "long" or e == "release" then
+    local x, y = input.pos()
+    note(e .. " at " .. tostring(x) .. "," .. tostring(y))
+  else
+    note("event " .. tostring(e))
+  end
+  draw()
+end

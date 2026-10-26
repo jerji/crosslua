@@ -36,6 +36,7 @@ class LuaAppActivity final : public Activity {
   void leave();
   void logMemory(const char* when) const;
   void launchWifi();
+  void launchKeyboard();  // input.text(): the system keyboard, then resume the parked script
   void armWait();
 
   std::string appName_;

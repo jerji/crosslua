@@ -33,6 +33,25 @@ class HalHaptics {
 #endif
   }
 
+  // One app-requested pulse (Lua device.haptic). Non-blocking; false when this board has no motor or `enabled` is off.
+  static bool pulse(bool enabled, uint16_t ms, uint8_t strength) {
+#if FREEINK_CAP_HAPTIC && !CROSSPOINT_EMULATED
+    if (!enabled) return false;
+    auto& motor = HapticManager::getInstance();
+    motor.setEnabled(true);
+    motor.setIntensity(strength);
+    if (!motor.begin()) return false;
+    const HapticManager::Step pattern[] = {{ms, 255}};
+    motor.play(pattern, 1);  // the SDK copies the pattern
+    return true;
+#else
+    (void)enabled;
+    (void)ms;
+    (void)strength;
+    return false;
+#endif
+  }
+
   static void feedback(bool enabled, bool pressed, uint8_t intensity) {
 #if FREEINK_CAP_HAPTIC && !CROSSPOINT_EMULATED
     auto& motor = HapticManager::getInstance();

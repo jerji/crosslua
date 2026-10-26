@@ -7,6 +7,7 @@
 #include <Logging.h>
 #include <TrustedTime.h>
 #include <esp_mac.h>
+#include <esp_random.h>
 #include <sys/time.h>
 #include <InflateReader.h>
 #include <ArduinoJson.h>
@@ -32,6 +33,8 @@
 #include "network/HttpDownloader.h"
 #include "network/WifiPowerSaveGuard.h"
 #include "util/QrUtils.h"
+#include "CrossPointSettings.h"
+#include "activities/util/KeyboardEntryActivity.h"
 #include "components/themes/BaseTheme.h"
 #include <HalFrontlight.h>
 #include "lua/LuaApi.h"
@@ -73,6 +76,13 @@ class LuaAppActivity::Backend final : public crosslua::Backend {
   std::deque<const char*> events;  // string literals only (see collectInput)
   bool exitRequested = false;
   bool wifiConnectRequested = false;  // set by wifi.connect(); the activity launches the system WiFi UI
+  bool textRequested = false;         // set by input.text(); the activity launches the system keyboard
+  std::string textTitle, textInitial;
+  int textMax = 128, textMode = 0;
+  std::deque<std::pair<int, int>> evPos;  // parallel to `events`: touch position, or (-1,-1) for button events
+  bool havePos = false;
+  int posX = 0, posY = 0;                 // position of the event popEvent() returned last
+  int touchX = 0, touchY = 0;             // last finger position seen (a release has no coordinates of its own)
   std::string openBookPath;           // set by app.open_book(); the activity hands it to the reader
   std::string restartEntry;          // set by app.restart(); the activity starts a fresh VM from this script
 
@@ -120,6 +130,7 @@ class LuaAppActivity::Backend final : public crosslua::Backend {
     else s += "\nIt can never touch hidden folders (WiFi passwords, other apps' data) or firmware images.";
     return s;
   }
+  void randomBytes(uint8_t* out, size_t n) override { esp_fill_random(out, n); }
   int grantCount() override { return approved_ ? static_cast<int>(requested_.size()) : 0; }
   const char* grantPath(int i, bool* write) override {
     *write = requested_[i].write;
@@ -161,9 +172,17 @@ class LuaAppActivity::Backend final : public crosslua::Backend {
   }
 
   const char* popEvent() override {
+    havePos = false;
     if (events.empty()) return nullptr;
     const char* e = events.front();
     events.pop_front();
+    if (!evPos.empty()) {
+      const auto p = evPos.front();
+      evPos.pop_front();
+      havePos = p.first >= 0;
+      posX = p.first;
+      posY = p.second;
+    }
     return e;
   }
 
@@ -199,6 +218,40 @@ class LuaAppActivity::Backend final : public crosslua::Backend {
   bool netAllowed() override { return net_; }
   bool wifiConnected() override { return WiFi.status() == WL_CONNECTED; }
   void wifiRequestConnect() override { wifiConnectRequested = true; }
+
+  // --- device capabilities (CrossPoint runs on many boards; the FREEINK_CAP_* flags say what this build has) -----------
+  void deviceCaps(DeviceCaps* c) override {
+#if FREEINK_CAP_TOUCH
+    c->touch = gpio.hasTouch();  // e.g. X4 vs X4 Pro: decided at runtime
+#endif
+    c->haptic = FREEINK_CAP_HAPTIC;
+    bool on = false;
+    int b = 0, w = 0;
+    c->frontlight = frontlightGet(&on, &b, &w);
+    c->warmlight = c->frontlight && FREEINK_CAP_WARMLIGHT;
+    c->color = FREEINK_CAP_COLOR;
+    c->audio = FREEINK_CAP_AUDIO;
+    c->bleKeyboard = FREEINK_CAP_BLE_KEYBOARD;
+    c->usbMsc = FREEINK_CAP_USB_MSC;
+  }
+  bool usbConnected() override { return gpio.isUsbConnected(); }
+  bool hapticPulse(int ms, int strength) override {
+    return HalHaptics::pulse(SETTINGS.vibration != CrossPointSettings::VIBRATION_OFF, static_cast<uint16_t>(ms),
+                             static_cast<uint8_t>(strength));
+  }
+  bool eventPos(int* x, int* y) override {
+    if (!havePos) return false;
+    *x = posX;
+    *y = posY;
+    return true;
+  }
+  void textRequest(const char* title, const char* initial, int maxLen, int mode) override {
+    textTitle = title;
+    textInitial = initial;
+    textMax = maxLen;
+    textMode = mode;
+    textRequested = true;
+  }
   bool wifiInfo(char* ssid, size_t ssidCap, char* ip, size_t ipCap, int* rssi) override {
     if (WiFi.status() != WL_CONNECTED) return false;
     snprintf(ssid, ssidCap, "%s", WiFi.SSID().c_str());
@@ -326,6 +379,7 @@ class LuaAppActivity::Backend final : public crosslua::Backend {
         in_.update(true);
       }
       events.clear();
+      evPos.clear();
       return fail("cancelled");
     };
 
@@ -882,6 +936,23 @@ void LuaAppActivity::launchWifi() {
   });
 }
 
+void LuaAppActivity::launchKeyboard() {
+  const InputType type = backend_->textMode == 1 ? InputType::Password : backend_->textMode == 2 ? InputType::Url : InputType::Text;
+  startActivityForResult(std::make_unique<KeyboardEntryActivity>(renderer, mappedInput, backend_->textTitle,
+                                                                 backend_->textInitial, static_cast<size_t>(backend_->textMax), type),
+                         [this](const ActivityResult& r) {
+                           renderer.clearScreen();
+                           if (!vm_ || vm_->status() != crosslua::Status::Waiting) return;
+                           if (r.isCancelled) {
+                             vm_->resume("text:cancel");
+                           } else {
+                             const std::string reply = "text:ok:" + std::get<KeyboardResult>(r.data).text;
+                             vm_->resume(reply.c_str());
+                           }
+                           armWait();
+                         });
+}
+
 void LuaAppActivity::armWait() {
   if (vm_ && vm_->status() == crosslua::Status::Waiting)
     waitDeadline_ = vm_->timeoutMs() >= 0 ? millis() + static_cast<uint32_t>(vm_->timeoutMs()) : 0;
@@ -929,8 +1000,11 @@ void LuaAppActivity::showError(const std::string& title, const std::string& deta
 
 void LuaAppActivity::collectInput() {
   using B = MappedInputManager::Button;
-  auto push = [&](const char* name) {
-    if (backend_ && backend_->events.size() < EVENT_QUEUE_MAX) backend_->events.push_back(name);
+  auto push = [&](const char* name, int x = -1, int y = -1) {
+    if (backend_ && backend_->events.size() < EVENT_QUEUE_MAX) {
+      backend_->events.push_back(name);
+      backend_->evPos.push_back({x, y});
+    }
   };
   // Force-quit gesture first: it suppresses the matching release so Back never reaches the app.
   if (mappedInput.wasLongPressed(B::Back, EXIT_HOLD_MS)) {
@@ -944,6 +1018,23 @@ void LuaAppActivity::collectInput() {
   if (mappedInput.wasReleased(B::Right)) push("right");
   if (mappedInput.wasReleased(B::Up)) push("up");
   if (mappedInput.wasReleased(B::Down)) push("down");
+#if FREEINK_CAP_TOUCH
+  if (mappedInput.hasTouch()) {  // touch boards: "press" (finger down), "long", "tap", "release" with input.pos() = x, y
+    int x = 0, y = 0;
+    if (mappedInput.wasScreenTouchDown(x, y)) {
+      backend_->touchX = x;
+      backend_->touchY = y;
+      push("press", x, y);
+    }
+    if (mappedInput.isScreenTouchHeld(x, y)) {
+      backend_->touchX = x;
+      backend_->touchY = y;
+    }
+    if (mappedInput.wasScreenLongPress(x, y)) push("long", x, y);
+    if (mappedInput.wasScreenTapped(x, y)) push("tap", x, y);
+    if (mappedInput.wasScreenTouchReleased()) push("release", backend_->touchX, backend_->touchY);
+  }
+#endif
 }
 
 void LuaAppActivity::step() {
@@ -972,6 +1063,10 @@ void LuaAppActivity::step() {
         armWait();
         break;
       case Status::Waiting: {
+        if (backend_->textRequested) {  // input.text(): hand the screen to the system keyboard
+          backend_->textRequested = false;
+          return launchKeyboard();
+        }
         if (backend_->wifiConnectRequested) {  // wifi.connect(): hand the screen to the system's WiFi flow
           backend_->wifiConnectRequested = false;
           return launchWifi();

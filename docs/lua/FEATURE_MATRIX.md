@@ -31,6 +31,23 @@ Lua heap). Verdicts in the per-fork files; here only the gaps.
 | `gfx.rounded_rect`, `gfx.snapshot()`/`gfx.save_bmp(path)` | Ruby chrome, screenshots (3 forks) | snapshot = framebuffer readout via DevCapture-style capture or Bitmap copy; save_bmp is ~50 lines of Lua once snapshot exists. |
 | `epub.meta(path)` → title/author/language (no layout) | AvesO3 library, "about this book" apps | Container/OPF parse already in lib/Epub; stream, don't cache. |
 
+## Principle: CrossPoint is not only the X4 (decided with Angel)
+Build the feature for every board the firmware supports, even when the X4 (our only test device) lacks the hardware.
+- Hardware features are gated by the firmware's own `FREEINK_CAP_*` flags and report honestly when absent: `nil/false, "no <thing> on this device"`, never a crash.
+- Apps discover what exists with **`device.caps()`** (below) instead of guessing the model.
+- Features we cannot exercise on the X4 are marked **UNTESTED ON HARDWARE** in `API.md` until someone with the device confirms them. Host tests cover the plumbing (arguments, limits, events, caps gating) with a mock backend; they do not prove the physical behaviour.
+
+| item | status | notes |
+|---|---|---|
+| `device.caps()` | to do | table: `touch`, `haptic`, `frontlight`, `warmlight`, `color`, `audio`, `ble_keyboard`, `usb_msc`, `width`, `height` from `FREEINK_CAP_*` + `BoardConfig` |
+| `device.haptic(ms [, strength])` | to do | `HapticManager` (Metalio E-Ink 4): single pulse, honours the user's vibration setting; `false, "no vibration motor on this device"` elsewhere. **UNTESTED ON HARDWARE** |
+| touch input events | to do | `input.wait()` also returns `"tap"`, `"press"`, `"release"`, `"long"`; `input.pos()` -> x, y in screen pixels of the last touch event. Only fires when `caps().touch` |
+| `system.usb()` | to do | `HalGPIO::isUsbConnected()`; works on the X4 |
+| frontlight warmth | done | `device.frontlight` already takes warmth; `caps().warmlight` says whether it does anything |
+| colour (`FREEINK_CAP_COLOR`) | idea | needs a colour `gfx` model first (palette/RGB565); park until a colour board owner volunteers |
+| audio (`FREEINK_CAP_AUDIO`) | idea | `audio.beep/play`; park, same reason |
+| BLE keyboard as input | idea | would deliver key events into `input.wait`; behind a permission like BLE; park |
+
 ## Tier 3 — later / niche / heavy
 
 | primitive | unlocks | why later |

@@ -124,6 +124,22 @@ class Backend {
   // app.restart(entry): ask the host to tear this VM down and start `entry` (a .lua file in the app folder) in a fresh one.
   // --- storage grants: manifest "storage": {"read": [...], "write": [...]}. Only grants the user APPROVED are visible
   // here (an unapproved request reads as zero grants). Paths are normalised, relative, never hidden; "" = the whole card.
+  virtual void randomBytes(uint8_t* out, size_t n) = 0;  // hardware RNG
+
+  // --- what this board has (CrossPoint runs on many boards: apps adapt, they do not guess the model) ---------------
+  struct DeviceCaps {
+    bool touch = false, haptic = false, frontlight = false, warmlight = false, color = false, audio = false,
+         bleKeyboard = false, usbMsc = false;
+  };
+  virtual void deviceCaps(DeviceCaps* out) = 0;
+  virtual bool usbConnected() = 0;
+  // One vibration pulse. false: no motor on this board, or the user turned vibration off.
+  virtual bool hapticPulse(int ms, int strength) = 0;
+  // Position (screen pixels) of the touch event the last popEvent() returned; false for button events / empty polls.
+  virtual bool eventPos(int* x, int* y) = 0;
+  // input.text(): ask the host to show the system keyboard. The script is parked; the host resumes it with
+  // "text:ok:<text>" or "text:cancel". mode: 0 text, 1 password, 2 url.
+  virtual void textRequest(const char* title, const char* initial, int maxLen, int mode) = 0;
   virtual int grantCount() = 0;
   virtual const char* grantPath(int i, bool* write) = 0;
   virtual bool requestRestart(const char* entry) = 0;

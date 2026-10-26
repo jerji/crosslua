@@ -346,6 +346,103 @@ int dev_frontlight(lua_State* L) {
   return 1;
 }
 
+// device.caps() -> { touch, haptic, frontlight, warmlight, color, audio, ble_keyboard, usb_msc, width, height }
+int dev_caps(lua_State* L) {
+  Backend::DeviceCaps c;
+  be(L).deviceCaps(&c);
+  lua_createtable(L, 0, 10);
+  const struct {
+    const char* k;
+    bool v;
+  } flags[] = {{"touch", c.touch},       {"haptic", c.haptic}, {"frontlight", c.frontlight}, {"warmlight", c.warmlight},
+               {"color", c.color},       {"audio", c.audio},   {"ble_keyboard", c.bleKeyboard}, {"usb_msc", c.usbMsc}};
+  for (const auto& f : flags) {
+    lua_pushboolean(L, f.v);
+    lua_setfield(L, -2, f.k);
+  }
+  lua_pushinteger(L, be(L).width());
+  lua_setfield(L, -2, "width");
+  lua_pushinteger(L, be(L).height());
+  lua_setfield(L, -2, "height");
+  return 1;
+}
+// device.haptic(ms [, strength 0..255]) -> true | false, reason | nil, err (bad arguments). One non-blocking pulse.
+int dev_haptic(lua_State* L) {
+  const lua_Number ms = luaL_checknumber(L, 1);
+  const lua_Number st = lua_isnoneornil(L, 2) ? 255 : luaL_checknumber(L, 2);
+  if (ms < 10 || ms > 1000 || ms != static_cast<int>(ms)) {
+    lua_pushnil(L);
+    lua_pushstring(L, "ms must be an integer 10..1000");
+    return 2;
+  }
+  if (st < 0 || st > 255 || st != static_cast<int>(st)) {
+    lua_pushnil(L);
+    lua_pushstring(L, "strength must be an integer 0..255");
+    return 2;
+  }
+  if (!be(L).hapticPulse(static_cast<int>(ms), static_cast<int>(st))) {
+    lua_pushboolean(L, 0);
+    lua_pushstring(L, "no vibration motor on this device (or vibration is off in settings)");
+    return 2;
+  }
+  lua_pushboolean(L, 1);
+  return 1;
+}
+// system.usb() -> boolean (cable connected)
+int sys_usb(lua_State* L) {
+  lua_pushboolean(L, be(L).usbConnected());
+  return 1;
+}
+// input.pos() -> x, y of the touch event input.poll()/input.wait() returned last | nil (button event / nothing)
+int input_pos(lua_State* L) {
+  int x = 0, y = 0;
+  if (!be(L).eventPos(&x, &y)) {
+    lua_pushnil(L);
+    return 1;
+  }
+  lua_pushinteger(L, x);
+  lua_pushinteger(L, y);
+  return 2;
+}
+// input.text(title [, initial [, max_len [, mode]]]) -> string | nil, "cancelled" | nil, err.
+// Parks the script while the system keyboard runs (like wifi.connect): the screen is then the system's, redraw after.
+constexpr size_t TEXT_MAX_TITLE = 60, TEXT_MAX_INITIAL = 256;
+int text_k(lua_State* L, int, lua_KContext) {
+  const char* ev = lua_tostring(L, -1);  // what the host resumed us with
+  if (ev && strncmp(ev, "text:ok:", 8) == 0) {
+    lua_pushstring(L, ev + 8);
+    return 1;
+  }
+  lua_pushnil(L);
+  lua_pushstring(L, "cancelled");
+  return 2;
+}
+int input_text(lua_State* L) {
+  size_t tl, il = 0;
+  const char* title = luaL_checklstring(L, 1, &tl);
+  const char* initial = lua_isnoneornil(L, 2) ? "" : luaL_checklstring(L, 2, &il);
+  const lua_Number maxLen = lua_isnoneornil(L, 3) ? 128 : luaL_checknumber(L, 3);
+  const char* mode = lua_isnoneornil(L, 4) ? "text" : luaL_checkstring(L, 4);
+  auto fail = [&](const char* msg) {
+    lua_pushnil(L);
+    lua_pushstring(L, msg);
+    return 2;
+  };
+  if (tl > TEXT_MAX_TITLE) return fail("title too long (max 60 characters)");
+  if (il > TEXT_MAX_INITIAL) return fail("initial text too long (max 256 bytes)");
+  if (maxLen < 1 || maxLen > 256 || maxLen != static_cast<int>(maxLen)) return fail("max_len must be an integer 1..256");
+  int m = -1;
+  if (!strcmp(mode, "text")) m = 0;
+  else if (!strcmp(mode, "password")) m = 1;
+  else if (!strcmp(mode, "url")) m = 2;
+  if (m < 0) return fail("mode must be text, password or url");
+  if (il > static_cast<size_t>(maxLen)) return fail("initial text is longer than max_len");
+  be(L).textRequest(title, initial, static_cast<int>(maxLen), m);
+  lua_pushinteger(L, -1);  // no timeout...
+  lua_pushboolean(L, 0);   // ...and button events do not wake it: only the host's resume does
+  return lua_yieldk(L, 2, 0, text_k);
+}
+
 // ---- time -----------------------------------------------------------------
 // time.now() -> epoch seconds (UTC) | nil when the device clock is not trustworthy (never synced, no RTC).
 // Epoch seconds fit a 32-bit Lua integer until 2038.
@@ -442,12 +539,12 @@ void registerApi(LuaVm& vm, Backend& backend) {
                                  {"qr", gfx_qr}, {"rounded_rect", gfx_rounded_rect},
                                  {"text_width", gfx_text_width}, {"line_height", gfx_line_height},
                                  {"present", gfx_present}, {nullptr, nullptr}};
-  static const luaL_Reg input[] = {{"poll", input_poll}, {"wait", input_wait}, {nullptr, nullptr}};
+  static const luaL_Reg input[] = {{"poll", input_poll}, {"wait", input_wait}, {"pos", input_pos}, {"text", input_text}, {nullptr, nullptr}};
   static const luaL_Reg app[] = {{"sleep", app_sleep}, {"exit", app_exit}, {"name", app_name},
                                  {"dir", app_dir},     {"open_book", app_open_book},
                                  {"restart", app_restart}, {"entry", app_entry}, {nullptr, nullptr}};
   static const luaL_Reg sys[] = {{"millis", sys_millis}, {"heap", sys_heap},       {"lua_mem", sys_lua_mem},
-                                 {"battery", sys_battery}, {"mac", sys_mac}, {nullptr, nullptr}};
+                                 {"battery", sys_battery}, {"mac", sys_mac}, {"usb", sys_usb}, {nullptr, nullptr}};
   regTable(L, c, "gfx", gfx);
   regTable(L, c, "input", input);
   regTable(L, c, "app", app);
@@ -459,13 +556,14 @@ void registerApi(LuaVm& vm, Backend& backend) {
   regTable(L, c, "system", sys);
   static const luaL_Reg timeFns[] = {{"now", time_now}, {"date", time_date}, {"sync", time_sync}, {"set", time_set},
                                     {nullptr, nullptr}};
-  static const luaL_Reg devFns[] = {{"frontlight", dev_frontlight}, {nullptr, nullptr}};
+  static const luaL_Reg devFns[] = {{"frontlight", dev_frontlight}, {"caps", dev_caps}, {"haptic", dev_haptic}, {nullptr, nullptr}};
   regTable(L, c, "time", timeFns);
   regTable(L, c, "device", devFns);
   registerFs(L, c);
   registerJson(L, c);
   registerNet(L, c);
   registerZip(L, c);
+  registerCrypto(L, c);
   registerRequire(L, c);
 
   lua_pushlightuserdata(L, c);
