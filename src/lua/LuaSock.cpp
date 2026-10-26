@@ -353,8 +353,10 @@ int net_close(lua_State* L) {
 
 // ---- listen sockets (server on a TCP port) ----------------------------------------------
 
-// Permission + WiFi up gate for listen sockets (asks for "listen" permission on top of "network").
+// Permission + WiFi up gate for listen sockets. Two manifest layers: the base "network" permission (listen NEEDS
+// sockets) plus "listen", and the user must have APPROVED the listen request on the permission screen.
 int gateListen(lua_State* L) {
+  if (!be(L).netAllowed()) return pushFail(L, NET_DENIED);
   if (!be(L).listenAllowed()) return pushFail(L, LISTEN_DENIED);
   if (!be(L).wifiConnected()) return pushFail(L, NOT_CONNECTED);
   return 0;
@@ -389,6 +391,7 @@ int net_accept(lua_State* L) {
   int slot = 0;
   if (int r = slotArg(L, 1, &slot)) return r;
   if (int r = checkKind(L, slot, 3, "server")) return r;
+  if (!be(L).netAllowed()) return pushFail(L, NET_DENIED);
   if (!be(L).listenAllowed()) return pushFail(L, LISTEN_DENIED);
   const int clientSlot = be(L).netAccept(slot);
   if (clientSlot == -2) return pushFail(L, "accept failed");

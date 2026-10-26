@@ -259,7 +259,8 @@ struct MockBackend : Backend {
   std::map<int, std::deque<MockSock>> acceptQueue;  // server slot -> queued clients
   int acceptCount = 0;  // clients accepted via netAccept so far (for unique slot content)
   int serverPort = 0;   // last port listened on
-  bool listenPermitted = false;
+  bool listenPermitted = false;   // manifest declared "listen"
+  bool listenApproved = true;     // user approved the listen request on the permission screen (default: approved, like grants in the mock)
   int netListen(int port, char* err, size_t errCap) override {
     if (!listenOk) { snprintf(err, errCap, "listen failed (mock)"); return -1; }
     for (int i = 0; i < Backend::MAX_SOCKETS; i++) {
@@ -292,7 +293,8 @@ struct MockBackend : Backend {
     }
     return -2;  // no free slot for the client
   }
-  bool listenAllowed() override { return listenPermitted; }
+  // Pure manifest+approval flags: the binding checks the base network permission separately (gateListen / net_accept).
+  bool listenAllowed() override { return listenPermitted && listenApproved; }
   // --- mDNS mock ---
   struct MdnsResult {
     std::string hostname;
@@ -3741,6 +3743,37 @@ int main() {
       CHECK(be.logs.size() == 1);
       CHECK(be.logs[0] == "nil\tlisten failed (mock)");
     }
+    {
+      MockBackend be;  // listen declared but NOT approved on the permission screen -> refused
+      be.net = true;
+      be.wifiUp = true;
+      be.listenPermitted = true;
+      be.listenApproved = false;
+      LuaVm vm;
+      CHECK(vm.open(128 * 1024));
+      registerApi(vm, be);
+      const char* script = "print(net.listen(8080))";
+      CHECK(vm.load("t", script, strlen(script)));
+      CHECK(run(vm, be, 100000) == Status::Finished);
+      CHECK(be.logs.size() == 1);
+      CHECK(be.logs[0].rfind("nil\tlisten not permitted", 0) == 0);
+      CHECK(be.serverPort == 0);  // nothing reached the backend
+    }
+    {
+      MockBackend be;  // listen declared+approved but the base network permission is missing -> NET_DENIED first
+      be.net = false;
+      be.wifiUp = true;
+      be.listenPermitted = true;
+      LuaVm vm;
+      CHECK(vm.open(128 * 1024));
+      registerApi(vm, be);
+      const char* script = "print(net.listen(8080))\nprint(net.accept(1))";
+      CHECK(vm.load("t", script, strlen(script)));
+      CHECK(run(vm, be, 100000) == Status::Finished);
+      CHECK(be.logs.size() == 2);
+      CHECK(be.logs[0].rfind("nil\tnetwork not permitted", 0) == 0);
+      CHECK(be.logs[1].rfind("nil\tnot an open socket handle", 0) == 0);  // accept never got a server to open
+    }
   }
   {
     TEST("net.accept: accept a queued client, read/write, close");
@@ -3843,6 +3876,28 @@ int main() {
       CHECK(run(vm2, be, 100000) == Status::Finished);
       CHECK(be.logs.size() == 1);
       CHECK(be.logs[0] == "nil\tlisten not permitted: add \"permissions\": [\"listen\"] to this app's manifest.json");
+    }
+    {
+      MockBackend be;  // accept with a live server but the base network permission revoked -> NET_DENIED
+      be.net = true;
+      be.wifiUp = true;
+      be.listenPermitted = true;
+      LuaVm vm;
+      CHECK(vm.open(128 * 1024));
+      registerApi(vm, be);
+      CHECK(vm.load("t", "local s = net.listen(9090); print(s)", strlen("local s = net.listen(9090); print(s)")));
+      CHECK(run(vm, be, 100000) == Status::Finished);
+      CHECK(be.logs[0] == "1");
+      be.logs.clear();
+      be.net = false;  // revoke the base network permission; the listen approval stays
+      LuaVm vm2;
+      CHECK(vm2.open(128 * 1024));
+      registerApi(vm2, be);
+      CHECK(vm2.load("t", "print(net.accept(1))", strlen("print(net.accept(1))")));
+      CHECK(run(vm2, be, 100000) == Status::Finished);
+      CHECK(be.logs.size() == 1);
+      CHECK(be.logs[0].rfind("nil\tnetwork not permitted", 0) == 0);
+      CHECK(be.acceptCount == 0);  // nothing was accepted
     }
     {
       MockBackend be;  // accept on a TCP handle (not a server)

@@ -251,7 +251,7 @@ UDP datagrams live in the same socket table as TCP (8 slots total, TCP and UDP t
 | `net.udp_send(h, host, port, data)` -> bytes \| nil, err | Fire-and-forget: no delivery guarantee. `host` may be a name (resolved via DNS, blocks briefly) or an IPv4 literal; `data` at most 16384 bytes and not empty. |
 | `net.udp_recv(h [, max=1472])` -> `{data, ip, port}` \| nil \| nil, "closed" | Never blocks. `nil` means nothing has arrived. One datagram per call, truncated to `max` (1..16384). `ip`/`port` are the sender's. |
 | `net.udp_close(h)` -> true \| nil, err | A TCP handle is refused with "not a UDP socket". |
-| `net.listen(port)` -> handle \\| nil, err | Needs `"listen"` permission in addition to `"network"`. Binds a TCP server on `port` (1..65535). Refused when 8 handles are open or under 16 KB free RAM. |
+| `net.listen(port)` -> handle \\| nil, err | Needs `"network"` AND `"listen"` in the manifest, and the user must approve the listen request on the permission screen (same stored approval as storage grants; a manifest change asks again). Binds a TCP server on `port` (1..65535). Refused when 8 handles are open or under 16 KB free RAM. |
 | `net.accept(server)` -> handle \\| nil \\| nil, err | Non-blocking: `nil` (one value) = nothing waiting; `nil, err` = error. Returns a TCP client handle for `net.read`/`write`/`close`. |
 | `net.mdns_query(service, proto)` -> `{ {hostname, ip, port, instance_name}, ... }` \\| nil, err | Queries mDNS on the LAN (e.g. `net.mdns_query("http", "tcp")`). `service` may have a leading `_` or not. `proto` is `"tcp"` or `"udp"`. Needs the `"network"` permission and WiFi up. Returns an empty array when nothing is found (not an error). |
 

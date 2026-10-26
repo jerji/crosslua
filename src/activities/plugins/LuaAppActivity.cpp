@@ -8,6 +8,10 @@
 #include <functional>
 #include <sys/socket.h>
 #include <cerrno>
+#include <fcntl.h>
+#include <sys/select.h>
+#include <netinet/in.h>
+#include <arpa/inet.h>
 #include <GfxRenderer.h>
 #include <Imu.h>
 #include <LedManager.h>
@@ -113,11 +117,12 @@ class LuaAppActivity::Backend final : public crosslua::Backend {
 
   // ---- storage grants ("storage": {"read": [...], "write": [...]} in manifest.json) ------------------------------
   // Parsed from the manifest but INVISIBLE to the API (grantCount() == 0) until the user approved exactly this request.
-  bool hasGrantRequest() const { return !requested_.empty(); }
+  bool hasGrantRequest() const { return !requested_.empty() || listenReq_; }
   // Canonical text of the request; an approval is valid only for an identical request (any change asks again).
   std::string grantCanonical() const {
     std::vector<std::string> v;
     for (const Grant& g : requested_) v.push_back(std::string(g.write ? "w:" : "r:") + g.rel);
+    if (listenReq_) v.push_back("p:listen");  // accepting connections from the LAN is part of the approved request too
     std::sort(v.begin(), v.end());
     std::string s;
     for (const std::string& x : v) s += x + "\n";
@@ -149,11 +154,18 @@ class LuaAppActivity::Backend final : public crosslua::Backend {
       if (g.write && crosslua::grantIsDangerous(g.rel.c_str())) *danger = true;
     }
     std::string s;
+    if (listenReq_) s += "NETWORK: accept incoming connections from your local network\n";
     if (!rd.empty()) s += "READ: " + rd + "\n";
     if (!wr.empty()) s += "WRITE: " + wr + "\n";
     if (*danger) s += "\nWARNING: this includes the whole card or the plugins folder, i.e. other apps' code.";
-    else s += "\nIt can never touch hidden folders (WiFi passwords, other apps' data) or firmware images.";
+    else if (!rd.empty() || !wr.empty()) s += "\nIt can never touch hidden folders (WiFi passwords, other apps' data) or firmware images.";
     return s;
+  }
+  // Title of the confirmation screen: says what is being asked for.
+  std::string grantTitle(const std::string& app) const {
+    if (listenReq_ && !requested_.empty()) return app + " wants network and file access";
+    if (listenReq_) return app + " wants to accept connections";
+    return app + " wants access to your files";
   }
   void randomBytes(uint8_t* out, size_t n) override { esp_fill_random(out, n); }
   int grantCount() override { return approved_ ? static_cast<int>(requested_.size()) : 0; }
@@ -438,6 +450,9 @@ class LuaAppActivity::Backend final : public crosslua::Backend {
     fmtIp(ip, ipCap, a);
     return true;
   }
+  // Back-cancellable connect. The Arduino connect() blocks in one select() call with no way in, so do the same
+  // non-blocking connect + select it does internally, but in 40 ms slices that pump the buttons: Back cancels
+  // (same shape as the http transfer cancel). DNS still uses the system timeout (a few hundred ms, not interruptible).
   int netConnect(const char* host, int port, int timeoutMs, char* err, size_t errCap) override {
     int slot = -1;
     for (int i = 0; i < crosslua::Backend::MAX_SOCKETS && slot < 0; i++)
@@ -446,11 +461,65 @@ class LuaAppActivity::Backend final : public crosslua::Backend {
       snprintf(err, errCap, "too many open sockets (max 4)");
       return -1;
     }
-    if (!socks_[slot].connect(host, static_cast<uint16_t>(port), timeoutMs)) {
-      socks_[slot].stop();
+    IPAddress ip;
+    if (WiFi.hostByName(host, ip) != 1) {
+      snprintf(err, errCap, "cannot resolve '%s' (no such host or DNS unreachable)", host);
+      return -1;
+    }
+    const int fd = socket(AF_INET, SOCK_STREAM, 0);
+    if (fd < 0) {
+      snprintf(err, errCap, "cannot create socket");
+      return -1;
+    }
+    sockaddr_in addr = {};
+    addr.sin_family = AF_INET;
+    addr.sin_addr.s_addr = static_cast<uint32_t>(ip);
+    addr.sin_port = htons(static_cast<uint16_t>(port));
+    fcntl(fd, F_SETFL, fcntl(fd, F_GETFL, 0) | O_NONBLOCK);
+    int rc = connect(fd, reinterpret_cast<sockaddr*>(&addr), sizeof(addr));
+    if (rc < 0 && errno != EINPROGRESS) {
+      close(fd);
+      snprintf(err, errCap, "cannot connect to %s:%d (refused)", host, port);
+      return -1;
+    }
+    int soErr = 0;
+    while (rc < 0) {  // EINPROGRESS: wait for writability in slices, Back cancels
+      fd_set wset;
+      FD_ZERO(&wset);
+      FD_SET(fd, &wset);
+      timeval tv = {0, 40 * 1000};
+      const int sel = select(fd + 1, nullptr, &wset, nullptr, &tv);
+      in_.update(true);
+      if (in_.wasPressed(MappedInputManager::Button::Back) || in_.isPressed(MappedInputManager::Button::Back)) {
+        for (int i = 0; i < 200 && in_.isPressed(MappedInputManager::Button::Back); i++) {  // swallow the release like http
+          delay(10);
+          in_.update(true);
+        }
+        events.clear();
+        evPos.clear();
+        close(fd);
+        snprintf(err, errCap, "cancelled");
+        return -1;
+      }
+      if (sel > 0) {
+        socklen_t len = sizeof(soErr);
+        getsockopt(fd, SOL_SOCKET, SO_ERROR, &soErr, &len);
+        rc = soErr == 0 ? 0 : -1;  // writable: the connect finished (either way)
+        break;
+      }
+      timeoutMs -= 40;
+      if (timeoutMs <= 0) {
+        close(fd);
+        snprintf(err, errCap, "cannot connect to %s:%d (timed out)", host, port);
+        return -1;
+      }
+    }
+    if (rc < 0) {
+      close(fd);
       snprintf(err, errCap, "cannot connect to %s:%d (refused, unreachable or timed out)", host, port);
       return -1;
     }
+    socks_[slot] = WiFiClient(fd);  // adopt the connected socket (the fd constructor wires handle + rx buffer)
     socks_[slot].setNoDelay(true);
     sockUsed_[slot] = true;
     sockKind_[slot] = 1;
@@ -1061,6 +1130,7 @@ class LuaAppActivity::Backend final : public crosslua::Backend {
     for (JsonVariantConst p : doc["permissions"].as<JsonArrayConst>())
       if (p.is<const char*>() && !strcmp(p.as<const char*>(), "network")) net_ = true;
       else if (p.is<const char*>() && !strcmp(p.as<const char*>(), "library")) lib_ = true;
+      else if (p.is<const char*>() && !strcmp(p.as<const char*>(), "listen")) listenReq_ = true;
     for (int w = 0; w < 2; w++)
       for (JsonVariantConst v : doc["storage"][w ? "write" : "read"].as<JsonArrayConst>()) {
         char rel[104];
@@ -1099,7 +1169,9 @@ class LuaAppActivity::Backend final : public crosslua::Backend {
       cl.stop();
       return -2;
     }
-    bool listenAllowed() override { return net_; }  // simplifies: "listen" permission can be added to the manifest parser later
+    // "permissions": ["network", "listen"]: the device may accept connections from the LAN. Needs the user's approval (same screen
+  // and stored record as the storage grants), so an app that merely declares it still reads as "not permitted".
+  bool listenAllowed() override { return net_ && listenReq_ && approved_; }
 
     // --- mDNS ---
   // ESPmDNS needs begin() (responder + query machinery) before queryService works; without it the
@@ -1128,6 +1200,7 @@ class LuaAppActivity::Backend final : public crosslua::Backend {
   MappedInputManager& in_;
   bool net_ = false;
   bool lib_ = false;
+  bool listenReq_ = false;  // manifest asked for "listen" (effective only after approval)
   struct Grant {
     std::string rel;
     bool write;
@@ -1254,7 +1327,7 @@ void LuaAppActivity::onExit() {
 void LuaAppActivity::askGrants() {
   bool danger = false;
   const std::string body = backend_->grantSummary(&danger);
-  auto confirmation = makeUniqueNoThrow<ConfirmationActivity>(renderer, mappedInput, appName_ + " wants access to your files",
+  auto confirmation = makeUniqueNoThrow<ConfirmationActivity>(renderer, mappedInput, backend_->grantTitle(appName_),
                                                               body, "Deny", "Allow");
   if (!confirmation) {
     showError("Out of memory", "Could not show the permission screen.");
@@ -1262,13 +1335,13 @@ void LuaAppActivity::askGrants() {
   }
   startActivityForResult(std::move(confirmation), [this](const ActivityResult& r) {
     if (r.isCancelled || !backend_) {
-      LOG_INF(TAG, "storage grants denied: the app does not start");
+      LOG_INF(TAG, "permission request denied: the app does not start");
       leave();
       return;
     }
     backend_->storeApproval();
     backend_->approveGrants();
-    LOG_INF(TAG, "storage grants approved");
+    LOG_INF(TAG, "permission request approved");
     startVm();
   });
 }
