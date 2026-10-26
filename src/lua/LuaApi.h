@@ -122,6 +122,10 @@ class Backend {
   // Ask the host to open `absPath` in the reader (replaces the app). false = no such file.
   virtual bool openBook(const char* absPath) = 0;
   // app.restart(entry): ask the host to tear this VM down and start `entry` (a .lua file in the app folder) in a fresh one.
+  // --- storage grants: manifest "storage": {"read": [...], "write": [...]}. Only grants the user APPROVED are visible
+  // here (an unapproved request reads as zero grants). Paths are normalised, relative, never hidden; "" = the whole card.
+  virtual int grantCount() = 0;
+  virtual const char* grantPath(int i, bool* write) = 0;
   virtual bool requestRestart(const char* entry) = 0;
   virtual const char* entryName() = 0;  // the script this VM was started from ("main.lua" by default)
 

@@ -1,5 +1,6 @@
 // fs.* and the module loader behind require(). Sandboxed to app:/data:/lib: scopes.
 #include <algorithm>
+#include <strings.h>
 #include <cstdio>
 #include <cstring>
 
@@ -52,11 +53,16 @@ bool resolveIn(Backend& b, Scope scope, const char* rel, char* out, size_t cap, 
   if (scope == Scope::Sd) {
     // The user's SD card outside the app sandbox: read-only (callers enforce), permission-gated, and never anything hidden
     // (.crosspoint = settings/credentials, .crosslua = other apps' data, any dot-name).
-    if (!b.libraryAllowed()) {
+    const bool lib = b.libraryAllowed();
+    if (!lib && b.grantCount() == 0) {
       *err = "library access not permitted: add \"library\" to \"permissions\" in manifest.json";
       return false;
     }
     if (rel[0] == '\0') {
+      if (!lib && !sdCovered(b, "", false)) {
+        *err = "library access not permitted: this path is outside the folders granted to this app";
+        return false;
+      }
       snprintf(out, cap, "/");
       return true;
     }
@@ -69,6 +75,10 @@ bool resolveIn(Backend& b, Scope scope, const char* rel, char* out, size_t cap, 
       const char* slash = strchr(p, '/');
       if (!slash) break;
       p = slash + 1;
+    }
+    if (!lib && !sdCovered(b, rel, false)) {
+      *err = "library access not permitted: this path is outside the folders granted to this app";
+      return false;
     }
     const int n = snprintf(out, cap, "/%s", rel);
     if (n < 0 || static_cast<size_t>(n) >= cap) {
@@ -113,6 +123,69 @@ bool resolvePath(Backend& b, const char* spec, char* out, size_t cap, Scope* sco
   return resolveIn(b, sc, spec, out, cap, err);
 }
 
+
+// ---- storage grants -----------------------------------------------------------------------------------------------
+bool parseGrantPath(const char* in, char* out, size_t cap) {
+  if (!in || cap < 2) return false;
+  if (!strcmp(in, "/")) {
+    out[0] = '\0';
+    return true;
+  }
+  const size_t n = strlen(in);
+  if (n == 0 || n >= cap || n > 100) return false;
+  size_t len = n;
+  while (len > 0 && in[len - 1] == '/') len--;  // "Books/" == "Books"
+  if (len == 0) return false;
+  size_t o = 0;
+  bool startOfPart = true;
+  for (size_t i = 0; i < len; i++) {
+    const unsigned char c = static_cast<unsigned char>(in[i]);
+    if (c < 0x20 || c == 0x7f || c == ':' || c == '\\') return false;
+    if (i == 0 && c == '/') return false;  // absolute paths other than "/" are not accepted
+    if (c == '/') {
+      if (startOfPart) return false;  // empty component
+      startOfPart = true;
+    } else {
+      if (startOfPart && c == '.') return false;  // ".", "..", and every hidden name
+      startOfPart = false;
+    }
+    out[o++] = static_cast<char>(c);
+  }
+  out[o] = '\0';
+  return true;
+}
+
+bool grantIsDangerous(const char* rel) {
+  if (rel[0] == '\0') return true;  // the whole card, which includes /plugins
+  const size_t pl = strlen("plugins");
+  if (strncasecmp(rel, "plugins", pl) == 0 && (rel[pl] == '\0' || rel[pl] == '/')) return true;
+  return false;
+}
+
+static bool underGrant(const char* g, const char* rel) {
+  if (g[0] == '\0') return true;  // whole card
+  const size_t gl = strlen(g);
+  return strncmp(rel, g, gl) == 0 && (rel[gl] == '\0' || rel[gl] == '/');  // "Books" covers "Books/x", never "BooksX"
+}
+
+bool sdCovered(Backend& b, const char* rel, bool write) {
+  for (int i = 0; i < b.grantCount(); i++) {
+    bool gw = false;
+    const char* g = b.grantPath(i, &gw);
+    if (!g || (write && !gw)) continue;
+    if (underGrant(g, rel)) return true;
+  }
+  return false;
+}
+
+bool writeAllowed(Backend& b, Scope sc, const char* absPath) {
+  if (sc == Scope::Data) return true;
+  if (sc != Scope::Sd || absPath[0] != '/') return false;
+  const size_t n = strlen(absPath);
+  if (n >= 4 && strcasecmp(absPath + n - 4, ".bin") == 0) return false;  // firmware images are never grantable
+  return sdCovered(b, absPath + 1, true);
+}
+
 namespace {
 
 // Returns false (and pushes nil,msg) so callers can `return pushFail(...)`.
@@ -130,8 +203,13 @@ bool pathArg(lua_State* L, int i, bool needWrite, char* out, size_t cap, Scope* 
     pushFail(L, err);
     return false;
   }
-  if (needWrite && *sc != Scope::Data) {
-    pushFail(L, "read-only location (write to 'data:...')");
+  if (needWrite && !writeAllowed(be(L), *sc, out)) {
+    const size_t pn = strlen(out);
+    const bool firmwareImage = *sc == Scope::Sd && pn >= 4 && strcasecmp(out + pn - 4, ".bin") == 0;
+    pushFail(L, firmwareImage ? "read-only location (firmware images (*.bin) can never be written)"
+                : (*sc == Scope::Sd && be(L).grantCount() > 0)
+                    ? "read-only location (the app has no write grant for this folder)"
+                    : "read-only location (write to 'data:...')");
     return false;
   }
   return true;

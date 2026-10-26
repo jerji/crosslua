@@ -177,7 +177,9 @@ int http_request(lua_State* L) {
     Scope sc;
     const char* err = nullptr;
     if (!resolvePath(be(L), spec, savePath, sizeof(savePath), &sc, &err)) return pushFail(L, err);
-    if (sc != Scope::Data) return pushFail(L, "save_to must be a data: path");
+    if (!writeAllowed(be(L), sc, savePath))
+      return pushFail(L, be(L).grantCount() > 0 ? "save_to must be a data: path or an sd: folder this app has a write grant for"
+                                                 : "save_to must be a data: path");
     if (!strcmp(method, "POST")) return pushFail(L, "save_to is only supported for GET");
     savePtr = savePath;
   }

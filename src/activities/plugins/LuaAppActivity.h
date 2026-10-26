@@ -28,6 +28,8 @@ class LuaAppActivity final : public Activity {
   class Backend;  // firmware implementation of crosslua::Backend (in the .cpp)
 
   void startApp();
+  void startVm();
+  void askGrants();
   void collectInput();
   void step();
   void showError(const std::string& title, const std::string& detail);
@@ -44,5 +46,6 @@ class LuaAppActivity final : public Activity {
   uint32_t waitDeadline_ = 0;
   uint32_t lastGcMs_ = 0;
   bool errorShown_ = false;
+  bool pendingGrantPrompt_ = false;
   bool leaving_ = false;
 };

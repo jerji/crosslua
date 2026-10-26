@@ -18,7 +18,10 @@
 #include <deque>
 #include <vector>
 
+#include <Memory.h>
+
 #include "Epub/converters/ImageDecoderFactory.h"
+#include "activities/util/ConfirmationActivity.h"
 #include "MappedInputManager.h"
 #include "SilentRestart.h"
 #include "activities/ActivityManager.h"
@@ -30,6 +33,7 @@
 #include "components/themes/BaseTheme.h"
 #include <HalFrontlight.h>
 #include "lua/LuaApi.h"
+#include "lua/LuaInternal.h"
 #include "lua/LuaVm.h"
 
 namespace {
@@ -69,6 +73,56 @@ class LuaAppActivity::Backend final : public crosslua::Backend {
   bool wifiConnectRequested = false;  // set by wifi.connect(); the activity launches the system WiFi UI
   std::string openBookPath;           // set by app.open_book(); the activity hands it to the reader
   std::string restartEntry;          // set by app.restart(); the activity starts a fresh VM from this script
+
+  // ---- storage grants ("storage": {"read": [...], "write": [...]} in manifest.json) ------------------------------
+  // Parsed from the manifest but INVISIBLE to the API (grantCount() == 0) until the user approved exactly this request.
+  bool hasGrantRequest() const { return !requested_.empty(); }
+  // Canonical text of the request; an approval is valid only for an identical request (any change asks again).
+  std::string grantCanonical() const {
+    std::vector<std::string> v;
+    for (const Grant& g : requested_) v.push_back(std::string(g.write ? "w:" : "r:") + g.rel);
+    std::sort(v.begin(), v.end());
+    std::string s;
+    for (const std::string& x : v) s += x + "\n";
+    return s;
+  }
+  std::string grantFile() const { return "/.crosslua/grants/" + name_ + ".txt"; }
+  bool grantsApprovedOnDisk() {
+    const std::string f = grantFile();
+    const int64_t n = fsSize(f.c_str());
+    const std::string want = grantCanonical();
+    if (n != static_cast<int64_t>(want.size())) return false;
+    std::string have(want.size(), '\0');
+    return fsReadInto(f.c_str(), &have[0], have.size(), 0) && have == want;
+  }
+  void storeApproval() {
+    fsMkdir("/.crosslua/grants");
+    const std::string want = grantCanonical();
+    fsWrite(grantFile().c_str(), want.data(), want.size(), false);
+  }
+  void approveGrants() { approved_ = true; }
+  // Plain-words description for the confirmation screen; *danger = it reaches the whole card or other apps' code.
+  std::string grantSummary(bool* danger) const {
+    std::string rd, wr;
+    *danger = false;
+    for (const Grant& g : requested_) {
+      std::string& dst = g.write ? wr : rd;
+      if (!dst.empty()) dst += ", ";
+      dst += g.rel.empty() ? "the whole SD card" : g.rel;
+      if (g.write && crosslua::grantIsDangerous(g.rel.c_str())) *danger = true;
+    }
+    std::string s;
+    if (!rd.empty()) s += "READ: " + rd + "\n";
+    if (!wr.empty()) s += "WRITE: " + wr + "\n";
+    if (*danger) s += "\nWARNING: this includes the whole card or the plugins folder, i.e. other apps' code.";
+    else s += "\nIt can never touch hidden folders (WiFi passwords, other apps' data) or firmware images.";
+    return s;
+  }
+  int grantCount() override { return approved_ ? static_cast<int>(requested_.size()) : 0; }
+  const char* grantPath(int i, bool* write) override {
+    *write = requested_[i].write;
+    return requested_[i].rel.c_str();
+  }
 
   int width() override { return r_.getScreenWidth(); }
   int height() override { return r_.getScreenHeight(); }
@@ -163,7 +217,7 @@ class LuaAppActivity::Backend final : public crosslua::Backend {
   static constexpr size_t ZIP_RESERVE = 48 * 1024;
   // Contiguous block each decoder allocates in one piece (PNGdec's PNG object is ~44 KB, JPEGDEC ~20 KB, see the
   // *_DECODER_APPROX_SIZE constants in lib/Epub/Epub/converters) plus a little slack for its line buffers.
-  static constexpr size_t PNG_MIN_BLOCK = 46 * 1024;
+  static constexpr size_t PNG_MIN_BLOCK = 62 * 1024;  // sizeof(PNG) = 59.5 KB: PNGdec 45.7 KB + the build raises PNG_MAX_BUFFERED_PIXELS to 16416
   static constexpr size_t JPEG_MIN_BLOCK = 24 * 1024;
   int zipList(const char* path, crosslua::Backend::ZipEntryInfo* out, int maxEntries, int* total, char* err,
               size_t errCap) override {
@@ -511,7 +565,8 @@ class LuaAppActivity::Backend final : public crosslua::Backend {
     }
     ImageDimensions d{};
     if (!dec->getDimensions(absPath, d) || d.width <= 0 || d.height <= 0) {
-      snprintf(err, errCap, "cannot read the image header (corrupt or unsupported)");
+      snprintf(err, errCap, "cannot read the image header (corrupt, unsupported, or no RAM: largest block %uK)",
+               static_cast<unsigned>(HalMemory::getInternalHeap().largestBlockBytes / 1024));
       return false;
     }
     // Fit, never upscale, centre in the box.
@@ -623,11 +678,23 @@ class LuaAppActivity::Backend final : public crosslua::Backend {
     for (JsonVariantConst p : doc["permissions"].as<JsonArrayConst>())
       if (p.is<const char*>() && !strcmp(p.as<const char*>(), "network")) net_ = true;
       else if (p.is<const char*>() && !strcmp(p.as<const char*>(), "library")) lib_ = true;
+    for (int w = 0; w < 2; w++)
+      for (JsonVariantConst v : doc["storage"][w ? "write" : "read"].as<JsonArrayConst>()) {
+        char rel[104];
+        if (requested_.size() < 8 && v.is<const char*>() && crosslua::parseGrantPath(v.as<const char*>(), rel, sizeof(rel)))
+          requested_.push_back({rel, w == 1});
+      }
   }
 
   MappedInputManager& in_;
   bool net_ = false;
   bool lib_ = false;
+  struct Grant {
+    std::string rel;
+    bool write;
+  };
+  std::vector<Grant> requested_;
+  bool approved_ = false;
   std::string dir_;
   std::string dataDir_;
   std::string entry_;
@@ -656,7 +723,6 @@ void LuaAppActivity::onEnter() {
 
 // (Re)starts the app from entry_ in a fresh VM. Also used by app.restart().
 void LuaAppActivity::startApp() {
-  RenderLock lock;
   errorShown_ = false;
   waitDeadline_ = 0;
 
@@ -675,6 +741,19 @@ void LuaAppActivity::startApp() {
     return;
   }
 
+  if (backend_->hasGrantRequest()) {
+    if (backend_->grantsApprovedOnDisk()) backend_->approveGrants();
+    else {  // ask first (from loop(): sub-activities cannot be started from onEnter)
+      pendingGrantPrompt_ = true;
+      return;
+    }
+  }
+  startVm();
+}
+
+// Second half of the start: size the Lua heap, load the entry script, register the API.
+void LuaAppActivity::startVm() {
+  RenderLock lock;
   const auto heap = HalMemory::getInternalHeap();
   logMemory("start");
   if (heap.freeBytes < LUA_RESERVE_BYTES + LUA_MIN_BUDGET) {
@@ -726,6 +805,28 @@ void LuaAppActivity::onExit() {
     delay(30);
     silentRestart();
   }
+}
+
+void LuaAppActivity::askGrants() {
+  bool danger = false;
+  const std::string body = backend_->grantSummary(&danger);
+  auto confirmation = makeUniqueNoThrow<ConfirmationActivity>(renderer, mappedInput, appName_ + " wants access to your files",
+                                                              body, "Deny", "Allow");
+  if (!confirmation) {
+    showError("Out of memory", "Could not show the permission screen.");
+    return;
+  }
+  startActivityForResult(std::move(confirmation), [this](const ActivityResult& r) {
+    if (r.isCancelled || !backend_) {
+      LOG_INF(TAG, "storage grants denied: the app does not start");
+      leave();
+      return;
+    }
+    backend_->storeApproval();
+    backend_->approveGrants();
+    LOG_INF(TAG, "storage grants approved");
+    startVm();
+  });
 }
 
 void LuaAppActivity::launchWifi() {
@@ -867,6 +968,11 @@ void LuaAppActivity::step() {
 void LuaAppActivity::loop() {
   Activity::loop();
   if (leaving_) return;
+  if (pendingGrantPrompt_) {
+    pendingGrantPrompt_ = false;
+    askGrants();
+    return;
+  }
   if (errorShown_) {
     if (mappedInput.wasReleased(MappedInputManager::Button::Back) ||
         mappedInput.wasReleased(MappedInputManager::Button::Confirm))

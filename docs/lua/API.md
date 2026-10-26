@@ -1,4 +1,4 @@
-# CrossLua app API (v0.7)
+# CrossLua app API (v0.8)
 
 An app is a plugin folder containing `main.lua`, in any plugin root
 (`/plugins`, `/.plugins`, `/.crosspoint/plugins`):
@@ -52,7 +52,7 @@ cannot freeze the device, drop the power button, or block sleep.
 | `gfx.text_width(str [, font [, flags]])` → px | |
 | `gfx.line_height([font])` → px | |
 | `gfx.present([mode])` | pushes the frame to the panel. `"fast"` (default), `"half"`, `"full"` (clears ghosting, slow) |
-| `gfx.image(path, x, y [, box_w, box_h])` → drawn_w, drawn_h \| nil, err | PNG/JPEG (`.png .jpg .jpeg`) from `app:`/`data:`/`sd:` (`sd:` needs `library`; hidden paths refused). Decoded row by row by the firmware (RAM does not scale with the source; sources up to 8 MP / 6 MB), dithered to black/white into the current frame. The box defaults to x,y..screen edge and is clipped to the screen; the image is **fitted into the box, never upscaled, and centred**; the return values are the size actually drawn. Errors are values: `no such file`, `unsupported image type`, `cannot read the image header`, `not enough free RAM to decode`, `decode failed`. Needs a free contiguous block of ~40 KB, so an app with a huge Lua heap can get the RAM error. Call `gfx.present()` afterwards. |
+| `gfx.image(path, x, y [, box_w, box_h])` → drawn_w, drawn_h \| nil, err | PNG/JPEG (`.png .jpg .jpeg`) from `app:`/`data:`/`sd:` (`sd:` needs `library`; hidden paths refused). Decoded row by row by the firmware (RAM does not scale with the source; sources up to 8 MP / 6 MB), dithered to black/white into the current frame. The box defaults to x,y..screen edge and is clipped to the screen; the image is **fitted into the box, never upscaled, and centred**; the return values are the size actually drawn. Errors are values: `no such file`, `unsupported image type`, `cannot read the image header`, `not enough free RAM to decode`, `decode failed`. Needs a free contiguous block of ~60 KB, so an app with a huge Lua heap can get the RAM error. Call `gfx.present()` afterwards. |
 
 Fonts: `ui`, `ui12`, `small`, `sans12`, `sans14`, `sans16`, `sans18` (CrossPoint's built-in fonts, same as the rest of the UI).
 Nothing reaches the panel until `gfx.present()`. Coordinates may be floats (truncated).
@@ -135,6 +135,21 @@ paths only (no `..`, no leading `/`).
 
 Typical EPUB metadata read (2 small entries, no RAM to speak of): `zip.read(p, "META-INF/container.xml")` → `full-path` of the OPF →
 `zip.read(p, opf)` → title / author / subjects; the first spine page is the book's title page.
+
+### Storage grants — read or write chosen SD folders without the whole-card `library` permission
+`manifest.json`: `"storage": {"read": ["Books"], "write": ["Books/AO3", "Downloads"]}` (`"/"` = the whole card; max 8 entries).
+- **Approval:** the first launch shows a native confirmation (Allow / Deny) that lists the folders in plain words. The approval is
+  stored in a hidden firmware-owned file the app cannot reach; it is valid only for exactly this request, so an update that changes
+  the list asks again. Deny = the app does not start. Until approved, the grants do not exist for the API.
+- **What a grant gives you:** `sd:Folder/...` paths work in `fs.*` and `zip.*`, `gfx.image` and `app.open_book` for read grants;
+  `fs.write/append/write_at/mkdir/remove/rename` and `http.request{save_to="sd:..."}` also work inside WRITE grants (a write grant
+  also reads). A grant covers the folder and everything under it, never a sibling that merely shares the prefix (`Books` does
+  not cover `BooksX`). Without `library`, anything outside the grants fails with `library access not permitted: this path is
+  outside the folders granted to this app`.
+- **Never grantable:** hidden (dot) folders (`.crosspoint` has the WiFi credentials, `.crosslua` other apps' data) and firmware
+  images (`*.bin` cannot be written whatever the grant). Grants naming `/` or `plugins` (write access to other apps' code) get a
+  louder warning on the confirmation screen. Invalid entries (`..`, hidden names, absolute paths, `:`) are ignored.
+- **`library` still means** read-only access to the whole card; grants add write access and narrower read access.
 
 ## wifi / http — network (needs a permission)
 An app must declare it in `manifest.json`, or every call below fails with a clear error (and `wifi.status()` hides the SSID/IP):

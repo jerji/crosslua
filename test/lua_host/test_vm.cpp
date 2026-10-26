@@ -35,6 +35,7 @@ unsigned int uzlib_crc32(const void*, unsigned int, unsigned int) { return 0; }
 }
 
 #include "src/lua/LuaApi.h"
+#include "src/lua/LuaInternal.h"
 #include "src/lua/LuaVm.h"
 
 using namespace crosslua;
@@ -289,6 +290,10 @@ struct MockBackend : Backend {
     *outW = dw; *outH = dh;
     return true;
   }
+  // ---- storage grants mock: (relative path, write?) pairs the "user approved" ---------------------------------------
+  std::vector<std::pair<std::string, bool>> grants;
+  int grantCount() override { return (int)grants.size(); }
+  const char* grantPath(int i, bool* write) override { *write = grants[i].second; return grants[i].first.c_str(); }
   // ---- restart mock: records the requested entry script ---------------------------------------------------------
   std::string restartedTo;
   bool requestRestart(const char* entry) override { restartedTo = entry; return true; }
@@ -1925,6 +1930,149 @@ int main() {
     CHECK(vm.load("t", s2, strlen(s2)));
     CHECK(run(vm, be) == Status::Finished);
     CHECK(be.logs.size() == 1 && be.logs[0].find("main.lua\ttrue\tfalse") == 0 && be.restartedTo.empty());
+  }
+  {
+    TEST("storage grants: parseGrantPath / grantIsDangerous");
+    struct P { const char* in; const char* want; };  // want == nullptr -> rejected
+    const P cases[] = {{"Books", "Books"}, {"Books/AO3/", "Books/AO3"}, {"/", ""}, {"a/b/c", "a/b/c"}, {"My Books", "My Books"},
+                       {"", nullptr}, {"..", nullptr}, {"../x", nullptr}, {"a/../b", nullptr}, {"a/./b", nullptr},
+                       {".hidden", nullptr}, {"a/.b", nullptr}, {"/abs", nullptr}, {"a//b", nullptr}, {"a:b", nullptr},
+                       {"a\\b", nullptr}, {"a\tb", nullptr}, {"//", nullptr}, {".", nullptr}, {"sd:Books", nullptr}};
+    for (const P& c : cases) {
+      char out[120];
+      const bool ok = crosslua::parseGrantPath(c.in, out, sizeof(out));
+      CHECK(ok == (c.want != nullptr));
+      if (c.want) CHECK(ok && !strcmp(out, c.want));
+      if (ok != (c.want != nullptr) || (ok && c.want && strcmp(out, c.want))) printf("    parseGrantPath('%s') -> %d '%s'\n", c.in, ok, ok ? out : "");
+    }
+    char out[120];
+    CHECK(!crosslua::parseGrantPath(std::string(101, 'a').c_str(), out, sizeof(out)));
+    CHECK(!crosslua::parseGrantPath("Books", out, 3));  // does not fit
+    CHECK(crosslua::grantIsDangerous("") && crosslua::grantIsDangerous("plugins") && crosslua::grantIsDangerous("Plugins/x"));
+    CHECK(!crosslua::grantIsDangerous("pluginsX") && !crosslua::grantIsDangerous("Books") && !crosslua::grantIsDangerous("Books/plugins"));
+  }
+  {
+    TEST("storage grants: read/write scope rules, prefix boundary, hidden paths, firmware images, library interplay");
+    struct Case {
+      const char* name;
+      bool library;
+      std::vector<std::pair<std::string, bool>> grants;
+      const char* script;
+      std::vector<std::string> want;
+    };
+    const std::string OUTSIDE = "nil\tlibrary access not permitted: this path is outside the folders granted to this app";
+    const std::string RO = "nil\tread-only location (the app has no write grant for this folder)";
+    const std::string BIN = "nil\tread-only location (firmware images (*.bin) can never be written)";
+    const std::string HIDDEN = "nil\thidden files and folders are not accessible";
+    const Case cases[] = {
+        {"read Books, write Books/AO3 + Downloads, no library", false,
+         {{"Books", false}, {"Books/AO3", true}, {"Downloads", true}},
+         R"LUA(
+           local function show(...) print(...) end
+           show(fs.read("sd:Books/a.epub"))
+           show(fs.read("sd:BooksX/z.txt")); show(fs.read("sd:top.txt")); show(fs.list("sd:"))
+           show(fs.read("sd:.crosspoint/wifi.json"))
+           show(fs.write("sd:Books/new.txt", "x"))
+           show(fs.write("sd:Books/AO3/new.epub", "x"))
+           show(fs.write("sd:Books/AO3/fw.bin", "x"))
+           show(fs.write("sd:Downloads/n.txt", "x")); show(fs.read("sd:Downloads/n.txt"))
+           show(fs.remove("sd:Books/AO3/old.epub")); show(fs.remove("sd:Books/a.epub"))
+           show(fs.rename("sd:Books/AO3/new.epub", "sd:Downloads/m.epub"))
+           show(fs.rename("sd:Downloads/m.epub", "sd:Books/m.epub"))
+           show(fs.write("sd:plugins/evil/main.lua", "x"))
+           show(fs.exists("sd:BooksX/z.txt"))
+           show(fs.write("sd:Books/AO3/x.BIN", "x"))
+         )LUA",
+         {"PK-a", OUTSIDE, OUTSIDE, OUTSIDE, HIDDEN, RO, "true", BIN, "true", "x", "true", RO, "true", RO, OUTSIDE, "false", BIN}},
+        {"library (read everything) + the same grants: writes still only where granted", true,
+         {{"Books", false}, {"Books/AO3", true}, {"Downloads", true}},
+         R"LUA(
+           local function show(...) print(...) end
+           show(fs.read("sd:top.txt")); show(fs.write("sd:top.txt", "y")); show(fs.write("sd:Downloads/q.txt", "y"))
+           show(fs.read("sd:.crosspoint/wifi.json"))
+         )LUA",
+         {"t", RO, "true", HIDDEN}},
+        {"whole-card write grant: everything but hidden paths and *.bin", false, {{"", true}},
+         R"LUA(
+           local function show(...) print(...) end
+           show(fs.write("sd:top.txt", "y")); show(fs.write("sd:plugins/x/main.lua", "y"))
+           show(fs.write("sd:.crosspoint/a", "y")); show(fs.write("sd:fw.bin", "y")); show(fs.read("sd:BooksX/z.txt"))
+         )LUA",
+         {"true", "true", HIDDEN, BIN, "z"}},
+        {"no grants and no library: nothing outside the sandbox", false, {},
+         R"LUA(print(fs.read("sd:Books/a.epub")))LUA",
+         {"nil\tlibrary access not permitted: add \"library\" to \"permissions\" in manifest.json"}},
+        {"library only (no grants): read-only, original message", true, {},
+         R"LUA(print(fs.write("sd:top.txt", "y")))LUA",
+         {"nil\tread-only location (write to 'data:...')"}},
+    };
+    for (const Case& c : cases) {
+      MockBackend be;
+      be.library = c.library;
+      be.grants = c.grants;
+      be.files["/Books/a.epub"] = "PK-a";
+      be.files["/Books/AO3/old.epub"] = "old";
+      be.files["/BooksX/z.txt"] = "z";
+      be.files["/Downloads/d.txt"] = "d";
+      be.files["/plugins/other/main.lua"] = "other app";
+      be.files["/.crosspoint/wifi.json"] = "{\"pw\":\"hunter2\"}";
+      be.files["/top.txt"] = "t";
+      LuaVm vm;
+      CHECK(vm.open(256 * 1024));
+      registerApi(vm, be);
+      CHECK(vm.load("t", c.script, strlen(c.script)));
+      CHECK(run(vm, be, 200000) == Status::Finished);
+      CHECK(be.logs.size() == c.want.size());
+      for (size_t i = 0; i < c.want.size() && i < be.logs.size(); i++) {
+        CHECK(be.logs[i] == c.want[i]);
+        if (be.logs[i] != c.want[i]) printf("    [%s] #%zu got '%s' want '%s'\n", c.name, i + 1, be.logs[i].c_str(), c.want[i].c_str());
+      }
+      for (auto& l : be.logs) CHECK(l.find("hunter2") == std::string::npos && l.find("other app") == std::string::npos);
+    }
+    // what the app did to the card, for the first case: exactly the granted writes happened
+    MockBackend be;
+    be.library = false;
+    be.grants = {{"Books", false}, {"Books/AO3", true}, {"Downloads", true}};
+    be.files["/Books/a.epub"] = "PK-a";
+    be.files["/Books/AO3/old.epub"] = "old";
+    be.files["/top.txt"] = "t";
+    LuaVm vm;
+    CHECK(vm.open(256 * 1024));
+    registerApi(vm, be);
+    const char* s2 = "fs.write('sd:Books/AO3/new.epub', 'N'); fs.write('sd:Downloads/n.txt', 'D'); fs.write('sd:Books/evil.txt', 'E'); "
+                     "fs.write('sd:top.txt', 'T'); fs.remove('sd:Books/a.epub'); fs.remove('sd:Books/AO3/old.epub')";
+    CHECK(vm.load("t", s2, strlen(s2)));
+    CHECK(run(vm, be) == Status::Finished);
+    CHECK(be.files["/Books/AO3/new.epub"] == "N" && be.files["/Downloads/n.txt"] == "D");
+    CHECK(!be.files.count("/Books/evil.txt") && be.files["/top.txt"] == "t" && be.files["/Books/a.epub"] == "PK-a");
+    CHECK(!be.files.count("/Books/AO3/old.epub"));
+  }
+  {
+    TEST("storage grants: http save_to may target a granted sd: folder and nothing else");
+    MockBackend be;
+    be.wifiUp = true;
+    be.library = false;
+    be.grants = {{"Books/AO3", true}, {"Books", false}};
+    be.routes["http://h/a"] = {200, "hello", ""};
+    LuaVm vm;
+    CHECK(vm.open(256 * 1024));
+    registerApi(vm, be);
+    const char* script = R"LUA(
+      local r = http.get("http://h/a", {save_to = "sd:Books/AO3/dl.epub"}); print(r.status, r.bytes)
+      print(http.get("http://h/a", {save_to = "sd:Books/dl.epub"}))        -- read-only grant
+      print(http.get("http://h/a", {save_to = "sd:Books/AO3/fw.bin"}))     -- firmware image
+      print(http.get("http://h/a", {save_to = "sd:top.txt"}))              -- outside every grant
+      r = http.get("http://h/a", {save_to = "data:ok.txt"}); print(r.status)
+    )LUA";
+    CHECK(vm.load("t", script, strlen(script)));
+    CHECK(run(vm, be, 100000) == Status::Finished);
+    const std::string W = "nil\tsave_to must be a data: path or an sd: folder this app has a write grant for";
+    CHECK(be.logs.size() == 5);
+    if (be.logs.size() == 5) {
+      CHECK(be.logs[0] == "200\t5" && be.logs[1] == W && be.logs[2] == W);
+      CHECK(be.logs[3].find("nil\tlibrary access not permitted: this path is outside") == 0 && be.logs[4] == "200");
+    }
+    CHECK(be.files["/Books/AO3/dl.epub"] == "hello" && !be.files.count("/Books/dl.epub") && !be.files.count("/Books/AO3/fw.bin") && !be.files.count("/top.txt"));
   }
   {
     TEST("require: a big module loads in a tight heap (the unstripped copy is dropped before the stripped one loads)");

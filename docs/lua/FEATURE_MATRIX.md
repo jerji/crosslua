@@ -45,7 +45,7 @@ Lua heap). Verdicts in the per-fork files; here only the gaps.
 | decimal arithmetic for Calculator | biscuit/crossplay Calculator | Lua can do string-based decimal add/sub; only worth it if the Calculator gets ported. |
 
 ## Requested by Angel
-- **Per-folder storage grants** (design agreed in chat, implementing after batch A): manifest
+- **Per-folder storage grants** (IMPLEMENTED: host-tested + mutation-checked; on-device approval screen test pending; see API.md "Storage grants"): manifest
   `"storage": {"read": ["Books"], "write": ["Books/AO3","Downloads"]}` (`"/"` allowed for file managers). First launch shows a NATIVE
   confirmation listing the grants in plain words; approval stored in a hidden firmware-owned file (re-prompt when an
   update widens the grants). Hidden/dot paths and firmware images are NEVER grantable; `/plugins` (other apps' code) needs a
@@ -69,7 +69,7 @@ Lua heap). Verdicts in the per-fork files; here only the gaps.
   entry name; WiFi radio torn down first). Alternative/complement: manifest `"apps": [...]` listing several entry
   points under one folder. Until then: one plugin, `main.lua` is a menu that `require`s modules (same VM).
   Measured reason it matters: the Grimoire launcher+shim+spell share one VM (49 KB Lua), leaving a 37 KB largest block, which is
-  below the 46 KB the PNG decoder needs, so `image.draw` cannot run in-VM; a fresh VM per spell (launcher stores the choice in
+  below the 60 KB the PNG decoder needs, so `image.draw` cannot run in-VM; a fresh VM per spell (launcher stores the choice in
   `data:` then `app.restart`) frees ~15-20 KB.
 
 ## Stays native (never Lua)

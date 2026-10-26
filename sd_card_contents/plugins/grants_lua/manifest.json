@@ -1,0 +1,1 @@
+{"title": "Grants test", "description": "storage grants: read Books, write /crosslua_grants", "storage": {"read": ["spells"], "write": ["crosslua_grants"]}}

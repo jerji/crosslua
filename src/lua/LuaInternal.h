@@ -36,6 +36,17 @@ bool resolvePath(Backend& be, const char* spec, char* out, size_t cap, Scope* sc
 // Same, for an already-split scope + relative path.
 bool resolveIn(Backend& be, Scope scope, const char* rel, char* out, size_t cap, const char** err);
 
+// ---- storage grants (see LuaApi.h) ----
+// Normalises a manifest grant ("Books", "Books/AO3/", "/" = whole card) into out ("Books", "Books/AO3", ""). false for
+// anything unsafe: "..", ".", hidden (dot) components, ':' or '\\', control chars, empty components, too long.
+bool parseGrantPath(const char* in, char* out, size_t cap);
+// A grant that reaches other apps' code or the whole card (write): shown with a louder warning.
+bool grantIsDangerous(const char* rel);
+// Does an approved grant cover rel (relative, no leading '/')? write=true needs a WRITE grant.
+bool sdCovered(Backend& b, const char* rel, bool write);
+// May this app WRITE absPath ("/Books/x.epub") in scope sc? data: always; sd: only under a write grant, never *.bin.
+bool writeAllowed(Backend& b, Scope sc, const char* absPath);
+
 void registerFs(lua_State* L, Ctx* c);
 void registerJson(lua_State* L, Ctx* c);
 void registerRequire(lua_State* L, Ctx* c);
