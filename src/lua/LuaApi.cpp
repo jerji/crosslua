@@ -3,6 +3,7 @@
 #include <cstdio>
 #include <cstring>
 
+#include "LuaInternal.h"
 #include "LuaVm.h"
 
 extern "C" {
@@ -14,13 +15,6 @@ extern "C" {
 namespace crosslua {
 namespace {
 
-struct Ctx {
-  Backend* be;
-  LuaVm* vm;
-};
-
-inline Ctx* ctx(lua_State* L) { return static_cast<Ctx*>(lua_touserdata(L, lua_upvalueindex(1))); }
-inline Backend& be(lua_State* L) { return *ctx(L)->be; }
 
 // Coordinates may arrive as floats (x/2); accept any number.
 inline int ci(lua_State* L, int i) { return static_cast<int>(luaL_checknumber(L, i)); }
@@ -201,14 +195,14 @@ int api_print(lua_State* L) {
   return 0;
 }
 
-void reg(lua_State* L, Ctx* c, const char* name, const luaL_Reg* funcs) {
+}  // namespace
+
+void regTable(lua_State* L, Ctx* c, const char* name, const luaL_Reg* funcs) {
   lua_newtable(L);
   lua_pushlightuserdata(L, c);
   luaL_setfuncs(L, funcs, 1);
   lua_setglobal(L, name);
 }
-
-}  // namespace
 
 void registerApi(LuaVm& vm, Backend& backend) {
   lua_State* L = vm.state();
@@ -227,10 +221,13 @@ void registerApi(LuaVm& vm, Backend& backend) {
                                  {"dir", app_dir},     {nullptr, nullptr}};
   static const luaL_Reg sys[] = {{"millis", sys_millis}, {"heap", sys_heap},       {"lua_mem", sys_lua_mem},
                                  {"battery", sys_battery}, {nullptr, nullptr}};
-  reg(L, c, "gfx", gfx);
-  reg(L, c, "input", input);
-  reg(L, c, "app", app);
-  reg(L, c, "system", sys);
+  regTable(L, c, "gfx", gfx);
+  regTable(L, c, "input", input);
+  regTable(L, c, "app", app);
+  regTable(L, c, "system", sys);
+  registerFs(L, c);
+  registerJson(L, c);
+  registerRequire(L, c);
 
   lua_pushlightuserdata(L, c);
   lua_pushcclosure(L, api_print, 1);

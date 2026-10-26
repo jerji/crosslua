@@ -544,3 +544,7 @@ void RenderLock::unlock() {
  *
  */
 bool RenderLock::peek() { return xQueuePeek(activityManager.renderingMutex, NULL, 0) != pdTRUE; };
+
+#ifdef CROSSLUA_DEV
+const char* ActivityManager::currentName() const { return currentActivity ? currentActivity->name.c_str() : "(none)"; }
+#endif

@@ -61,6 +61,9 @@ class LuaVm {
   // Instructions between preemption yields. Lower = more responsive, higher = faster scripts.
   void setPreemptInterval(int instructions);
 
+  // Message of the last unprotected Lua error (panic). Should stay empty; check after a crash.
+  static char panicMessage[128];
+
  private:
   struct Alloc {
     size_t used = 0;

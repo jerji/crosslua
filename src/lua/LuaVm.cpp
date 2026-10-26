@@ -1,5 +1,6 @@
 #include "LuaVm.h"
 
+#include <cstdio>
 #include <cstdlib>
 #include <cstring>
 
@@ -10,6 +11,8 @@ extern "C" {
 }
 
 namespace crosslua {
+
+char LuaVm::panicMessage[128] = {0};
 
 void* LuaVm::allocFn(void* ud, void* ptr, size_t osize, size_t nsize) {
   auto* st = static_cast<Alloc*>(ud);
@@ -60,9 +63,13 @@ bool LuaVm::open(size_t budgetBytes) {
   L_ = lua_newstate(&LuaVm::allocFn, &alloc_);
   if (!L_) return false;
   lua_atpanic(L_, [](lua_State* L) -> int {
-    // Unprotected error (should not happen: everything runs inside a coroutine).
-    // Returning aborts the process; the message is the best we can leave behind.
-    (void)L;
+    // Unprotected error (should not happen: everything runs inside a coroutine). Returning aborts the
+    // process; leave the message where a debugger/serial log can find it.
+    const char* m = lua_tostring(L, -1);
+    snprintf(panicMessage, sizeof(panicMessage), "%s", m ? m : "(non-string)");
+#ifndef ARDUINO
+    fprintf(stderr, "LUA PANIC: %s\n", panicMessage);
+#endif
     return 0;
   });
   openSandbox(L_);
@@ -136,10 +143,19 @@ Status LuaVm::resume(const char* eventName) {
   } else {
     const char* msg = lua_tostring(co_, -1);
     error_ = msg ? msg : "(non-string error)";
-    luaL_traceback(L_, co_, nullptr, 0);  // traceback of the dead coroutine onto L_
-    if (const char* tb = lua_tostring(L_, -1)) {
-      error_ += "\n";
-      error_ += tb;
+    // Traceback of the dead coroutine, built inside a PROTECTED call on the main state: when the script
+    // died of "not enough memory", building the traceback can fail too, and an unprotected failure here
+    // would reach the panic handler and abort the whole process.
+    lua_pushcfunction(L_, [](lua_State* L) -> int {
+      luaL_traceback(L, static_cast<lua_State*>(lua_touserdata(L, 1)), nullptr, 0);
+      return 1;
+    });
+    lua_pushlightuserdata(L_, co_);
+    if (lua_pcall(L_, 1, 1, 0) == LUA_OK) {
+      if (const char* tb = lua_tostring(L_, -1)) {
+        error_ += "\n";
+        error_ += tb;
+      }
     }
     lua_pop(L_, 1);
     status_ = Status::Error;

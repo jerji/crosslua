@@ -36,7 +36,8 @@ constexpr size_t EVENT_QUEUE_MAX = 16;
 // ---------------------------------------------------------------------------
 class LuaAppActivity::Backend final : public crosslua::Backend {
  public:
-  Backend(GfxRenderer& r, std::string name, std::string dir) : r_(r), name_(std::move(name)), dir_(std::move(dir)) {}
+  Backend(GfxRenderer& r, std::string name, std::string dir)
+      : r_(r), name_(std::move(name)), dir_(std::move(dir)), dataDir_("/.crosslua/data/" + name_) {}
 
   std::deque<const char*> events;  // string literals only (see collectInput)
   bool exitRequested = false;
@@ -89,7 +90,66 @@ class LuaAppActivity::Backend final : public crosslua::Backend {
   void log(const char* msg) override { LOG_INF(TAG, "[%s] %s", name_.c_str(), msg); }
   const char* appName() override { return name_.c_str(); }
   const char* appDir() override { return dir_.c_str(); }
+  const char* dataDir() override { return dataDir_.c_str(); }
+  const char* libDir() override { return "/.crosslua/lib"; }
   void requestExit() override { exitRequested = true; }
+
+  // --- storage. Paths arrive pre-sandboxed (app:/data:/lib: scopes) from the API layer. ---
+  int64_t fsSize(const char* path) override {
+    HalFile f = Storage.open(path);
+    if (!f) return -1;
+    if (f.isDirectory()) return -2;
+    return static_cast<int64_t>(f.fileSize());
+  }
+  bool fsReadInto(const char* path, void* dst, size_t n) override {
+    HalFile f;
+    if (!Storage.openFileForRead(TAG, path, f)) return false;
+    return f.read(dst, n) == static_cast<int>(n);
+  }
+  bool fsWrite(const char* path, const void* data, size_t n, bool append) override {
+    if (append) {
+      HalFile f = Storage.open(path, O_WRONLY | O_CREAT | O_APPEND);
+      if (!f) return false;
+      const bool ok = f.write(data, n) == n;
+      f.flush();
+      return ok;
+    }
+    // Atomic replace: a power cut mid-save leaves the previous file intact.
+    std::string tmp = std::string(path) + ".~tmp";
+    {
+      HalFile f = Storage.open(tmp.c_str(), O_WRONLY | O_CREAT | O_TRUNC);
+      if (!f) return false;
+      const bool ok = n == 0 || f.write(data, n) == n;
+      f.flush();
+      if (!ok) {
+        f.close();
+        Storage.remove(tmp.c_str());
+        return false;
+      }
+    }
+    if (Storage.replaceFile(tmp.c_str(), path)) return true;
+    Storage.remove(tmp.c_str());
+    return false;
+  }
+  bool fsMkdir(const char* path) override { return Storage.exists(path) ? fsSize(path) == -2 : Storage.mkdir(path, true); }
+  bool fsRemove(const char* path) override { return fsSize(path) == -2 ? Storage.rmdir(path) : Storage.remove(path); }
+  bool fsListBegin(const char* path) override {
+    listDir_ = Storage.open(path);
+    return listDir_ && listDir_.isDirectory();
+  }
+  bool fsListNext(char* name, size_t cap, bool* isDir) override {
+    for (;;) {
+      HalFile e = listDir_.openNextFile();
+      if (!e) return false;
+      if (e.getName(name, cap) == 0) continue;
+      if (name[0] == '.' && (name[1] == '\0' || (name[1] == '.' && name[2] == '\0'))) continue;
+      const size_t len = strlen(name);
+      if (len > 5 && !strcmp(name + len - 5, ".~tmp")) continue;  // half-written atomic save; hide it
+      *isDir = e.isDirectory();
+      return true;
+    }
+  }
+  void fsListEnd() override { listDir_.close(); }
 
  private:
   static EpdFontFamily::Style toStyle(int s) {
@@ -99,6 +159,8 @@ class LuaAppActivity::Backend final : public crosslua::Backend {
   GfxRenderer& r_;
   std::string name_;
   std::string dir_;
+  std::string dataDir_;
+  HalFile listDir_;
 };
 
 // ---------------------------------------------------------------------------

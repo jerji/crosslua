@@ -911,6 +911,27 @@ void loop() {
         uint8_t* buf = display.getFrameBuffer();
         logSerial.write(buf, bufferSize);
         logSerial.printf("SCREENSHOT_END\n");
+#ifdef CROSSLUA_DEV
+      } else if (cmd.startsWith("BTN:")) {
+        // CrossLua dev/test channel: CMD:BTN:<back|confirm|left|right|up|down>
+        using B = MappedInputManager::Button;
+        const String name = cmd.substring(4);
+        const struct {
+          const char* n;
+          B b;
+        } map[] = {{"back", B::Back}, {"confirm", B::Confirm}, {"left", B::Left},
+                   {"right", B::Right}, {"up", B::Up},         {"down", B::Down}};
+        bool ok = false;
+        for (const auto& m : map) {
+          if (name == m.n) {
+            mappedInputManager.injectTestButton(m.b);
+            ok = true;
+          }
+        }
+        logSerial.printf("BTN_%s:%s\n", ok ? "OK" : "ERR", name.c_str());
+      } else if (cmd == "PING") {
+        logSerial.printf("PONG:%lu:%s\n", millis(), activityManager.currentName());
+#endif
       }
     }
   }

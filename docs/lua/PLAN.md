@@ -67,7 +67,12 @@ Original scope (kept for reference):
 - Hello-world app from SD card renders text and exits on Back
 - Measure flash delta and heap cost; compare with Phase 0 baseline
 
-### Phase 2 — Core API
+### Phase 2 — Core API  (**fs / require / json done; zip, time, ui helpers remaining**)
+Done: `fs` (app:/data:/lib: sandbox, atomic writes), `require` (written in Lua so modules can yield), `json`,
+example app `counter_lua`, dev serial channel + `tools/x4ctl.py`. Cost: +~10 KB flash over Phase 1.
+Bugs found by the host tests along the way: unprotected `luaL_traceback` after an OOM death aborted the process
+(fixed: protected call, regression test); per-token JSON pieces cost ~30 B each (fixed: staged chunks).
+Original scope:
 `gfx` (text/rect/line/bitmap/refresh, via GfxRenderer), `input` (MappedInputManager),
 `fs` (SdFat, path-guarded), `zip`, `time`, `system` (battery, heap, version), `json`,
 `ui` helpers (list/menu/dialog/keyboard in Lua over gfx, mirroring theme).

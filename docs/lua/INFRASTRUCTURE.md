@@ -52,12 +52,27 @@ The Hermes box has no X4 attached. Workflow:
 Recovery: `docs/fix-bricked-xteink.md` in repo. Keep a stock firmware.bin handy.
 Partition table is unchanged from upstream, so stock OTA/flash tools stay compatible.
 
+## Driving a real device from the Hermes box (`tools/x4ctl.py`)
+
+With the X4 attached (USB passthrough to the VM) and a dev firmware (`env:default`) flashed:
+```
+uv run --with pyserial --with pillow tools/x4ctl.py ping                 # PONG uptime screen-name
+uv run --with pyserial --with pillow tools/x4ctl.py btn right confirm    # press buttons
+uv run --with pyserial --with pillow tools/x4ctl.py shot out.png         # screen -> PNG (portrait; --landscape for native)
+uv run --with pyserial --with pillow tools/x4ctl.py log 10 --grep LUA    # heap / app logs
+uv run --with pyserial --with pillow tools/x4ctl.py flash firmware.bin   # app slot only (0x10000)
+```
+Serial protocol (dev builds): `CMD:SCREENSHOT` (upstream), `CMD:BTN:<back|confirm|left|right|up|down>` -> `BTN_OK:<name>`,
+`CMD:PING` -> `PONG:<ms>:<activity>`. Opening the port does not toggle DTR/RTS (that would reset the C3).
+Apps and data reach the SD card over WiFi (CrossPoint's file-transfer web UI / WebDAV) or by moving the card.
+Protocol/decoder test without hardware: `uv run --with pyserial --with pillow test/lua_host/test_x4ctl.py` (fake device on a pty).
+
 ## Host-side tests (no hardware)
 
-Plan: build the Lua host + pure-logic bindings under a native PlatformIO env
-(`env:native` / host g++) with a mock gfx/fs so app scripts can run in CI and
-here. Crossplay's sim approach (`platformio.sim.ini`, em++) is prior art.
-Lua apps themselves are testable with plain `lua5.4` + mock API tables.
+`test/lua_host/run.sh` (needs only gcc/g++; ASAN+UBSAN) builds Lua + `src/lua/` against a mock `Backend` with an
+in-memory SD card and runs ~25 scenarios: sandbox, memory cap, preemption, fs/require/json incl. attack paths, and the real
+example apps from `sd_card_contents/` (so a typo in an example app fails CI). Host pointers are 64-bit, so memory
+numbers there are ~1.6x the 32-bit C3's. Upstream's own tests: `cmake -S test -B build && cmake --build build` (needs tool-cmake from ~/.platformio).
 
 ## Git workflow
 

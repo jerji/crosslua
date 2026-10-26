@@ -45,9 +45,24 @@ class Backend {
   virtual int battery() = 0;  // percent, or -1
   virtual void log(const char* msg) = 0;
 
+  // --- storage ---------------------------------------------------------------
+  // Absolute SD paths only. Sandboxing/validation happens in the API layer, never here.
+  // Rule: no callbacks into Lua from these (a lua_error would longjmp over backend frames).
+  virtual int64_t fsSize(const char* path) = 0;  // bytes; -1 = missing; -2 = directory
+  virtual bool fsReadInto(const char* path, void* dst, size_t n) = 0;  // exactly n bytes
+  virtual bool fsWrite(const char* path, const void* data, size_t n, bool append) = 0;  // atomic unless append
+  virtual bool fsMkdir(const char* path) = 0;   // recursive; ok if it exists
+  virtual bool fsRemove(const char* path) = 0;  // file or empty directory
+  // One iterator at a time; fsListBegin() closes any previous one.
+  virtual bool fsListBegin(const char* path) = 0;
+  virtual bool fsListNext(char* name, size_t cap, bool* isDir) = 0;  // false at end
+  virtual void fsListEnd() = 0;
+
   // --- app -----------------------------------------------------------------
   virtual const char* appName() = 0;
-  virtual const char* appDir() = 0;
+  virtual const char* appDir() = 0;   // read-only app files, e.g. /plugins/foo
+  virtual const char* dataDir() = 0;  // read/write saves, e.g. /.crosslua/data/foo
+  virtual const char* libDir() = 0;   // shared read-only Lua libraries, e.g. /.crosslua/lib
   virtual void requestExit() = 0;
 };
 
