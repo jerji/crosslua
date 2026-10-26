@@ -1,4 +1,4 @@
-# CrossLua app API (v0.18)
+# CrossLua app API (v0.19)
 
 An app is a plugin folder containing `main.lua`, in any plugin root
 (`/plugins`, `/.plugins`, `/.crosspoint/plugins`):
@@ -269,6 +269,16 @@ ends it, `audio.playing()` reports the state, `audio.volume(0..100)` sets the ou
 (the X4 among them) report `nil, "no audio on this board"` from `play` — absence is a normal result, `device.caps().audio`
 tells apps what to expect. **UNTESTED ON HARDWARE** on boards that have a speaker (host-tested + compile-and-link on
 metalio_eink4 only).
+
+## mic — record from the microphone (needs the `microphone` permission AND its approval)
+
+`mic.record(path, seconds)` records 1..30 whole seconds of 16 kHz mono 16-bit PCM into a WAV and returns the bytes written
+(`nil, err` on failure). It blocks while recording and **Back cancels** (`nil, "cancelled"`, the partial file is removed).
+The path follows the `fs.write` rules (`data:` always; `sd:` only inside a folder the app was granted; never `*.bin`) and must
+end in `.wav`. Audio is streamed to the card in 512-byte blocks, so a 30 s recording costs no heap. `mic.level([ms = 100])`
+listens for `ms` (10..2000) and returns the peak sample 0..32767 without storing anything. The approval screen says
+"MICROPHONE: record" (listed first so a long dialog cannot clip it): a recording device is never enabled silently. Boards without a mic (the X4
+among them) report `nil, "no microphone on this board"`. **UNTESTED ON HARDWARE** where a mic exists.
 
 ## epub — book metadata without opening the book
 | call | notes |

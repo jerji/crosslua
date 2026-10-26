@@ -130,6 +130,12 @@ class Backend {
   virtual void audioStop() = 0;
   virtual void audioVolume(int pct) = 0;  // 0..100
   virtual bool audioPlaying() = 0;
+  // --- microphone (boards with the MIC cap; others report "no microphone on this board") ---
+  virtual bool micAllowed() = 0;  // "microphone" manifest permission AND the user approved it
+  // Blocking capture of `seconds` of 16 kHz mono 16-bit PCM into a WAV at `path`; Back cancels (err "cancelled", partial file removed).
+  virtual bool micRecord(const char* path, int seconds, int* bytes, char* err, size_t errCap) = 0;
+  // Peak absolute sample (0..32767) over `ms` of capture, nothing stored.
+  virtual bool micLevel(int ms, int* peak, char* err, size_t errCap) = 0;
 
   // --- mDNS query (ESPmDNS, like biscuit MdnsBrowserActivity) ---
   virtual int mdnsQuery(const char* service, const char* proto, char* err, size_t errCap) = 0;  // >= 0 count, -1 error

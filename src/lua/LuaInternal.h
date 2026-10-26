@@ -57,12 +57,19 @@ void registerZip(lua_State* L, Ctx* c);
 void registerCrypto(lua_State* L, Ctx* c);
 void registerSock(lua_State* L, Ctx* c);
 void registerAudio(lua_State* L, Ctx* c);
+void registerMic(lua_State* L, Ctx* c);
+// Same write rules as fs.write (data: always, sd: only with a write grant, never *.bin) for bindings outside LuaFs.cpp.
+// On failure pushes nil,msg and returns false. ensureParentDir creates the parent folder (recursive) when missing.
+bool writePathArg(lua_State* L, int i, char* out, size_t cap);
+bool ensureParentDir(Backend& b, const char* path);
 void registerGfxSaveBmp(lua_State* L);  // adds gfx.save_bmp / gfx.image to the eager gfx table (they must not wait for fs/zip)
 void registerGfxImage(lua_State* L);
 
 // Shared by wifi.*, http.* and net.*: what an app sees when its manifest lacks the permission.
 inline constexpr const char* NET_DENIED = "network not permitted: add \"permissions\": [\"network\"] to this app's manifest.json";
 // For net.listen and net.accept (exposes the device to the LAN): an extra permission beyond the base network permission.
+inline constexpr const char* MIC_DENIED =
+    "microphone not permitted: add \"permissions\": [\"microphone\"] to this app's manifest.json (and approve it)";
 inline constexpr const char* AUDIO_DENIED =
     "audio not permitted: add \"permissions\": [\"audio\"] to this app's manifest.json (and approve it)";
 inline constexpr const char* LISTEN_DENIED = "listen not permitted: add \"permissions\": [\"listen\"] to this app's manifest.json";

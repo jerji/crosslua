@@ -61,7 +61,7 @@ Source of truth: `freeink-sdk/libs/hardware/BoardConfig` (16 flags) and the libs
 | `LED` | LedManager | `led.count()`, `led.set(i, r, g, b)`, `led.all(r, g, b)`, `led.flash(r, g, b, n)`, `led.off()` | **done** (host-tested, 21 mutants; absence path verified on the X4; hardware path UNTESTED) |
 | `RTC` | Rtc | caps flag; `time.*` already uses the trusted clock; later `device.wake_in(seconds)` (RTC wake timer for alarm-clock apps) | caps flag **done**; wake_in park |
 | `AUDIO` | AudioManager | `audio.play(path [, loop])` (WAV from the SD card, same path rules as `fs`), `audio.stop()`, `audio.volume(pct)`, `audio.playing()` | **done** (host-tested, 9 mutants; absence path verified on the X4; hardware path UNTESTED — needs a board with a speaker) |
-| `MIC` | Microphone | `mic.read(samples)` / `mic.record(path, seconds)`; a recording device must be consented to: `"microphone"` permission with an approval screen, never silent | permission |
+| `MIC` | Microphone | `mic.record(path, seconds)` (streamed WAV, Back cancels) / `mic.level([ms])`; a recording device must be consented to: `"microphone"` permission with an approval screen, never silent | **done** (host-tested, 12 mutants; absence path on the X4; hardware path UNTESTED, needs a board with a mic) |
 | `BLE_KEYBOARD` / `BLE_HID_HOST` | BlePageTurner / HID host | key events into `input.wait` + caps; behind a `"ble"` permission | park |
 | `COLOR` | display / gfx | needs a colour `gfx` model (RGB565 palette, `gfx.color(r,g,b)`); caps flag first | caps flag **done**; rest park |
 | `NET_TLS13` | network | caps flag `tls13` so apps know what `http` can talk to | caps flag **done** |

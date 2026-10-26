@@ -318,6 +318,26 @@ struct MockBackend : Backend {
   void audioStop() override { audioStops++; audioPlayingState = false; }
   void audioVolume(int pct) override { audioVolumes++; audioVolumeLast = pct; }
   bool audioPlaying() override { return audioPlayingState; }
+  // --- microphone mock ---
+  bool micPermitted = false, micApproved = true, micOk = true;
+  struct MicCall { std::string path; int seconds; };
+  std::vector<MicCall> micRecords;
+  std::vector<int> micLevels;  // ms of every level() that reached the backend
+  int micPeak = 1234;
+  bool micAllowed() override { return micPermitted && micApproved; }
+  bool micRecord(const char* path, int seconds, int* bytes, char* err, size_t errCap) override {
+    if (!micOk) { snprintf(err, errCap, "no microphone on this board"); return false; }
+    micRecords.push_back({path, seconds});
+    files[path] = std::string(44 + seconds * 32000, 'W');  // what the firmware would have written
+    *bytes = static_cast<int>(files[path].size());
+    return true;
+  }
+  bool micLevel(int ms, int* peak, char* err, size_t errCap) override {
+    if (!micOk) { snprintf(err, errCap, "no microphone on this board"); return false; }
+    micLevels.push_back(ms);
+    *peak = micPeak;
+    return true;
+  }
   // --- mDNS mock ---
   struct MdnsResult {
     std::string hostname;
@@ -4197,6 +4217,105 @@ int main() {
       CHECK(run(vm, be, 100000) == Status::Finished);
       CHECK(be.logs.size() == 1 && be.logs[0] == "nil\tnot a .wav file");
       CHECK(be.audioPlays.empty());
+    }
+  }
+  {
+    TEST("mic: record/level through the mock; permission+approval gates; write sandbox; argument validation");
+    {
+      MockBackend be;  // happy path
+      be.micPermitted = true;
+      LuaVm vm;
+      CHECK(vm.open(128 * 1024));
+      registerApi(vm, be);
+      const char* script = R"LUA(
+        print(mic.record("data:rec/a.wav", 2))
+        print(mic.level())
+        print(mic.level(250))
+        print(#fs.read("data:rec/a.wav", 0, 8))
+      )LUA";
+      CHECK(vm.load("t", script, strlen(script)));
+      CHECK(run(vm, be, 100000) == Status::Finished);
+      CHECK(be.logs.size() == 4);
+      if (be.logs.size() == 4) {
+        CHECK(be.logs[0] == "64044" && be.logs[1] == "1234" && be.logs[2] == "1234" && be.logs[3] == "8");
+      }
+      CHECK(be.micRecords.size() == 1 && be.micRecords[0].seconds == 2);
+      CHECK(be.micRecords.size() == 1 && be.micRecords[0].path == "/.crosslua/data/test/rec/a.wav");
+      CHECK(be.micLevels.size() == 2 && be.micLevels[0] == 100 && be.micLevels[1] == 250);
+    }
+    {
+      MockBackend be;  // permission not declared
+      LuaVm vm;
+      CHECK(vm.open(128 * 1024));
+      registerApi(vm, be);
+      const char* script = "print(mic.record('data:a.wav', 1))\nprint(mic.level())";
+      CHECK(vm.load("t", script, strlen(script)));
+      CHECK(run(vm, be, 100000) == Status::Finished);
+      CHECK(be.logs.size() == 2);
+      for (size_t i = 0; i < be.logs.size(); i++) CHECK(be.logs[i].rfind("nil\tmicrophone not permitted", 0) == 0);
+      CHECK(be.micRecords.empty() && be.micLevels.empty());
+    }
+    {
+      MockBackend be;  // declared, not approved
+      be.micPermitted = true;
+      be.micApproved = false;
+      LuaVm vm;
+      CHECK(vm.open(128 * 1024));
+      registerApi(vm, be);
+      const char* script = "print(mic.record('data:a.wav', 1))\nprint(mic.level())";
+      CHECK(vm.load("t", script, strlen(script)));
+      CHECK(run(vm, be, 100000) == Status::Finished);
+      CHECK(be.logs.size() == 2);
+      for (size_t i = 0; i < be.logs.size(); i++) CHECK(be.logs[i].rfind("nil\tmicrophone not permitted", 0) == 0);
+      CHECK(be.micRecords.empty() && be.micLevels.empty());
+    }
+    {
+      MockBackend be;  // argument validation + the write sandbox: nothing invalid reaches the backend
+      be.micPermitted = true;
+      LuaVm vm;
+      CHECK(vm.open(128 * 1024));
+      registerApi(vm, be);
+      const char* script = R"LUA(
+        print(mic.record("data:a.mp3", 1))
+        print(mic.record("data:a.wav", 0))
+        print(mic.record("data:a.wav", 31))
+        print(mic.record("data:a.wav", 1.5))
+        print(mic.record("app:a.wav", 1))
+        print(mic.record("sd:rec.wav", 1))
+        print(mic.level(9))
+        print(mic.level(2001))
+        print(mic.level(50.5))
+        print(fs.mkdir("data:adir.wav"))
+        print(mic.record("data:adir.wav", 1))
+      )LUA";
+      CHECK(vm.load("t", script, strlen(script)));
+      CHECK(run(vm, be, 100000) == Status::Finished);
+      const char* want[] = {"nil\tpath must end in .wav", "nil\tseconds must be an integer 1..30",
+                            "nil\tseconds must be an integer 1..30", "nil\tseconds must be an integer 1..30",
+                            "nil\tread-only location (write to 'data:...')", "nil\tread-only location (write to 'data:...')",
+                            "nil\tms must be an integer 10..2000", "nil\tms must be an integer 10..2000",
+                            "nil\tms must be an integer 10..2000", "true", "nil\tis a directory"};
+      const size_t N = sizeof(want) / sizeof(want[0]);
+      CHECK(be.logs.size() == N);
+      if (be.logs.size() != N || getenv("DUMP_LOGS")) for (size_t i = 0; i < be.logs.size(); i++) printf("    mic log[%zu] '%s'\n", i, be.logs[i].c_str());
+      for (size_t i = 0; i < N && i < be.logs.size(); i++) {
+        CHECK(be.logs[i] == want[i]);
+        if (be.logs[i] != want[i]) printf("    mic #%zu got '%s' want '%s'\n", i + 1, be.logs[i].c_str(), want[i]);
+      }
+      CHECK(be.micRecords.empty() && be.micLevels.empty());
+    }
+    {
+      MockBackend be;  // absent hardware: the backend's own message passes through and nothing is left behind
+      be.micPermitted = true;
+      be.micOk = false;
+      LuaVm vm;
+      CHECK(vm.open(128 * 1024));
+      registerApi(vm, be);
+      const char* script = "print(mic.record('data:a.wav', 1))\nprint(mic.level(100))";
+      CHECK(vm.load("t", script, strlen(script)));
+      CHECK(run(vm, be, 100000) == Status::Finished);
+      CHECK(be.logs.size() == 2);
+      for (size_t i = 0; i < be.logs.size(); i++) CHECK(be.logs[i] == "nil\tno microphone on this board");
     }
   }
   printf(g_fail ? "\n%d FAILED\n" : "\nALL PASSED\n", g_fail);

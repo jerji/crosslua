@@ -122,6 +122,6 @@ On the X4 (tests/udp.lua in the hub, against `udp_server.py`): open(0) with an e
   accept window is open (15 s). WiFi auto-join can fail once ("Saved network failed") and need a manual confirm on
   the picker, which shifts the whole timeline - the test script polls for the Ready line before connecting.
 - Listen permission (done): manifest needs `"network"` AND `"listen"`, and the listen request shares the grants
-  approval flow: the confirmation screen shows "NETWORK: accept incoming connections from your local network", the
+  approval flow: the confirmation screen shows "NETWORK: listen", the
   stored canonical record gains a `p:listen` line, and any manifest change re-asks. `listenAllowed()` = network flag
   AND listen flag AND approved; both `net.listen` and `net.accept` check it (2 mutants in mut20.py, all caught).

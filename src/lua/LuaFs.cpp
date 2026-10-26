@@ -575,4 +575,10 @@ void registerRequire(lua_State* L, Ctx* c) {
   lua_setglobal(L, "load");
 }
 
+bool writePathArg(lua_State* L, int i, char* out, size_t cap) {
+  Scope sc;
+  return pathArg(L, i, true, out, cap, &sc);
+}
+bool ensureParentDir(Backend& b, const char* path) { return ensureParent(b, path); }
+
 }  // namespace crosslua

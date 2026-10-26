@@ -5,6 +5,7 @@
 #include <DevCapture.h>
 #include <AudioManager.h>
 #include <Buzzer.h>
+#include <Microphone.h>
 #include <EnvironmentSensor.h>
 #include <Epub.h>
 #include <functional>
@@ -119,12 +120,13 @@ class LuaAppActivity::Backend final : public crosslua::Backend {
 
   // ---- storage grants ("storage": {"read": [...], "write": [...]} in manifest.json) ------------------------------
   // Parsed from the manifest but INVISIBLE to the API (grantCount() == 0) until the user approved exactly this request.
-  bool hasGrantRequest() const { return !requested_.empty() || listenReq_ || audioReq_; }
+  bool hasGrantRequest() const { return !requested_.empty() || listenReq_ || audioReq_ || micReq_; }
   // Canonical text of the request; an approval is valid only for an identical request (any change asks again).
   std::string grantCanonical() const {
     std::vector<std::string> v;
     for (const Grant& g : requested_) v.push_back(std::string(g.write ? "w:" : "r:") + g.rel);
     if (listenReq_) v.push_back("p:listen");  // accepting connections from the LAN is part of the approved request too
+    if (micReq_) v.push_back("p:microphone");  // a recording device: consented to explicitly, never silently
     if (audioReq_) v.push_back("p:audio");    // playing sounds is consented to for the same reason (a device that talks)
     std::sort(v.begin(), v.end());
     std::string s;
@@ -157,8 +159,10 @@ class LuaAppActivity::Backend final : public crosslua::Backend {
       if (g.write && crosslua::grantIsDangerous(g.rel.c_str())) *danger = true;
     }
     std::string s;
-    if (listenReq_) s += "NETWORK: accept incoming connections from your local network\n";
-    if (audioReq_) s += "AUDIO: play sounds through the speaker\n";
+    // Short lines, the most sensitive first: the dialog clips long text and a recording device must never be cut off.
+    if (micReq_) s += "MICROPHONE: record\n";
+    if (listenReq_) s += "NETWORK: listen\n";
+    if (audioReq_) s += "SPEAKER: play\n";
     if (!rd.empty()) s += "READ: " + rd + "\n";
     if (!wr.empty()) s += "WRITE: " + wr + "\n";
     if (*danger) s += "\nWARNING: this includes the whole card or the plugins folder, i.e. other apps' code.";
@@ -168,8 +172,9 @@ class LuaAppActivity::Backend final : public crosslua::Backend {
   // Title of the confirmation screen: says what is being asked for.
   std::string grantTitle(const std::string& app) const {
     const bool files = !requested_.empty();
-    const int n = (listenReq_ ? 1 : 0) + (audioReq_ ? 1 : 0) + (files ? 1 : 0);
+    const int n = (listenReq_ ? 1 : 0) + (audioReq_ ? 1 : 0) + (micReq_ ? 1 : 0) + (files ? 1 : 0);
     if (n > 1) return app + " wants access to your device";
+    if (micReq_) return app + " wants to use the microphone";
     if (listenReq_) return app + " wants to accept connections";
     if (audioReq_) return app + " wants to play sounds";
     return app + " wants access to your files";
@@ -330,6 +335,7 @@ class LuaAppActivity::Backend final : public crosslua::Backend {
     if (led_.begun()) led_.clear();
     if (imu_.present()) imu_.sleep();  // the tilt page-turner wakes it again when it needs it
     audio_.stop();                     // waits for the playback task, so the WAV callbacks die with us
+    if (mic_.present()) mic_.end();    // powers the mic rail down
     if (audioFile_) audioFile_.close();
   }
   SensorStatus motionRead(Motion* o) override {
@@ -1142,6 +1148,7 @@ class LuaAppActivity::Backend final : public crosslua::Backend {
       else if (p.is<const char*>() && !strcmp(p.as<const char*>(), "library")) lib_ = true;
       else if (p.is<const char*>() && !strcmp(p.as<const char*>(), "listen")) listenReq_ = true;
       else if (p.is<const char*>() && !strcmp(p.as<const char*>(), "audio")) audioReq_ = true;
+      else if (p.is<const char*>() && !strcmp(p.as<const char*>(), "microphone")) micReq_ = true;
     for (int w = 0; w < 2; w++)
       for (JsonVariantConst v : doc["storage"][w ? "write" : "read"].as<JsonArrayConst>()) {
         char rel[104];
@@ -1211,6 +1218,88 @@ class LuaAppActivity::Backend final : public crosslua::Backend {
     audio_.setVolume(static_cast<uint8_t>(pct));
   }
   bool audioPlaying() override { return audioBegun_ && audio_.isPlaying(); }
+  // --- microphone: begun on first use, released in ~Backend. 16 kHz mono PCM; the WAV is streamed to the card in 512-byte
+  // blocks (no heap buffer), the header sizes are patched at the end. Back (physical or x4ctl-injected) cancels.
+  freeink::Microphone mic_;
+  bool micAllowed() override { return micReq_ && approved_; }
+  bool micBegin(char* err, size_t errCap) {
+    if (mic_.present()) return true;
+    if (!BoardConfig::hasMic() || !mic_.begin(16000)) { snprintf(err, errCap, "no microphone on this board"); return false; }
+    return true;
+  }
+  bool micCancelRequested() {
+    devcapture::pollSerial();
+    in_.update(true);
+    if (!(in_.wasPressed(MappedInputManager::Button::Back) || in_.isPressed(MappedInputManager::Button::Back))) return false;
+    for (int i = 0; i < 200 && in_.isPressed(MappedInputManager::Button::Back); i++) {  // swallow the release like http/connect
+      delay(10);
+      in_.update(true);
+    }
+    events.clear();
+    evPos.clear();
+    return true;
+  }
+  static void le32(uint8_t* p, uint32_t v) { p[0] = v; p[1] = v >> 8; p[2] = v >> 16; p[3] = v >> 24; }
+  static void wavHeader(uint8_t h[44], uint32_t dataBytes) {
+    memcpy(h, "RIFF\0\0\0\0WAVEfmt \x10\0\0\0\x01\0\x01\0", 24);  // up to and including the channel count
+    le32(h + 4, 36 + dataBytes);
+    le32(h + 24, 16000);       // sample rate
+    le32(h + 28, 16000 * 2);   // byte rate
+    h[32] = 2; h[33] = 0;      // block align
+    h[34] = 16; h[35] = 0;     // bits per sample
+    memcpy(h + 36, "data", 4);
+    le32(h + 40, dataBytes);
+  }
+  bool micRecord(const char* path, int seconds, int* bytes, char* err, size_t errCap) override {
+    if (!micBegin(err, errCap)) return false;
+    HalFile f = Storage.open(path, O_WRONLY | O_CREAT | O_TRUNC);
+    if (!f) { snprintf(err, errCap, "cannot open the file for writing"); return false; }
+    uint8_t hdr[44];
+    wavHeader(hdr, 0);
+    if (f.write(hdr, sizeof(hdr)) != sizeof(hdr)) { f.close(); Storage.remove(path); snprintf(err, errCap, "write error"); return false; }
+    const uint32_t wantBytes = static_cast<uint32_t>(seconds) * 16000u * 2u;
+    uint32_t got = 0;
+    int16_t buf[256];
+    uint32_t lastData = millis();
+    while (got < wantBytes) {
+      if (micCancelRequested()) { f.close(); Storage.remove(path); snprintf(err, errCap, "cancelled"); return false; }
+      const size_t room = std::min<size_t>(256, (wantBytes - got) / 2);
+      const int n = mic_.read(buf, room, 100);
+      if (n < 0) { f.close(); Storage.remove(path); snprintf(err, errCap, "microphone read failed"); return false; }
+      if (n == 0) {
+        if (millis() - lastData > 2000) { f.close(); Storage.remove(path); snprintf(err, errCap, "microphone stopped delivering data"); return false; }
+        continue;
+      }
+      lastData = millis();
+      if (f.write(reinterpret_cast<uint8_t*>(buf), n * 2) != static_cast<size_t>(n) * 2) {
+        f.close(); Storage.remove(path); snprintf(err, errCap, "write error (card full?)"); return false;
+      }
+      got += static_cast<uint32_t>(n) * 2;
+    }
+    wavHeader(hdr, got);
+    const bool patched = f.seek(0) && f.write(hdr, sizeof(hdr)) == sizeof(hdr);
+    f.close();
+    if (!patched) { Storage.remove(path); snprintf(err, errCap, "write error"); return false; }
+    *bytes = static_cast<int>(got + 44);
+    return true;
+  }
+  bool micLevel(int ms, int* peak, char* err, size_t errCap) override {
+    if (!micBegin(err, errCap)) return false;
+    int16_t buf[256];
+    int p = 0;
+    const uint32_t t0 = millis();
+    while (millis() - t0 < static_cast<uint32_t>(ms)) {
+      if (micCancelRequested()) { snprintf(err, errCap, "cancelled"); return false; }
+      const int n = mic_.read(buf, 256, 50);
+      if (n < 0) { snprintf(err, errCap, "microphone read failed"); return false; }
+      for (int i = 0; i < n; i++) {
+        const int a = buf[i] < 0 ? -static_cast<int>(buf[i]) : buf[i];
+        if (a > p) p = a;
+      }
+    }
+    *peak = p > 32767 ? 32767 : p;
+    return true;
+  }
 
     // --- mDNS ---
   // ESPmDNS needs begin() (responder + query machinery) before queryService works; without it the
@@ -1241,6 +1330,7 @@ class LuaAppActivity::Backend final : public crosslua::Backend {
   bool lib_ = false;
   bool listenReq_ = false;  // manifest asked for "listen" (effective only after approval)
   bool audioReq_ = false;   // manifest asked for "audio" (effective only after approval)
+  bool micReq_ = false;     // manifest asked for "microphone" (effective only after approval)
   struct Grant {
     std::string rel;
     bool write;
