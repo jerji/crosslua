@@ -1,4 +1,5 @@
 // fs.* and the module loader behind require(). Sandboxed to app:/data:/lib: scopes.
+#include <algorithm>
 #include <cstdio>
 #include <cstring>
 
@@ -291,6 +292,29 @@ int fs_list(lua_State* L) {
 }
 
 // ---- require support ---------------------------------------------------------
+// Feeds the Lua parser from the SD card, MOD_PIECE bytes at a time (the piece buffer lives in the same userdata).
+constexpr size_t MOD_PIECE = 1024;
+struct ModReader {
+  Backend* be;
+  const char* path;
+  size_t size, off;
+  bool ioError;
+  char piece[MOD_PIECE];
+};
+const char* modReaderFn(lua_State*, void* ud, size_t* sz) {
+  ModReader* r = static_cast<ModReader*>(ud);
+  const size_t n = std::min(MOD_PIECE, r->size - r->off);
+  *sz = 0;
+  if (n == 0) return nullptr;
+  if (!r->be->fsReadInto(r->path, r->piece, n, r->off)) {
+    r->ioError = true;
+    return nullptr;
+  }
+  r->off += n;
+  *sz = n;
+  return r->piece;
+}
+
 // __find(name) -> compiled chunk, chunkname | nil, errmsg. Search: app:, then lib:; <rel>.lua then <rel>/init.lua.
 int mod_find(lua_State* L) {
   const char* name = luaL_checkstring(L, 1);
@@ -322,11 +346,18 @@ int mod_find(lua_State* L) {
     if (!resolveIn(be(L), t.sc, relFile, path, sizeof(path), &err)) continue;
     const int64_t size = be(L).fsSize(path);
     if (size >= 0 && static_cast<size_t>(size) <= MAX_MODULE_BYTES) {
-      void* buf = lua_newuserdatauv(L, static_cast<size_t>(size) + 1, 0);
-      if (!be(L).fsReadInto(path, buf, static_cast<size_t>(size), 0)) return pushFail(L, "module read error");
+      // Stream the file through the parser in small pieces: the source text never sits in the Lua heap next to the
+      // compiled function, which is what used to push a 18 KB module past a ~80 KB budget.
+      auto* rd = static_cast<ModReader*>(lua_newuserdatauv(L, sizeof(ModReader), 0));
+      rd->be = &be(L);
+      rd->path = path;
+      rd->size = static_cast<size_t>(size);
+      rd->off = 0;
+      rd->ioError = false;
       char chunk[MAX_PATH_LEN + 16];
       snprintf(chunk, sizeof(chunk), "@%s:%s", t.scName, relFile);
-      const int rc = ctx(L)->vm->loadText(L, static_cast<const char*>(buf), static_cast<size_t>(size), chunk);
+      const int rc = ctx(L)->vm->loadReader(L, modReaderFn, rd, chunk);
+      if (rd->ioError) return pushFail(L, "module read error");
       if (rc != LUA_OK) {
         // error message is on top; return nil,msg
         lua_pushnil(L);

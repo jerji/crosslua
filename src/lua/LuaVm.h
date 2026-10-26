@@ -58,6 +58,9 @@ class LuaVm {
   bool stripDebug() const { return stripDebug_; }
   // Compile a TEXT chunk onto L's stack (like luaL_loadbufferx(..., "t")), honouring stripDebug(). Returns a lua status code.
   int loadText(lua_State* L, const char* buf, size_t n, const char* chunkName);
+  // Same, but pulls the source through a lua_Reader (e.g. straight from the SD card in small pieces) so the whole text
+  // never has to sit in the Lua heap next to the compiled function: a module's compile peak drops by its source size.
+  int loadReader(lua_State* L, const char* (*reader)(lua_State*, void*, size_t*), void* ud, const char* chunkName);
   size_t usedBytes() const { return alloc_.used; }
   size_t peakBytes() const { return alloc_.peak; }
   size_t budgetBytes() const { return alloc_.budget; }
@@ -96,6 +99,7 @@ class LuaVm {
   lua_State* L_ = nullptr;   // main state (owns allocator)
   lua_State* co_ = nullptr;  // script coroutine
   Alloc alloc_;
+  int finishLoad(lua_State* L, int rc, const char* chunkName);
   bool stripDebug_ = true;
   Status status_ = Status::Idle;
   int32_t waitMs_ = -1;

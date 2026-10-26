@@ -118,7 +118,15 @@ int dumpWriter(lua_State*, const void* data, size_t sz, void* ud) {
 // No Lua error can be raised between the malloc and the free below (lua_dump never allocates through Lua and
 // lua_load is protected), so the C buffer can't leak. It is a transient of one chunk's size.
 int LuaVm::loadText(lua_State* L, const char* buf, size_t n, const char* chunkName) {
-  int rc = luaL_loadbufferx(L, buf, n, chunkName, "t");
+  return finishLoad(L, luaL_loadbufferx(L, buf, n, chunkName, "t"), chunkName);
+}
+
+int LuaVm::loadReader(lua_State* L, const char* (*reader)(lua_State*, void*, size_t*), void* ud, const char* chunkName) {
+  return finishLoad(L, lua_load(L, reader, ud, chunkName, "t"), chunkName);  // "t": bytecode is refused by the parser
+}
+
+// Tail shared by both loaders: `rc` is the compile status, the function (or the error message) is on top of L.
+int LuaVm::finishLoad(lua_State* L, int rc, const char* chunkName) {
   if (rc != LUA_OK || !stripDebug_) return rc;
   DumpBuf d;
   if (lua_dump(L, dumpWriter, &d, 1) != 0 || d.failed) {

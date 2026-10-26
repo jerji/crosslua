@@ -107,9 +107,10 @@ struct MockBackend : Backend {
     auto it = files.lower_bound(pre);
     return (it != files.end() && it->first.rfind(pre, 0) == 0) ? -2 : -1;
   }
+  std::string failReadPath;  // reads of this path fail (a card that goes away mid-read)
   bool fsReadInto(const char* p, void* dst, size_t n, size_t offset) override {
     auto f = files.find(p);
-    if (f == files.end() || offset + n > f->second.size()) return false;
+    if (f == files.end() || offset + n > f->second.size() || failReadPath == p) return false;
     memcpy(dst, f->second.data() + offset, n);
     return true;
   }
@@ -1949,18 +1950,37 @@ int main() {
       peakOk = vm.peakBytes();
       if (getenv("DUMP_LOGS")) printf("   module %zu B, peak with a huge budget %zu B\n", mod.size(), peakOk);
     }
-    // measured on the host: new order peaks at ~128 KB, the old order (full + stripped copies together) at ~181 KB
-    CHECK(peakOk > mod.size() && peakOk < 150000);
+    // measured on the host: streaming + drop-the-full-copy peaks at ~111 KB; without the streaming ~128 KB; the original
+    // load order (source buffer + full + stripped copies together) ~181 KB
+    CHECK(peakOk > mod.size() && peakOk < 120000);
     MockBackend be;
     be.files["/plugins/test/big.lua"] = mod;
     LuaVm vm;
-    vm.open(150000);  // between the two: only the new order fits
+    vm.open(120000);  // below both older variants: only streaming + early drop fits
     registerApi(vm, be);
     const char* sc = "local ok, m = pcall(require, 'big'); print(ok, ok and m.f7(3, 4))";
     CHECK(vm.load("t", sc, strlen(sc)));
     CHECK(run(vm, be) == Status::Finished);
     if (getenv("DUMP_LOGS")) for (auto& l : be.logs) printf("   tight: %s\n", l.c_str());
     CHECK(be.logs.size() == 1 && be.logs[0] == "true\t20");
+  }
+  {
+    TEST("require: a module that cannot be read (card error) is a clean error; modules over 1 KB stream correctly");
+    MockBackend be;
+    std::string big = "local t = {}\n";
+    for (int i = 0; i < 300; i++) { char l[64]; snprintf(l, sizeof(l), "t[%d] = 'line number %d'\n", i, i); big += l; }
+    big += "return t\n";   // ~8 KB: several 1 KB pieces, with a token split across a piece boundary somewhere
+    be.files["/plugins/test/broken.lua"] = "return 1";
+    be.files["/plugins/test/long.lua"] = big;
+    be.failReadPath = "/plugins/test/broken.lua";
+    LuaVm vm;
+    CHECK(vm.open(256 * 1024));
+    registerApi(vm, be);
+    const char* sc = "local ok, e = pcall(require, 'broken'); print(ok, tostring(e):find('module read error', 1, true) ~= nil)\n"
+                     "local t = require('long'); print(#t, t[0], t[299])";
+    CHECK(vm.load("t", sc, strlen(sc)));
+    CHECK(run(vm, be) == Status::Finished);
+    CHECK(be.logs.size() == 2 && be.logs[0] == "false\ttrue" && be.logs[1] == "299\tline number 0\tline number 299");
   }
   {
     TEST("require: errors - missing, bad names, syntax error, runtime error, circular, bytecode");
