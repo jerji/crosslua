@@ -140,7 +140,10 @@ struct MockBackend : Backend {
   bool netAllowed() override { return net; }
 
   // raw TCP sockets: scripted peers
-  struct MockSock { bool used = false; std::string host; int port = 0; std::string rx, tx; bool peerClosed = false; };
+  struct MockSock { bool used = false; int kind = 0; std::string host; int port = 0; std::string rx, tx; bool peerClosed = false; };
+  int udpPortCounter = 0;        // ephemeral ports for udp_open(0)
+  bool udpSendFail = false;      // udpSend reports an error on demand
+  const char* udpPeerIp = "192.0.2.9";
   MockSock socks[Backend::MAX_SOCKETS];
   std::map<std::string, std::string> sockReply, dnsMap;  // "host:port" -> bytes the peer sends right after connect; name -> ip
   std::set<std::string> sockRefused, sockClosesAfterReply;
@@ -182,6 +185,7 @@ struct MockBackend : Backend {
       if (socks[i].used) continue;
       socks[i] = MockSock{};
       socks[i].used = true;
+      socks[i].kind = 1;
       socks[i].host = host;
       socks[i].port = port;
       auto r = sockReply.find(key);
@@ -193,6 +197,43 @@ struct MockBackend : Backend {
     return -1;
   }
   bool netIsOpen(int s) override { return s >= 0 && s < Backend::MAX_SOCKETS && socks[s].used; }
+  int netKind(int s) override { return netIsOpen(s) ? socks[s].kind : 0; }
+  int udpOpen(int port, char* err, size_t errCap) override {
+    for (int i = 0; i < Backend::MAX_SOCKETS; i++) {
+      if (socks[i].used) continue;
+      socks[i] = MockSock{};
+      socks[i].used = true;
+      socks[i].kind = 2;
+      socks[i].port = port != 0 ? port : 50000 + ++udpPortCounter;
+      return i;
+    }
+    snprintf(err, errCap, "no free slot (mock)");
+    return -1;
+  }
+  int udpSend(int s, const char* host, int port, const void* d, size_t n, char* err, size_t errCap) override {
+    if (!netIsOpen(s) || socks[s].kind != 2) {
+      snprintf(err, errCap, "not a UDP socket (mock)");
+      return -1;
+    }
+    if (udpSendFail) {
+      snprintf(err, errCap, "send failed (mock)");
+      return -1;
+    }
+    txLog += std::string(host) + ":" + std::to_string(port) + "<-" + std::string(static_cast<const char*>(d), n);
+    auto r = sockReply.find(std::string(host) + ":" + std::to_string(port));
+    if (r != sockReply.end()) socks[s].rx += r->second;  // the scripted peer answers
+    return static_cast<int>(n);
+  }
+  int udpRecv(int s, void* buf, size_t max, char* ip, size_t ipCap, int* port) override {
+    if (!netIsOpen(s) || socks[s].kind != 2) return -1;
+    if (socks[s].rx.empty()) return 0;
+    const size_t n = std::min(max, socks[s].rx.size());
+    memcpy(buf, socks[s].rx.data(), n);
+    socks[s].rx.erase(0, n);
+    snprintf(ip, ipCap, "%s", udpPeerIp);
+    *port = 9098;
+    return static_cast<int>(n);
+  }
   int netAvailable(int s) override { return netIsOpen(s) ? static_cast<int>(socks[s].rx.size()) : -1; }
   int netRead(int s, void* buf, size_t max) override {
     if (!netIsOpen(s) || netReadFail) return -1;
@@ -767,7 +808,10 @@ int main() {
       };
   auto loadApp = [&](MockBackend& be, const char* name) {
     std::string mainSrc;
-    loadDir(be, std::string("sd_card_contents/plugins/") + name, "", mainSrc);
+    const std::string dir = name == std::string("selftest_lua")
+        ? std::string("sd_card_contents/plugins/lua_tests_lua")  // selftest now lives in the test hub
+        : std::string("sd_card_contents/plugins/") + name;
+    loadDir(be, dir, "", mainSrc);
     return mainSrc;
   };
   {
@@ -788,9 +832,17 @@ int main() {
     CHECK(vm.resume("back") == Status::Finished);
   }
   {
-    TEST("example app selftest_lua: every on-device check also passes on the host mock");
+    TEST("example app selftest_lua: every on-device check also passes on the host mock (now in the test hub)");
     LuaVm vm; MockBackend be;
-    std::string src = loadApp(be, "selftest_lua");
+    std::string src;
+    {
+      std::string helper;
+      { std::ifstream f("sd_card_contents/plugins/lua_tests_lua/helper.lua"); std::stringstream ss; ss << f.rdbuf(); helper = ss.str(); }
+      be.files["/plugins/test/helper.lua"] = helper;  // the selftest requires "helper" from its app dir
+      std::ifstream f("sd_card_contents/plugins/lua_tests_lua/tests/selftest.lua");
+      std::stringstream ss; ss << f.rdbuf();
+      src = ss.str();
+    }
     CHECK(!src.empty());
     CHECK(vm.open(300 * 1024));
     registerApi(vm, be);
@@ -800,6 +852,7 @@ int main() {
     int pass = 0, fail = 0;
     for (auto& l : be.logs) { if (l.rfind("PASS", 0) == 0) pass++; if (l.rfind("FAIL", 0) == 0) { fail++; printf("    %s\n", l.c_str()); } }
     CHECK(fail == 0);
+    if (pass != 12) printf("    pass=%d fail=%d\n", pass, fail);
     CHECK(pass == 12);
   }
   {
@@ -2922,6 +2975,151 @@ int main() {
     CHECK(be.connectOpts.size() == 3 && be.connectOpts[1] == 250 && be.connectOpts[0] == 5000);  // timeout default and explicit
   }
   {
+    TEST("net.udp: open/send/recv/close, two sockets, scripted peer replies, kind checks, exhaustion");
+    MockBackend be;
+    be.net = true;
+    be.wifiUp = true;
+    be.sockReply["192.0.2.9:9098"] = "PONG";
+    LuaVm vm;
+    CHECK(vm.open(128 * 1024));
+    registerApi(vm, be);
+    const char* script = R"LUA(
+      local h = net.udp_open(0)
+      print(h)
+      print(net.udp_send(h, "192.0.2.9", 9098, "ping"))
+      local p = net.udp_recv(h)
+      print(p and (p.data .. "|" .. p.ip .. "|" .. p.port))
+      print(net.udp_recv(h))                       -- nothing pending -> nil
+      print(net.udp_send(h, "192.0.2.9", 9099, "ECHO " .. ("x"):rep(295)))
+      print(net.udp_recv(h))
+      local g = net.udp_open(9098)
+      print(g ~= h, g)
+      print(net.udp_send(g, "192.0.2.9", 9098, "ping") == 4 and net.udp_recv(g).data)
+      print(net.udp_close(h))
+      print(net.udp_send(h, "192.0.2.9", 9098, "x"))
+      print(net.read(g))                           -- a UDP slot is not a TCP socket (net.read on the open one)
+      local c = net.connect("example.test", 80)
+      print(net.udp_send(c, "192.0.2.9", 9098, "x"))
+      print(net.udp_recv(c))
+      print(net.udp_close(g))
+      print(net.udp_close(c))                      -- a TCP handle is not a UDP handle
+    )LUA";
+    CHECK(vm.load("t", script, strlen(script)));
+    CHECK(run(vm, be, 300000) == Status::Finished);
+    const char* want[] = {"1", "4", "PONG|192.0.2.9|9098", "nil", "300", "nil", "true\t2", "PONG", "true",
+                          "nil\tnot an open socket handle", "nil\tnot a TCP socket", "nil\tnot a UDP socket",
+                          "nil\tnot a UDP socket", "true", "nil\tnot a UDP socket"};  // net.connect prints nothing: c reuses slot 0
+    const size_t N = sizeof(want) / sizeof(want[0]);
+    CHECK(be.logs.size() == N);
+    for (size_t i = 0; i < N && i < be.logs.size(); i++) {
+      CHECK(be.logs[i] == want[i]);
+      if (be.logs[i] != want[i]) printf("    udp #%zu got '%s' want '%s'\n", i + 1, be.logs[i].c_str(), want[i]);
+    }
+    const std::string wantTx =
+        "192.0.2.9:9098<-ping192.0.2.9:9099<-ECHO " + std::string(295, 'x') + "192.0.2.9:9098<-ping";
+    if (be.txLog != wantTx) printf("    txLog differs (%zu vs %zu)\n", be.txLog.size(), wantTx.size());
+    CHECK(be.txLog == wantTx);
+    // slot 0 was reused by the TCP connect (handle 1, still open); slot 1 held g and was closed
+    if (be.socks[0].kind != 1 || be.socks[1].kind != 0) printf("    kinds %d %d\n", be.socks[0].kind, be.socks[1].kind);
+    CHECK(be.socks[0].kind == 1 && be.socks[1].kind == 0);
+  }
+  {
+    TEST("net.udp: gates, limits, argument validation; nothing invalid reaches the backend");
+    MockBackend be;
+    be.net = true;
+    be.wifiUp = true;
+    be.udpSendFail = true;
+    LuaVm vm;
+    CHECK(vm.open(128 * 1024));
+    registerApi(vm, be);
+    const char* script = R"LUA(
+      print(net.udp_open(65536))
+      print(net.udp_open(-1))
+      print(net.udp_open(80.5))
+      local h = net.udp_open(0)
+      print(h)
+      print(net.udp_send(h, "192.0.2.9", 9098, "x"))
+      print(net.udp_send(h, "bad host", 9098, "x"))
+      print(net.udp_send(h, "192.0.2.9", 0, "x"))
+      print(net.udp_send(h, "192.0.2.9", 9098, ""))
+      print(net.udp_send(h, "192.0.2.9", 9098, ("y"):rep(16385)))
+      print(net.udp_recv(h, 0))
+      print(net.udp_recv(h, 16385))
+      print(net.udp_close(h))
+      local hs = {}
+      for i = 1, 7 do hs[i] = net.connect("example.test", 80) end
+      print(hs[7])
+      print(net.udp_open(0))                      -- the 8th socket still fits
+      print(net.udp_open(0))                      -- the 9th is refused
+      print(net.close(hs[3]))
+      print(net.udp_open(0))                      -- the freed slot is reused
+    )LUA";
+    CHECK(vm.load("t", script, strlen(script)));
+    CHECK(run(vm, be, 400000) == Status::Finished);
+    const char* want[] = {
+        "nil\tport must be an integer 0..65535 (0 = system-assigned)", "nil\tport must be an integer 0..65535 (0 = system-assigned)",
+        "nil\tport must be an integer 0..65535 (0 = system-assigned)", "1", "nil\tsend failed (mock)", "nil\tinvalid host name",
+        "nil\tport must be an integer 1..65535", "nil\tdata must not be empty",
+        "nil\tdata too large (max 16384 bytes)", "nil\tmax must be an integer 1..16384", "nil\tmax must be an integer 1..16384",
+        "true", "7", "8", "nil\ttoo many open sockets (max 8)", "true", "3"};
+    const size_t N = sizeof(want) / sizeof(want[0]);
+    CHECK(be.logs.size() == N);
+    for (size_t i = 0; i < N && i < be.logs.size(); i++) {
+      CHECK(be.logs[i] == want[i]);
+      if (be.logs[i] != want[i]) printf("    udp2 #%zu got '%s' want '%s'\n", i + 1, be.logs[i].c_str(), want[i]);
+    }
+    if (be.logs.size() != N || getenv("DUMP_LOGS")) for (size_t i = 0; i < be.logs.size(); i++) printf("    udp2 log[%zu] '%s'\n", i, be.logs[i].c_str());
+    // the 8 first handles: h (UDP, handle 1) + 7 TCP = 8 open; the 9th open fails; after closing one TCP, a UDP slot opens
+    CHECK(be.txLog.empty());  // udpSendFail: the failed send must not reach the backend log  // exactly one send reached the backend
+  }
+  {
+    TEST("net.udp_open: the RAM floor applies to UDP too");
+    MockBackend be;
+    be.net = true;
+    be.wifiUp = true;
+    be.freeHeapVal = 10 * 1024;
+    LuaVm vm;
+    CHECK(vm.open(128 * 1024));
+    registerApi(vm, be);
+    const char* script = "print(net.udp_open(0))";
+    CHECK(vm.load("t", script, strlen(script)));
+    CHECK(run(vm, be, 100000) == Status::Finished);
+    CHECK(be.logs.size() == 1 && be.logs[0] == "nil\tnot enough free RAM for a socket (free 10K, need 16K)");
+  }
+  {
+    TEST("net.udp: permission and WiFi-down gates");
+    {
+      MockBackend be;  // no network permission
+      be.net = false;
+      be.wifiUp = true;
+      LuaVm vm;
+      CHECK(vm.open(128 * 1024));
+      registerApi(vm, be);
+      const char* script = "print(net.udp_open(0))\nprint(net.udp_send(1, 'h', 1, 'x'))\nprint(net.udp_recv(1))";
+      CHECK(vm.load("t", script, strlen(script)));
+      CHECK(run(vm, be, 100000) == Status::Finished);
+      CHECK(be.logs.size() == 3);
+      for (size_t i = 0; i < be.logs.size(); i++) CHECK(be.logs[i].rfind("nil\tnetwork not permitted", 0) == 0);
+    }
+    {
+      MockBackend be;  // WiFi down
+      be.net = true;
+      be.wifiUp = false;
+      LuaVm vm;
+      CHECK(vm.open(128 * 1024));
+      registerApi(vm, be);
+      const char* script = "print(net.udp_open(0))\nprint(net.udp_send(1, 'h', 1, 'x'))\nprint(net.udp_recv(1))";
+      CHECK(vm.load("t", script, strlen(script)));
+      CHECK(run(vm, be, 100000) == Status::Finished);
+      CHECK(be.logs.size() == 3);
+      if (be.logs.size() == 3) {
+        const char* nc = "nil\tnot connected (no network joined): call wifi.connect() first";
+        CHECK(be.logs[0] == nc && be.logs[1] == nc);
+        CHECK(be.logs[2] == "nil\tnot an open socket handle");
+      }
+    }
+  }
+  {
     TEST("lazy namespaces: nothing is built until touched; every namespace resolves; gfx extras are eager; _G is protected");
     MockBackend be;
     LuaVm vm;
@@ -3094,8 +3292,8 @@ int main() {
       print((pcall(net.connect)))
       print(net.connect("closed.test", 81))
       local hs = {}
-      for i = 1, 4 do hs[i] = net.connect("example.test", 80) end
-      print(hs[1], hs[2], hs[3], hs[4])
+      for i = 1, 8 do hs[i] = net.connect("example.test", 80) end
+      print(hs[1], hs[4], hs[8])
       print(net.connect("example.test", 80))
       print(net.close(hs[2]))
       print(net.connect("example.test", 80))
@@ -3104,9 +3302,9 @@ int main() {
       print(net.read(hs[1], 1.5))
       print(net.write(hs[1], ("x"):rep(16385)))
       print(net.read(0))
-      print(net.read(5))
+      print(net.read(9))
       print(net.read(1.5))
-      print(net.write(7, "x"))
+      print(net.write(10, "x"))
       print(net.available(9))
       print((pcall(net.read)))
     )LUA";
@@ -3118,7 +3316,7 @@ int main() {
         "nil\ttimeout_ms must be an integer 100..15000", "nil\ttimeout_ms must be an integer 100..15000",
         "nil\ttimeout_ms must be an integer 100..15000",
         "nil\ttls sockets are not implemented yet (plain TCP only)", "nil\ttls sockets are not implemented yet (plain TCP only)",
-        "false", "false", "nil\tconnection refused (mock)", "1\t2\t3\t4", "nil\ttoo many open sockets (max 4)", "true", "2",
+        "false", "false", "nil\tconnection refused (mock)", "1\t4\t8", "nil\ttoo many open sockets (max 8)", "true", "2",
         "nil\tmax must be an integer 1..4096", "nil\tmax must be an integer 1..4096", "nil\tmax must be an integer 1..4096",
         "nil\tdata too large (max 16384 per call; loop on the returned count)",
         "nil\tnot an open socket handle", "nil\tnot an open socket handle", "nil\tnot an open socket handle",
@@ -3129,8 +3327,9 @@ int main() {
       CHECK(be.logs[i] == want[i]);
       if (be.logs[i] != want[i]) printf("    net #%zu got '%s' want '%s'\n", i + 1, be.logs[i].c_str(), want[i]);
     }
-    CHECK(be.connectCalls == 6);  // refused one + 4 + the reuse: every invalid call stopped in the binding
+    CHECK(be.connectCalls == 10);  // refused one + 8 + the reuse: every invalid call stopped in the binding
     CHECK(be.txLog.empty());
+    if (getenv("DUMP_LOGS")) for (size_t i = 0; i < be.logs.size(); i++) printf("    net log[%zu] '%s'\n", i, be.logs[i].c_str());
   }
   {
     TEST("net: gates: permission, WiFi up, free RAM; resolve (literal passthrough, DNS) and local()");

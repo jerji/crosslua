@@ -93,3 +93,9 @@ Idea: shrink the radio's ~58 KB by initialising the driver with fewer buffers (e
 The best saving is 152 bytes: the dynamic counts are allocated on demand and the fixed cost is driver internals, task stacks and lwIP, which these knobs do not touch. Anything further would need a rebuilt SDK (the firmware already has `custom_sdkconfig`), which is firmware-wide and out of scope for the Lua runtime. The experiment code was removed.
 
 Side finding (a real bug, fixed): the exit-time defrag reboot checked `WiFi.getMode() != WIFI_MODE_NULL`, but `wifi.off()` sets exactly that mode, so an app that turned WiFi off before exiting skipped the reboot although the radio had already fragmented the heap (~20 KB did not come back; an EPUB test right after a WiFi test failed 12 bytes short of a 32 KB block). The activity now remembers that the radio was used this session (it survives `app.restart`).
+
+## 7. UDP (built, verified on the X4)
+
+`net.udp_open(port)` / `net.udp_send(h, host, port, data)` / `net.udp_recv(h [, max])` / `net.udp_close(h)` (API.md). TCP and UDP share one table of 8 slots; every handle op kind-checks ("not a TCP socket" / "not a UDP socket"). `udp_send` is fire-and-forget (no delivery guarantee, `WiFiUDP` beginPacket/write/endPacket); `udp_recv` is a non-blocking poll returning one datagram at a time with the sender's ip/port. The first-touch RAM behaviour is the same as TCP's.
+
+On the X4 (tests/udp.lua in the hub, against `udp_server.py`): open(0) with an ephemeral port, ping/ECHO(300)/BIG-1400 round trips (1400-byte datagram verified by SHA-256), two sockets in parallel, closed-handle errors, ALL PASSED. Host: 3 test blocks + 13 mutants (12 caught; 1 equivalent: the recv-side "closed" is unreachable because the slot check in the binding runs first).

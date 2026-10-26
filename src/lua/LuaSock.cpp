@@ -23,10 +23,21 @@ const char* const NOT_CONNECTED = "not connected (no network joined): call wifi.
 const char* const BAD_HANDLE = "not an open socket handle";
 const char* const BAD_HOST = "invalid host name";
 
+
+
 int pushFail(lua_State* L, const char* msg) {
   lua_pushnil(L);
   lua_pushstring(L, msg);
   return 2;
+}
+
+// The handle operations are kind-checked: net.read on a UDP slot would silently do the wrong thing.
+// kind: 1 TCP (read/write/available/connected), 2 UDP (udp_send/udp_recv). Returns 0 when ok, else pushes nil,err.
+int checkKind(lua_State* L, int slot, int kind, const char* what) {
+  if (be(L).netKind(slot) == kind) return 0;
+  char msg[64];
+  snprintf(msg, sizeof(msg), "not a %s socket", what);
+  return pushFail(L, msg);
 }
 
 // Permission only (reads, writes and closes of an already-open handle must still work if WiFi dropped).
@@ -141,7 +152,7 @@ int net_connect(lua_State* L) {
   if (wantTls) return pushFail(L, "tls sockets are not implemented yet (plain TCP only)");
   bool free = false;
   for (int i = 0; i < Backend::MAX_SOCKETS; i++) free = free || !be(L).netIsOpen(i);
-  if (!free) return pushFail(L, "too many open sockets (max 4)");
+  if (!free) return pushFail(L, "too many open sockets (max 8)");
   const size_t freeNow = be(L).freeHeap();
   if (freeNow < SOCK_MIN_FREE_BYTES) {
     char msg[96];
@@ -178,6 +189,7 @@ int net_read(lua_State* L) {
   int slot = 0;
   if (int r = slotArg(L, 1, &slot)) return r;
   const lua_Number max = lua_isnoneornil(L, 2) ? DEFAULT_READ : luaL_checknumber(L, 2);
+  if (int r = checkKind(L, slot, 1, "TCP")) return r;
   if (max < 1 || max > MAX_READ || max != static_cast<int>(max)) return pushFail(L, "max must be an integer 1..4096");
   const int avail = be(L).netAvailable(slot);
   if (avail < 0) return pushFail(L, "closed");
@@ -205,6 +217,7 @@ int net_write(lua_State* L) {
   if (int r = gatePermission(L)) return r;
   int slot = 0;
   if (int r = slotArg(L, 1, &slot)) return r;
+  if (int r = checkKind(L, slot, 1, "TCP")) return r;
   size_t len = 0;
   const char* data = luaL_checklstring(L, 2, &len);
   if (len > MAX_WRITE) return pushFail(L, "data too large (max 16384 per call; loop on the returned count)");
@@ -223,6 +236,7 @@ int net_available(lua_State* L) {
   if (int r = gatePermission(L)) return r;
   int slot = 0;
   if (int r = slotArg(L, 1, &slot)) return r;
+  if (int r = checkKind(L, slot, 1, "TCP")) return r;
   const int a = be(L).netAvailable(slot);
   lua_pushinteger(L, a < 0 ? 0 : a);
   return 1;
@@ -233,7 +247,97 @@ int net_connected(lua_State* L) {
   if (int r = gatePermission(L)) return r;
   int slot = 0;
   if (int r = slotArg(L, 1, &slot)) return r;
+  if (int r = checkKind(L, slot, 1, "TCP")) return r;
   lua_pushboolean(L, be(L).netConnected(slot));
+  return 1;
+}
+
+// net.udp_open(port) -> handle | nil, err. Binds a local UDP port (0 = system-assigned). Non-blocking afterwards:
+// net.udp_recv polls. Handles share the socket table with TCP (8 slots total).
+int net_udp_open(lua_State* L) {
+  const lua_Number port = luaL_checknumber(L, 1);
+  if (int r = gateOnline(L)) return r;
+  if (port < 0 || port > 65535 || port != static_cast<int>(port)) return pushFail(L, "port must be an integer 0..65535 (0 = system-assigned)");
+  bool free = false;
+  for (int i = 0; i < Backend::MAX_SOCKETS; i++) free = free || !be(L).netIsOpen(i);
+  if (!free) return pushFail(L, "too many open sockets (max 8)");
+  const size_t freeNow = be(L).freeHeap();
+  if (freeNow < SOCK_MIN_FREE_BYTES) {
+    char msg[96];
+    snprintf(msg, sizeof(msg), "not enough free RAM for a socket (free %uK, need %uK)", static_cast<unsigned>(freeNow / 1024),
+             static_cast<unsigned>(SOCK_MIN_FREE_BYTES / 1024));
+    return pushFail(L, msg);
+  }
+  char err[96] = {0};
+  const int slot = be(L).udpOpen(static_cast<int>(port), err, sizeof(err));
+  if (slot < 0) return pushFail(L, err[0] ? err : "cannot open UDP socket");
+  lua_pushinteger(L, slot + 1);
+  return 1;
+}
+
+// net.udp_send(h, host, port, data) -> bytes | nil, err. Fire-and-forget: no delivery guarantee. data <= 16384 bytes.
+// `host` may be a name (resolved via DNS, blocks briefly) or an IPv4 literal.
+int net_udp_send(lua_State* L) {
+  size_t n = 0;
+  const char* host = luaL_checklstring(L, 2, &n);
+  const lua_Number port = luaL_checknumber(L, 3);
+  size_t len = 0;
+  const char* data = luaL_checklstring(L, 4, &len);
+  if (int r = gateOnline(L)) return r;
+  int slot = 0;
+  if (int r = slotArg(L, 1, &slot)) return r;
+  if (int r = checkKind(L, slot, 2, "UDP")) return r;
+  if (!hostOk(host, n)) return pushFail(L, BAD_HOST);
+  if (port < 1 || port > 65535 || port != static_cast<int>(port)) return pushFail(L, "port must be an integer 1..65535");
+  if (len > MAX_WRITE) return pushFail(L, "data too large (max 16384 bytes)");
+  if (len == 0) return pushFail(L, "data must not be empty");
+  char err[96] = {0};
+  const int w = be(L).udpSend(slot, host, static_cast<int>(port), data, len, err, sizeof(err));
+  if (w < 0) return pushFail(L, err[0] ? err : "send failed");
+  lua_pushinteger(L, w);
+  return 1;
+}
+
+// net.udp_recv(h [, max = 1472 (1..16384)]) -> {data = ..., ip = ..., port = ...} | nil | nil, "closed".
+// Never blocks: nil means nothing has arrived. One datagram per call; larger datagrams are truncated to max.
+int net_udp_recv(lua_State* L) {
+  if (int r = gatePermission(L)) return r;
+  int slot = 0;
+  if (int r = slotArg(L, 1, &slot)) return r;
+  if (int r = checkKind(L, slot, 2, "UDP")) return r;
+  const lua_Number max = lua_isnoneornil(L, 2) ? 1472 : luaL_checknumber(L, 2);
+  if (max < 1 || max > 16384 || max != static_cast<int>(max)) return pushFail(L, "max must be an integer 1..16384");
+  char ip[16] = {0};
+  int port = 0;
+  void* buf = malloc(static_cast<size_t>(max));
+  if (!buf) return pushFail(L, "not enough memory");
+  const int n = be(L).udpRecv(slot, buf, static_cast<size_t>(max), ip, sizeof(ip), &port);
+  if (n <= 0) {
+    free(buf);
+    if (n < 0) return pushFail(L, "closed");
+    lua_pushnil(L);
+    return 1;
+  }
+  lua_pushlstring(L, static_cast<const char*>(buf), static_cast<size_t>(n));
+  free(buf);  // the string is on the stack now; a later raise (table OOM) cannot leak the buffer
+  lua_createtable(L, 0, 3);
+  lua_insert(L, -2);
+  lua_setfield(L, -2, "data");
+  lua_pushstring(L, ip);
+  lua_setfield(L, -2, "ip");
+  lua_pushinteger(L, port);
+  lua_setfield(L, -2, "port");
+  return 1;
+}
+
+// net.udp_close(h) -> true | nil, err (a handle that is not open, or a TCP handle)
+int net_udp_close(lua_State* L) {
+  if (int r = gatePermission(L)) return r;
+  int slot = 0;
+  if (int r = slotArg(L, 1, &slot)) return r;
+  if (int r = checkKind(L, slot, 2, "UDP")) return r;
+  be(L).netClose(slot);
+  lua_pushboolean(L, 1);
   return 1;
 }
 
@@ -252,7 +356,10 @@ int net_close(lua_State* L) {
 void registerSock(lua_State* L, Ctx* c) {
   static const luaL_Reg fns[] = {{"info", net_info},           {"resolve", net_resolve}, {"connect", net_connect},
                                  {"read", net_read},           {"write", net_write},     {"available", net_available},
-                                 {"connected", net_connected}, {"close", net_close},     {nullptr, nullptr}};
+                                 {"connected", net_connected}, {"close", net_close},
+                                 {"udp_open", net_udp_open},   {"udp_send", net_udp_send}, {"udp_recv", net_udp_recv},
+                                 {"udp_close", net_udp_close},
+                                 {nullptr, nullptr}};
   regTable(L, c, "net", fns);
 }
 

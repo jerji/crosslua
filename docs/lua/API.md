@@ -1,4 +1,4 @@
-# CrossLua app API (v0.15)
+# CrossLua app API (v0.16)
 
 An app is a plugin folder containing `main.lua`, in any plugin root
 (`/plugins`, `/.plugins`, `/.crosspoint/plugins`):
@@ -236,12 +236,21 @@ Plain TCP over the Arduino `NetworkClient` that CrossPoint already links for its
 |---|---|
 | `net.info()` -> `{ip, mask, gateway, dns}` \| nil, err | The device's own addressing. (Not `net.local`: `local` is a Lua keyword.) |
 | `net.resolve(host)` -> `"a.b.c.d"` \| nil, err | DNS (system timeout, blocks). An IPv4 literal is returned as is with no DNS traffic. Host names: letters, digits, `.` `-` `_`, at most 253 characters. |
-| `net.connect(host, port [, {timeout_ms=5000}])` -> handle \| nil, err | Blocks up to `timeout_ms` (100..15000); Back does not interrupt it. Handles are small integers 1..4. Refused when 4 are open or under 16 KB free RAM. |
+| `net.connect(host, port [, {timeout_ms=5000}])` -> handle \| nil, err | Blocks up to `timeout_ms` (100..15000); Back does not interrupt it. Handles are small integers 1..8 (TCP and UDP share the table). Refused when 8 are open or under 16 KB free RAM. |
 | `net.read(h [, max=512])` -> string \| nil, "closed" | Never blocks. `""` means nothing has arrived yet. `max` 1..4096. After the peer closes you still get everything it sent, then `nil, "closed"`. |
 | `net.write(h, data)` -> n \| nil, err | `data` at most 16384 bytes per call; **n can be less than `#data`**: loop on the returned count. |
 | `net.available(h)` -> n | Bytes waiting (0 when none or closed). |
 | `net.connected(h)` -> boolean | False once the peer closed and everything it sent has been read. |
 | `net.close(h)` -> true \| nil, err | A handle that is not open (including one already closed) is an error value, not a crash. |
+
+UDP datagrams live in the same socket table as TCP (8 slots total, TCP and UDP together; a handle works with exactly one kind and the other family's calls refuse it):
+
+| call | |
+|---|---|
+| `net.udp_open(port)` -> handle \| nil, err | Binds a local UDP port (0..65535; 0 = system-assigned). Non-blocking afterwards. Same permission and "WiFi up" rules as `net.connect`. |
+| `net.udp_send(h, host, port, data)` -> bytes \| nil, err | Fire-and-forget: no delivery guarantee. `host` may be a name (resolved via DNS, blocks briefly) or an IPv4 literal; `data` at most 16384 bytes and not empty. |
+| `net.udp_recv(h [, max=1472])` -> `{data, ip, port}` \| nil \| nil, "closed" | Never blocks. `nil` means nothing has arrived. One datagram per call, truncated to `max` (1..16384). `ip`/`port` are the sender's. |
+| `net.udp_close(h)` -> true \| nil, err | A TCP handle is refused with "not a UDP socket". |
 
 Sockets still open when the app ends are closed (the radio is shut down then anyway).
 

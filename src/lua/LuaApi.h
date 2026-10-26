@@ -102,16 +102,23 @@ class Backend {
   virtual bool netAllowed() = 0;  // the app's manifest declares "network"
 
   // --- raw TCP client sockets (net.*): a fixed table of MAX_SOCKETS slots; handles seen by Lua are slot + 1 -------------
-  static constexpr int MAX_SOCKETS = 4;
+  static constexpr int MAX_SOCKETS = 8;
+  // Slot kinds (netKind): 0 free, 1 TCP (net.connect), 2 UDP (net.udp_open). Handles seen by Lua are slot + 1 for both.
   virtual bool netLocal(char* ip, char* mask, char* gateway, char* dns, size_t cap) = 0;  // false: WiFi is down
   virtual bool netResolve(const char* host, char* ip, size_t ipCap, char* err, size_t errCap) = 0;
   virtual int netConnect(const char* host, int port, int timeoutMs, char* err, size_t errCap) = 0;  // slot, or -1 + err
   virtual bool netIsOpen(int slot) = 0;                              // the handle is allocated (even if the peer closed)
+  virtual int netKind(int slot) = 0;                                 // 0 free, 1 TCP, 2 UDP
   virtual int netAvailable(int slot) = 0;                            // bytes waiting; -1 when the slot is not open
   virtual int netRead(int slot, void* buf, size_t max) = 0;          // > 0 bytes; 0 nothing now; -1 closed
   virtual int netWrite(int slot, const void* data, size_t n) = 0;    // bytes written; -1 error / closed
   virtual bool netConnected(int slot) = 0;                           // false once the peer closed and nothing is left to read
   virtual void netClose(int slot) = 0;
+
+  // UDP on the same slot table: non-blocking receive, one datagram per call.
+  virtual int udpOpen(int port, char* err, size_t errCap) = 0;       // slot, or -1 + err (port 0 = system-assigned)
+  virtual int udpSend(int slot, const char* host, int port, const void* data, size_t n, char* err, size_t errCap) = 0;  // bytes, or -1
+  virtual int udpRecv(int slot, void* buf, size_t max, char* ip, size_t ipCap, int* port) = 0;  // n bytes; 0 nothing waiting; -1 closed
   virtual bool wifiConnected() = 0;
   // Ask the system to bring WiFi up (it may show its own network picker). Non-blocking: the script is parked and
   // resumed with "wifi:ok" / "wifi:fail" once the system UI has finished.

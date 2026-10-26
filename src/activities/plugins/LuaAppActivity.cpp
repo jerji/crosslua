@@ -22,6 +22,7 @@
 #include <InflateReader.h>
 #include <ArduinoJson.h>
 #include <WiFi.h>
+#include <WiFiUdp.h>
 #include <ZipFile.h>
 
 #include <algorithm>
@@ -414,7 +415,9 @@ class LuaAppActivity::Backend final : public crosslua::Backend {
   static constexpr size_t BMP_MIN_BLOCK = 16 * 1024;  // Bitmap row buffers (<= 2048 px wide) + dither state
   // --- raw TCP client sockets (net.*): Arduino WiFiClient (NetworkClient over lwIP), already linked for the web server ---
   WiFiClient socks_[crosslua::Backend::MAX_SOCKETS];
+  WiFiUDP udps_[crosslua::Backend::MAX_SOCKETS];
   bool sockUsed_[crosslua::Backend::MAX_SOCKETS] = {};
+  int sockKind_[crosslua::Backend::MAX_SOCKETS] = {};  // 0 free, 1 TCP, 2 UDP
   static void fmtIp(char* out, size_t cap, const IPAddress& ip) { snprintf(out, cap, "%u.%u.%u.%u", ip[0], ip[1], ip[2], ip[3]); }
   bool netLocal(char* ip, char* mask, char* gw, char* dns, size_t cap) override {
     if (WiFi.status() != WL_CONNECTED) return false;
@@ -448,7 +451,50 @@ class LuaAppActivity::Backend final : public crosslua::Backend {
     }
     socks_[slot].setNoDelay(true);
     sockUsed_[slot] = true;
+    sockKind_[slot] = 1;
     return slot;
+  }
+  int netKind(int s) override { return s >= 0 && s < crosslua::Backend::MAX_SOCKETS ? sockKind_[s] : 0; }
+  int udpOpen(int port, char* err, size_t errCap) override {
+    int slot = -1;
+    for (int i = 0; i < crosslua::Backend::MAX_SOCKETS && slot < 0; i++)
+      if (!sockUsed_[i]) slot = i;
+    if (slot < 0) {
+      snprintf(err, errCap, "too many open sockets (max 8)");
+      return -1;
+    }
+    if (!udps_[slot].begin(static_cast<uint16_t>(port))) {
+      snprintf(err, errCap, "cannot bind UDP port %d", port);
+      return -1;
+    }
+    sockUsed_[slot] = true;
+    sockKind_[slot] = 2;
+    return slot;
+  }
+  int udpSend(int s, const char* host, int port, const void* d, size_t n, char* err, size_t errCap) override {
+    if (!netIsOpen(s) || sockKind_[s] != 2) {
+      snprintf(err, errCap, "not a UDP socket");
+      return -1;
+    }
+    IPAddress a;
+    if (WiFi.hostByName(host, a) != 1) {
+      snprintf(err, errCap, "cannot resolve '%s' (no such host or DNS unreachable)", host);
+      return -1;
+    }
+    if (udps_[s].beginPacket(a, static_cast<uint16_t>(port)) != 1 || udps_[s].write(static_cast<const uint8_t*>(d), n) != n ||
+        udps_[s].endPacket() != 1) {
+      snprintf(err, errCap, "UDP send to %s:%d failed", host, port);
+      return -1;
+    }
+    return static_cast<int>(n);
+  }
+  int udpRecv(int s, void* buf, size_t max, char* ip, size_t ipCap, int* port) override {
+    if (!netIsOpen(s) || sockKind_[s] != 2) return -1;
+    const int size = udps_[s].parsePacket();
+    if (size <= 0) return 0;  // nothing waiting (parsePacket also clears the previous remote address)
+    fmtIp(ip, ipCap, udps_[s].remoteIP());
+    *port = udps_[s].remotePort();
+    return udps_[s].read(static_cast<uint8_t*>(buf), std::min(max, static_cast<size_t>(size)));
   }
   bool netIsOpen(int s) override { return s >= 0 && s < crosslua::Backend::MAX_SOCKETS && sockUsed_[s]; }
   // Arduino's NetworkClient::connected() does not notice a graceful close (FIN) until a later read, so ask the socket directly:
@@ -477,8 +523,10 @@ class LuaAppActivity::Backend final : public crosslua::Backend {
   bool netConnected(int s) override { return netIsOpen(s) && (socks_[s].available() > 0 || peerAlive(s)); }
   void netClose(int s) override {
     if (!netIsOpen(s)) return;
-    socks_[s].stop();
+    if (sockKind_[s] == 2) udps_[s].stop();
+    else socks_[s].stop();
     sockUsed_[s] = false;
+    sockKind_[s] = 0;
   }
   bool saveScreenBmp(const char* path, char* err, size_t errCap) override {
     // The firmware's own screenshot writer: rotates to the panel's portrait orientation while streaming rows (68-byte buffer).
