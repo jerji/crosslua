@@ -101,6 +101,7 @@ is read-only on CrossLua, but `/os/config.lua` is a read).
 - **`ble.*`, `hid.*`** — needs a real BLE backend. CrossLua has none yet
   (planned). Stubs error with the readable message above.
 - **`net.*` raw TCP** — CrossLua has no sockets yet (planned).
+- **`image.draw` on the device needs RAM the single-VM design does not leave.** The PNG decoder allocates one ~44 KB block; with the launcher + shim + spell resident in one VM the Lua heap is ~49 KB, free RAM ~53 KB and the largest block 37 KB (measured on the X4 running `gallery.lua`), so `image.draw` raises `not enough free RAM to decode (largest block 37K, need 46K)` and gallery shows that on screen. It will work once spells get a fresh, lean VM (`app.restart(entry)`, see FEATURE_MATRIX.md); `gfx.image` itself works on the device for apps with a small heap (`imgtest_lua`).
 - **`image.*`** — now implemented on `gfx.image` (PNG/JPEG decoded by the firmware). `image.open(path)` reads the PNG header for `width/height`; `image.draw(h, x, y, w?, h?)` fits the image into the w,h box (default: native size), never upscales and centres it in the box; Grimoire stretched to the box. JPEG files are not opened by `image.open` (PNG header only).
 - **`wifi.startAP`/AP mode** — CrossLua only joins networks the user has
   configured; it can't create one.

@@ -159,8 +159,10 @@ class LuaAppActivity::Backend final : public crosslua::Backend {
   bool libraryAllowed() override { return lib_; }
   // Inflating needs ~45 KB transient (ZipFile's own docs warn about it): refuse instead of aborting mid-way.
   static constexpr size_t ZIP_RESERVE = 48 * 1024;
-  // Largest free block the PNG/JPEG decoders need before gfx.image starts (first guess: measure on the device).
-  static constexpr size_t IMAGE_MIN_BLOCK = 40 * 1024;
+  // Contiguous block each decoder allocates in one piece (PNGdec's PNG object is ~44 KB, JPEGDEC ~20 KB, see the
+  // *_DECODER_APPROX_SIZE constants in lib/Epub/Epub/converters) plus a little slack for its line buffers.
+  static constexpr size_t PNG_MIN_BLOCK = 46 * 1024;
+  static constexpr size_t JPEG_MIN_BLOCK = 24 * 1024;
   int zipList(const char* path, crosslua::Backend::ZipEntryInfo* out, int maxEntries, int* total, char* err,
               size_t errCap) override {
     const std::string p(path);
@@ -490,9 +492,14 @@ class LuaAppActivity::Backend final : public crosslua::Backend {
     }
     // The decoders stream (RAM never scales with the source) but need working buffers of their own.
     const auto h = HalMemory::getInternalHeap();
-    if (h.largestBlockBytes < IMAGE_MIN_BLOCK) {
+    const size_t pl = strlen(absPath);
+    const bool isPng = pl >= 4 && tolower(static_cast<unsigned char>(absPath[pl - 1])) == 'g' &&
+                       tolower(static_cast<unsigned char>(absPath[pl - 2])) == 'n' &&
+                       tolower(static_cast<unsigned char>(absPath[pl - 3])) == 'p' && absPath[pl - 4] == '.';
+    const size_t need = isPng ? PNG_MIN_BLOCK : JPEG_MIN_BLOCK;
+    if (h.largestBlockBytes < need) {
       snprintf(err, errCap, "not enough free RAM to decode (largest block %uK, need %uK)",
-               static_cast<unsigned>(h.largestBlockBytes / 1024), static_cast<unsigned>(IMAGE_MIN_BLOCK / 1024));
+               static_cast<unsigned>(h.largestBlockBytes / 1024), static_cast<unsigned>(need / 1024));
       return false;
     }
     ImageDimensions d{};

@@ -167,6 +167,9 @@ static int gfx_image(lua_State* L) {
   if (size == -1) return pushFail(L, "no such file");
   if (size == -2) return pushFail(L, "is a directory");
   if (size == 0 || size > 6 * 1024 * 1024) return pushFail(L, "image file is empty or over 6 MB");
+  // Free the app's garbage first: the decoders need ONE contiguous block (PNG ~44 KB), and collectable Lua objects
+  // scattered through the heap are what usually keeps the largest free block too small.
+  lua_gc(L, LUA_GCCOLLECT);
   int dw = 0, dh = 0;
   char err[96] = {0};
   if (!be(L).drawImage(path, x, y, bw, bh, &dw, &dh, err, sizeof(err))) return pushFail(L, err[0] ? err : "cannot draw image");

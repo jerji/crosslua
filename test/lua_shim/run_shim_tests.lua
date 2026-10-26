@@ -129,7 +129,7 @@ local b, eb = image.open("/spells/lib/format.lua")
 local c = image.open("/spells/images/test.png")
 local ok = image.draw(c, 10, 20, 200, 200)
 image.close(c)
-local ok2, e2 = image.draw(c, 0, 0)
+local ok2, e2 = pcall(image.draw, c, 0, 0)
 display.text(0, 0,  "A:" .. tostring(a) .. ":" .. tostring(ea), 1, true)
 display.text(0, 20, "B:" .. tostring(b) .. ":" .. tostring(eb), 1, true)
 display.text(0, 40, "C:" .. image.width(c) .. "x" .. image.height(c) .. ":" .. tostring(ok), 1, true)
@@ -416,7 +416,7 @@ local function runAllDirect()
         check("(h) image.open missing file -> nil, err", shown:find("A:nil:", 1, true) ~= nil and shown:find("A:nil:nil", 1, true) == nil, shown:sub(1, 160))
         check("(h) image.open non-PNG -> nil, 'not a PNG file'", shown:find("B:nil:not a PNG file", 1, true) ~= nil, shown:sub(1, 160))
         check("(h) width/height from the IHDR and draw succeeds", shown:find("C:800x300:true", 1, true) ~= nil, shown:sub(1, 160))
-        check("(h) draw after close -> nil, 'image is closed'", shown:find("D:nil:image is closed", 1, true) ~= nil, shown:sub(1, 160))
+        check("(h) draw after close raises 'image is closed'", shown:find("D:false:image is closed", 1, true) ~= nil, shown:gsub("\n", " | "))
     end
 
     -- (d) gallery / ble_* / wifi_server fail GRACEFULLY with the readable

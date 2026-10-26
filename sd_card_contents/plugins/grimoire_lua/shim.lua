@@ -399,9 +399,11 @@ end
 function EmuImage.width(img) return img.w end
 function EmuImage.height(img) return img.h end
 function EmuImage.draw(img, x, y, w, h)
-    if not img.p then return nil, "image is closed" end
+    if not img.p then error("image is closed", 0) end
     local dw, err = gfx.image(img.p, x, y, w or img.w, h or img.h)
-    if not dw then return nil, err end
+    -- Raise instead of returning nil,err: spells wrap draw in pcall (gallery.lua) and only look at the pcall status, so a
+    -- returned nil,err would leave a blank screen with no explanation.
+    if not dw then error(tostring(err), 0) end
     return true
 end
 function EmuImage.close(img) img.p = nil end
