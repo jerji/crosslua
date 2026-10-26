@@ -7,6 +7,7 @@ roadmap, ordered by how many features each primitive unblocks and how cheap/safe
 Lua heap). Verdicts in the per-fork files; here only the gaps.
 
 ## Tier 1 — trivial native bindings, unlock the most (one build)
+**Status: every Tier 1 and Tier 2 row below is implemented** (checked against the registered functions in `src/lua/`: wifi.scan, time.sync/set, fs.rename, system.mac/usb, gfx.qr, device.haptic/frontlight, zip.inflate, gfx.image, crypto, input.text, save_bmp, epub.meta, net). Open work is Tier 3, the parked hardware rows (BLE, COLOR gfx model, `device.wake_in`) and the Angel requests (`fs.stat` / detailed `fs.list`, app categories).
 
 | primitive | unlocks | notes / where it comes from |
 |---|---|---|
@@ -25,7 +26,7 @@ Lua heap). Verdicts in the per-fork files; here only the gaps.
 | primitive | unlocks | notes |
 |---|---|---|
 | `gfx.image(path, x, y [, box_w, box_h])` PNG/BMP/JPEG → 1bpp blit | Grimoire `image.*`/gallery, crossplay wallpapers/xkcd/Study images, AvesO3 covers, Ruby creature art, biscuit BMP viewer | Decoders already linked (`PngToBmpConverter`, `JPEGDEC`, BMP). Stream row-by-row, cap target at ~one screen (48 KB), clip to screen. Biggest single feature win. |
-| `net` raw TCP: **client done** (`info/resolve/connect/read/write/available/connected/close`, v0.14, verified on the X4); DEPLOYED: listen/accept + mDNS (host-tested, 14 mutants each, firmware build in progress); TLS client sockets done (verified on the X4, 17 mutants) | Grimoire `net.*` (wifi_server_test, events lib), biscuit host scanner/ports, HTTP-in-Lua experiments | lwIP sockets via BSD API. Server + client; watch heap; yield in loops. See [NET_SOCKETS_PLAN.md](NET_SOCKETS_PLAN.md): survey of what CrossPoint/SecureNet/Grimoire/biscuit already use + built API + on-device RAM/timing measurements |
+| `net` raw TCP: **client done** (`info/resolve/connect/read/write/available/connected/close`, v0.14, verified on the X4); UDP, listen/accept and mDNS done (verified on the X4, 14 mutants each), Back cancels a blocking connect; TLS client sockets done (verified on the X4, 17 mutants) | Grimoire `net.*` (wifi_server_test, events lib), biscuit host scanner/ports, HTTP-in-Lua experiments | lwIP sockets via BSD API. Server + client; watch heap; yield in loops. See [NET_SOCKETS_PLAN.md](NET_SOCKETS_PLAN.md): survey of what CrossPoint/SecureNet/Grimoire/biscuit already use + built API + on-device RAM/timing measurements |
 | `crypto.sha256/hmac_sha1/hmac_sha256/aes_*` | biscuit TOTP×2, PIN lock, SD encryption; Grimoire "pin your own content" pattern | wolfSSL already linked; expose digest + HMAC first, AES-CBC/GCM later. |
 | `input.text()` modal keyboard (sub-activity, like the WiFi picker) | search/forms in apps: biscuit password manager, Grimoire settings UI | `KeyboardEntryActivity` exists; same parked-VM pattern as `wifi.connect`. |
 | `gfx.save_bmp(path)` (screenshot from inside an app) | tests, bug reports, sharing | **done**: binds `ScreenshotUtil::saveFramebufferAsBmp` (streams, no heap). 240 ms, pixel-identical round trip on the X4, 7 mutants caught. |
