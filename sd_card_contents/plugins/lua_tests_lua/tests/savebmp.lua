@@ -1,3 +1,5 @@
+-- hub test: the body is wrapped so an early `return` or an error still goes back to the menu (app.restart("main.lua")).
+local function __test()
 -- gfx.save_bmp on-device check. Phase 1: draw a pattern, save it, verify the file. Confirm: redraw the saved BMP.
 local W, H = gfx.size()
 local fails = 0
@@ -53,3 +55,11 @@ while true do
     gfx.present("full")
   elseif e == "back" then break end
 end
+end
+local __ok, __err = pcall(__test)
+if not __ok then
+  print("[hub] ERROR: " .. tostring(__err))
+  gfx.clear(); gfx.text(10, 10, "Test error (see serial log)", "ui12", "b"); gfx.text(10, 50, tostring(__err):sub(1, 48), "small"); gfx.present()
+  while input.wait() ~= "back" do end
+end
+app.restart("main.lua")

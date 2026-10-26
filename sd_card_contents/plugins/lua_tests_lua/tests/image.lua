@@ -1,3 +1,5 @@
+-- hub test: the body is wrapped so an early `return` or an error still goes back to the menu (app.restart("main.lua")).
+local function __test()
 -- On-device checks for gfx.image. Needs /spells/images/test.png (800x300 PNG) on the SD card.
 local W, H = gfx.size()
 local fails = 0
@@ -42,3 +44,11 @@ local f2 = mem("end")
 check("no leak after repeated draws", f2 >= f0 - 2048)
 print(fails == 0 and "ALL PASSED" or (fails .. " FAILED"))
 while input.wait() ~= "back" do end
+end
+local __ok, __err = pcall(__test)
+if not __ok then
+  print("[hub] ERROR: " .. tostring(__err))
+  gfx.clear(); gfx.text(10, 10, "Test error (see serial log)", "ui12", "b"); gfx.text(10, 50, tostring(__err):sub(1, 48), "small"); gfx.present()
+  while input.wait() ~= "back" do end
+end
+app.restart("main.lua")
