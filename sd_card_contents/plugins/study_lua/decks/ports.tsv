@@ -1,0 +1,41 @@
+# Common network ports and protocols (sample deck; add your own lines, new cards at the END)
+TCP 21	FTP (control)
+TCP 22	SSH / SCP / SFTP
+TCP 23	Telnet (cleartext remote shell)
+TCP 25	SMTP (mail transfer between servers)
+TCP/UDP 53	DNS
+UDP 67/68	DHCP (server / client)
+UDP 69	TFTP
+TCP 80	HTTP
+UDP 88 / TCP 88	Kerberos
+TCP 110	POP3
+UDP 123	NTP
+TCP 135	MS-RPC endpoint mapper
+UDP 137-138, TCP 139	NetBIOS name / datagram / session
+TCP 143	IMAP
+UDP 161/162	SNMP (agent / trap)
+TCP 389	LDAP
+TCP 443	HTTPS
+TCP 445	SMB (direct over TCP)
+TCP 464	Kerberos kpasswd
+TCP 465 / 587	SMTPS / SMTP submission (STARTTLS)
+TCP 636	LDAPS
+TCP 993 / 995	IMAPS / POP3S
+TCP 1433	Microsoft SQL Server
+TCP 1521	Oracle DB listener
+TCP 2049	NFS
+TCP 3306	MySQL / MariaDB
+TCP 3389	RDP
+TCP 5432	PostgreSQL
+TCP 5900	VNC
+TCP 5985 / 5986	WinRM (HTTP / HTTPS)
+TCP 6379	Redis
+TCP 8080	HTTP alternate / proxies
+TCP 9200	Elasticsearch
+TCP 27017	MongoDB
+The protocol that sends mail between servers on port {{c1::25}}	
+Kerberos uses port {{c1::88}} for authentication and {{c2::464}} for password changes	
+In an <b>SSH</b> pubkey login the {{c1::private::which key?}} key never leaves the client	
+What does nmap's <code>-sV</code> do?<br>	Probe open ports to determine <b>service/version</b> info
+What does the TCP <i>three-way handshake</i> look like?	SYN &rarr; SYN/ACK &rarr; ACK
+Which ports are the \"well-known\" ports?	0 &ndash; 1023 (need root on Unix to bind)

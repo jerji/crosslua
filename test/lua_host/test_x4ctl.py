@@ -82,6 +82,12 @@ print(txt)
 check("screen: gray rect behind 'Library' marks it selected (and only it)",
       "> y=180  Library  |  sub-title" in txt and "> y=120" not in txt and "> y=240" not in txt)
 check("screen: black button-bar rect / white rect do not mark selection", "y=700" not in txt)
+scr2 = {"activity": "LuaApp", "w": 480, "h": 800, "seq": 1, "truncated": False,
+        "texts": [(24, 200, 1, "ports"), (24, 230, 1, "10 new"), (24, 300, 1, "other deck"), (24, 760, 1, "Back")],
+        "rects": [(8, 190, 464, 66, 16), (0, 740, 480, 2, 16)]}  # inverted list row (big black bar) + a thin black rule
+t2 = x4ctl.render_screen(scr2)
+check("screen: CrossLua inverted row (big black bar) marks selection; thin black rule does not",
+      "> y=200  ports" in t2 and "> y=230" in t2.replace("y=200 ", "y=200") or ("> y=200" in t2 and "other deck" in t2 and "> y=300" not in t2 and "> y=760" not in t2))
 stop = True
 print("ALL PASSED" if not fails else f"{fails} FAILED")
 sys.exit(1 if fails else 0)

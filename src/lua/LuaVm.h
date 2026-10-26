@@ -52,6 +52,12 @@ class LuaVm {
   bool wakesOnEvent() const { return waitEvents_; }
   const std::string& error() const { return error_; }
 
+  // Debug info (line tables, local names) is ~1/3 of a compiled script's RAM. Chunks are loaded stripped unless the app
+  // asks to keep it (registerApi() sets this from the presence of <dataDir>/debug.flag). Stripped errors read "?:-1:".
+  void setStripDebug(bool strip) { stripDebug_ = strip; }
+  bool stripDebug() const { return stripDebug_; }
+  // Compile a TEXT chunk onto L's stack (like luaL_loadbufferx(..., "t")), honouring stripDebug(). Returns a lua status code.
+  int loadText(lua_State* L, const char* buf, size_t n, const char* chunkName);
   size_t usedBytes() const { return alloc_.used; }
   size_t peakBytes() const { return alloc_.peak; }
   size_t budgetBytes() const { return alloc_.budget; }
@@ -90,6 +96,7 @@ class LuaVm {
   lua_State* L_ = nullptr;   // main state (owns allocator)
   lua_State* co_ = nullptr;  // script coroutine
   Alloc alloc_;
+  bool stripDebug_ = true;
   Status status_ = Status::Idle;
   int32_t waitMs_ = -1;
   bool waitEvents_ = true;

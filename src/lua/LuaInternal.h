@@ -24,6 +24,7 @@ void regTable(lua_State* L, Ctx* c, const char* name, const luaL_Reg* funcs);
 constexpr size_t MAX_PATH_LEN = 200;
 constexpr size_t MAX_READ_BYTES = 128 * 1024;
 constexpr size_t MAX_WRITE_BYTES = 256 * 1024;
+constexpr size_t MAX_WRITE_AT_BYTES = 16 * 1024;
 constexpr size_t MAX_MODULE_BYTES = 64 * 1024;
 
 enum class Scope { App, Data, Lib };

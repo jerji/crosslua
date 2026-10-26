@@ -17,10 +17,10 @@ workflow, tests) · [UPSTREAM_TOUCHPOINTS.md](UPSTREAM_TOUCHPOINTS.md) (every ed
 |---|---|
 | 0 Baseline | **done** — stock build measured, toolchain fixed |
 | 1 VM in firmware | **done and verified on the real X4** |
-| 2 Core API | **mostly done** — gfx, input, app, system, fs, require, json. Remaining: `zip`, wall-clock `time`, `ui` helper lib, orientation |
+| 2 Core API | **mostly done** — gfx, input, app, system, fs (+ range reads, in-place records), require, json, time. Remaining: `zip`, shared `ui` lib in `/.crosslua/lib/`, orientation |
 | 3 Network (wifi/http/net) | not started |
 | 4 BLE + radio | not started |
-| 5 Port features as apps | not started — **next up**: flashcards or 2048, then AO3 library |
+| 5 Port features as apps | **started**: Study (flashcards, FSRS-5) done and verified on the X4. Next: 2048 (quick), AO3 library (needs Phase 3), the rest |
 | 6 Ecosystem | not started |
 
 ## Why
@@ -83,7 +83,7 @@ keyboard over `gfx`), `app.orientation()`, images/bitmaps.
   sleep timing, coroutines): **12/12**. `counter_lua` persistence across restarts verified (13 -> 24 -> 35).
 - Force-quit (hold Back 1.4 s) verified in the log. Leaving WiFi/File Transfer causes CrossPoint's normal silent restart.
 - Bugs only hardware could show: negative font IDs misread as "unknown font" (0 is the sentinel); realloc transient
-  needing old+new bytes. A bug only the draw-text checks showed: Lua's `ok and nil or x` trap in an example app.
+  needing old+new bytes; compiled script code ~2.2x its source, mostly debug info (-32 % when stripped). A bug only the draw-text checks showed: Lua's `ok and nil or x` trap in an example app.
 
 ## Dev & test workflow (all proven end-to-end)
 - Host: `test/lua_host/run.sh` — ~28 scenarios under ASAN+UBSAN against a mock Backend with an in-memory SD card,
@@ -104,9 +104,17 @@ wolfSSL already in the firmware), `net` (TCP). Radio-on costs 40–60 KB RAM, so
 filter) as a native core polled from Lua. Active TX (deauth etc.) stays out of scope unless asked; passive/own-network
 testing only.
 
-## Phase 5 — Port features as apps (next)
-Order by value/risk: (1) flashcards with spaced repetition (exercises fs/json/paging) or 2048 as the quick win;
-(2) todo; (3) AvesO3 AO3 library browser (fs/json/http); (4) crossplay games — Sudoku/solitaire first, chess last
+## Phase 5 — Port features as apps (in progress)
+**Done: Study** (`sd_card_contents/plugins/study_lua`, port of crossplay's Study, lean). FSRS-5 + Anki learning steps,
+TSV/Anki-export decks with HTML cleaning and cloze, 24-byte/card progress file updated in place (nothing per-card in
+RAM; 65,535 cards max), 10 new/100 review per day. The scheduler is verified against crossplay's C++ on 9,179 answers
+(golden test). On the X4: Lua heap 48 KB after load, 65 KB peak over a full session (budget 81 KB), device free RAM
+never below 52.9 KB. What the port forced into the core: `time`, `fs.read` ranges, `fs.write_at`, debug-info stripping,
+a tighter GC pause (130 %), and the `string.pack('l')` portability trap (use `i4`, never `l`: host 8 bytes, device 4).
+Not done in Study: undo, per-deck options, parameter optimisation, `.apkg` import, images/audio.
+
+Remaining order:
+Order by value/risk: (1) 2048 (quick; exercises `gfx` heavily); (2) todo; (3) AvesO3 AO3 library browser (fs/json/http); (4) crossplay games — Sudoku/solitaire first, chess last
 (depth-limited Lua engine); (5) biscuit recon apps (WiFi/BLE scanners, OUI lookup); (6) Ruby passive logger (needs an
 AES binding; mbedtls/wolfSSL are already linked).
 
@@ -114,7 +122,7 @@ AES binding; mbedtls/wolfSSL are already linked).
 App manifest/versioning (`min_api`), install via the existing file-transfer UI, shared `lib:` modules, docs, example repo.
 
 ## Risks
-- **RAM** remains the main constraint: WiFi/BLE apps will have far less headroom than the ~144 KB measured with the radio off.
+- **RAM** remains the main constraint (Study already uses ~65 of 81 KB; a release build, without the 9 KB capture buffers, gives ~9 KB more): WiFi/BLE apps will have far less headroom than the ~144 KB measured with the radio off.
 - **Upstream churn**: hooks are few and listed; merge `upstream/master` periodically and re-check the touchpoints.
 - **Dev firmware** has a serial control channel and screen capture; it is gated by `CROSSLUA_DEV` (only `env:default`)
   and must never ship in a release env.

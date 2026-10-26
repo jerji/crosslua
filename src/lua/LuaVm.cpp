@@ -76,6 +76,10 @@ bool LuaVm::open(size_t budgetBytes) {
 #endif
     return 0;
   });
+  // Lua's default (collect when the heap has doubled) is far too lazy for an ~88 KB budget: garbage would eat a
+  // third of it. Start a cycle at 130% of the live size instead; the collector runs in small slices inside normal
+  // allocation, so this costs a little CPU, not pauses.
+  lua_gc(L_, LUA_GCINC, 130, 200, 13);
   openSandbox(L_);
   return true;
 }
@@ -85,6 +89,50 @@ void LuaVm::close() {
   L_ = nullptr;
   co_ = nullptr;
   status_ = Status::Idle;
+}
+
+namespace {
+struct DumpBuf {
+  char* p = nullptr;
+  size_t n = 0, cap = 0;
+  bool failed = false;
+};
+int dumpWriter(lua_State*, const void* data, size_t sz, void* ud) {
+  DumpBuf* b = static_cast<DumpBuf*>(ud);
+  if (b->failed) return 1;
+  if (b->n + sz > b->cap) {
+    size_t nc = b->cap ? b->cap * 2 : 4096;
+    while (nc < b->n + sz) nc *= 2;
+    char* np = static_cast<char*>(realloc(b->p, nc));
+    if (!np) { b->failed = true; return 1; }
+    b->p = np;
+    b->cap = nc;
+  }
+  memcpy(b->p + b->n, data, sz);
+  b->n += sz;
+  return 0;
+}
+}  // namespace
+
+// Compile, then (optionally) round-trip through lua_dump(strip) to drop line tables, local names and upvalue names.
+// No Lua error can be raised between the malloc and the free below (lua_dump never allocates through Lua and
+// lua_load is protected), so the C buffer can't leak. It is a transient of one chunk's size.
+int LuaVm::loadText(lua_State* L, const char* buf, size_t n, const char* chunkName) {
+  int rc = luaL_loadbufferx(L, buf, n, chunkName, "t");
+  if (rc != LUA_OK || !stripDebug_) return rc;
+  DumpBuf d;
+  if (lua_dump(L, dumpWriter, &d, 1) != 0 || d.failed) {
+    free(d.p);
+    return LUA_OK;  // couldn't strip: keep the unstripped function that is already on the stack
+  }
+  rc = luaL_loadbufferx(L, d.p, d.n, chunkName, "b");  // our own dump, never user bytecode
+  free(d.p);
+  if (rc != LUA_OK) {  // [orig, err] -> [err]
+    lua_remove(L, -2);
+    return rc;
+  }
+  lua_remove(L, -2);  // [orig, stripped] -> [stripped]
+  return LUA_OK;
 }
 
 bool LuaVm::load(const char* chunkName, const char* src, size_t len) {
@@ -103,7 +151,7 @@ bool LuaVm::load(const char* chunkName, const char* src, size_t len) {
     return false;
   }
   lua_setfield(L_, LUA_REGISTRYINDEX, "crosslua.main");  // keep it alive
-  if (luaL_loadbufferx(co_, src, len, chunkName, "t") != LUA_OK) {
+  if (loadText(co_, src, len, chunkName) != LUA_OK) {
     error_ = lua_tostring(co_, -1) ? lua_tostring(co_, -1) : "load error";
     status_ = Status::Error;
     return false;

@@ -175,6 +175,32 @@ int sys_battery(lua_State* L) {
   return 1;
 }
 
+// ---- time -----------------------------------------------------------------
+// time.now() -> epoch seconds (UTC) | nil when the device clock is not trustworthy (never synced, no RTC).
+// Epoch seconds fit a 32-bit Lua integer until 2038.
+int time_now(lua_State* L) {
+  const int64_t e = be(L).epochNow();
+  if (e <= 0) lua_pushnil(L);
+  else lua_pushinteger(L, static_cast<lua_Integer>(e));
+  return 1;
+}
+// time.date([epoch]) -> {year, month, day, hour, min, sec, wday (1 = Sunday), yday} in local time | nil if no clock
+int time_date(lua_State* L) {
+  int64_t e = lua_isnoneornil(L, 1) ? be(L).epochNow() : static_cast<int64_t>(luaL_checknumber(L, 1));
+  int f[8];
+  if (e <= 0 || !be(L).localDate(e, f)) {
+    lua_pushnil(L);
+    return 1;
+  }
+  static const char* const names[8] = {"year", "month", "day", "hour", "min", "sec", "wday", "yday"};
+  lua_createtable(L, 0, 8);
+  for (int i = 0; i < 8; i++) {
+    lua_pushinteger(L, f[i]);
+    lua_setfield(L, -2, names[i]);
+  }
+  return 1;
+}
+
 // print(...) -> device log (tabs between args, like stock print)
 int api_print(lua_State* L) {
   char buf[256];
@@ -224,7 +250,14 @@ void registerApi(LuaVm& vm, Backend& backend) {
   regTable(L, c, "gfx", gfx);
   regTable(L, c, "input", input);
   regTable(L, c, "app", app);
+  {  // keep debug info (readable tracebacks) only when the developer asks: <dataDir>/debug.flag
+    char flag[MAX_PATH_LEN + 40];
+    snprintf(flag, sizeof(flag), "%s/debug.flag", backend.dataDir());
+    vm.setStripDebug(backend.fsSize(flag) < 0);
+  }
   regTable(L, c, "system", sys);
+  static const luaL_Reg timeFns[] = {{"now", time_now}, {"date", time_date}, {nullptr, nullptr}};
+  regTable(L, c, "time", timeFns);
   registerFs(L, c);
   registerJson(L, c);
   registerRequire(L, c);

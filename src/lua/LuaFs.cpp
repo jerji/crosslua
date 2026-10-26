@@ -119,27 +119,58 @@ bool ensureParent(Backend& b, const char* path) {
   return b.fsMkdir(parent);
 }
 
+// fs.read(path [, offset [, len]]) -> string | nil, err
+// Without offset/len: the whole file (max 128 KB). With them: that byte range (len max 128 KB; a range that runs past
+// the end is clipped, an offset past the end is an error). Use ranges for files too big to hold in memory.
 int fs_read(lua_State* L) {
   char path[MAX_PATH_LEN + 80];
   Scope sc;
   if (!pathArg(L, 1, false, path, sizeof(path), &sc)) return 2;
+  const bool ranged = !lua_isnoneornil(L, 2) || !lua_isnoneornil(L, 3);
+  const lua_Number offN = lua_isnoneornil(L, 2) ? 0 : luaL_checknumber(L, 2);
+  const lua_Number lenN = lua_isnoneornil(L, 3) ? -1 : luaL_checknumber(L, 3);
+  if (offN < 0 || (lenN < 0 && !lua_isnoneornil(L, 3))) return pushFail(L, "negative offset/length");
   const int64_t size = be(L).fsSize(path);
   if (size == -1) return pushFail(L, "no such file");
   if (size == -2) return pushFail(L, "is a directory");
-  if (static_cast<size_t>(size) > MAX_READ_BYTES) return pushFail(L, "file too large");
-  if (size == 0) {
+  const size_t off = static_cast<size_t>(offN);
+  if (off > static_cast<size_t>(size)) return pushFail(L, "offset beyond end of file");
+  size_t want = static_cast<size_t>(size) - off;
+  if (lenN >= 0 && static_cast<size_t>(lenN) < want) want = static_cast<size_t>(lenN);
+  if (want > MAX_READ_BYTES) return pushFail(L, ranged ? "length too large" : "file too large (read it in ranges: fs.read(path, offset, len))");
+  if (want == 0) {
     lua_pushliteral(L, "");
     return 1;
   }
   // Read straight into a Lua-managed buffer: counted against the app's memory budget, and
   // reclaimed by the GC if an allocation error unwinds us. (No C++ objects live here.)
-  void* buf = lua_newuserdatauv(L, static_cast<size_t>(size), 0);
-  if (!be(L).fsReadInto(path, buf, static_cast<size_t>(size))) {
+  void* buf = lua_newuserdatauv(L, want, 0);
+  if (!be(L).fsReadInto(path, buf, want, off)) {
     lua_pop(L, 1);
     return pushFail(L, "read error");
   }
-  lua_pushlstring(L, static_cast<const char*>(buf), static_cast<size_t>(size));
+  lua_pushlstring(L, static_cast<const char*>(buf), want);
   lua_remove(L, -2);
+  return 1;
+}
+
+// fs.write_at(path, offset, data) -> true | nil, err   (data: scope only; the file must exist)
+// In-place and NOT atomic: for small fixed-size records (a power cut mid-write can tear that record, never the file).
+int fs_write_at(lua_State* L) {
+  char path[MAX_PATH_LEN + 80];
+  Scope sc;
+  if (!pathArg(L, 1, true, path, sizeof(path), &sc)) return 2;
+  const lua_Number offN = luaL_checknumber(L, 2);
+  size_t len = 0;
+  const char* data = luaL_checklstring(L, 3, &len);
+  if (offN < 0) return pushFail(L, "negative offset");
+  if (len > MAX_WRITE_AT_BYTES) return pushFail(L, "data too large for write_at");
+  const int64_t size = be(L).fsSize(path);
+  if (size == -1) return pushFail(L, "no such file (create it with fs.write first)");
+  if (size == -2) return pushFail(L, "is a directory");
+  if (static_cast<size_t>(offN) > static_cast<size_t>(size)) return pushFail(L, "offset beyond end of file");
+  if (!be(L).fsWriteAt(path, static_cast<size_t>(offN), data, len)) return pushFail(L, "write error");
+  lua_pushboolean(L, 1);
   return 1;
 }
 
@@ -260,10 +291,10 @@ int mod_find(lua_State* L) {
     const int64_t size = be(L).fsSize(path);
     if (size >= 0 && static_cast<size_t>(size) <= MAX_MODULE_BYTES) {
       void* buf = lua_newuserdatauv(L, static_cast<size_t>(size) + 1, 0);
-      if (!be(L).fsReadInto(path, buf, static_cast<size_t>(size))) return pushFail(L, "module read error");
+      if (!be(L).fsReadInto(path, buf, static_cast<size_t>(size), 0)) return pushFail(L, "module read error");
       char chunk[MAX_PATH_LEN + 16];
       snprintf(chunk, sizeof(chunk), "@%s:%s", t.scName, relFile);
-      const int rc = luaL_loadbufferx(L, static_cast<const char*>(buf), static_cast<size_t>(size), chunk, "t");
+      const int rc = ctx(L)->vm->loadText(L, static_cast<const char*>(buf), static_cast<size_t>(size), chunk);
       if (rc != LUA_OK) {
         // error message is on top; return nil,msg
         lua_pushnil(L);
@@ -308,7 +339,7 @@ return require
 }  // namespace
 
 void registerFs(lua_State* L, Ctx* c) {
-  static const luaL_Reg fs[] = {{"read", fs_read},     {"write", fs_write}, {"append", fs_append},
+  static const luaL_Reg fs[] = {{"read", fs_read},     {"write", fs_write}, {"write_at", fs_write_at}, {"append", fs_append},
                                 {"exists", fs_exists}, {"size", fs_size},   {"mkdir", fs_mkdir},
                                 {"remove", fs_remove}, {"list", fs_list},   {nullptr, nullptr}};
   regTable(L, c, "fs", fs);

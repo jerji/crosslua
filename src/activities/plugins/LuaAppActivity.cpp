@@ -5,6 +5,7 @@
 #include <HalPowerManager.h>
 #include <HalStorage.h>
 #include <Logging.h>
+#include <TrustedTime.h>
 
 #include <algorithm>
 #include <cstring>
@@ -91,6 +92,21 @@ class LuaAppActivity::Backend final : public crosslua::Backend {
   size_t freeHeapQuick() override { return ESP.getFreeHeap(); }  // O(1); getInternalHeap() also walks for the largest block
   size_t minFreeHeap() override { return HalMemory::getInternalHeap().minFreeBytes; }
   int battery() override { return powerManager.getBatteryPercentage(); }
+  int64_t epochNow() override { return trustedtime::trustedNow(); }
+  bool localDate(int64_t epoch, int out[8]) override {
+    const time_t t = static_cast<time_t>(epoch);
+    struct tm lt;
+    if (!localtime_r(&t, &lt)) return false;
+    out[0] = lt.tm_year + 1900;
+    out[1] = lt.tm_mon + 1;
+    out[2] = lt.tm_mday;
+    out[3] = lt.tm_hour;
+    out[4] = lt.tm_min;
+    out[5] = lt.tm_sec;
+    out[6] = lt.tm_wday + 1;
+    out[7] = lt.tm_yday + 1;
+    return true;
+  }
   void log(const char* msg) override { LOG_INF(TAG, "[%s] %s", name_.c_str(), msg); }
   const char* appName() override { return name_.c_str(); }
   const char* appDir() override { return dir_.c_str(); }
@@ -105,10 +121,19 @@ class LuaAppActivity::Backend final : public crosslua::Backend {
     if (f.isDirectory()) return -2;
     return static_cast<int64_t>(f.fileSize());
   }
-  bool fsReadInto(const char* path, void* dst, size_t n) override {
+  bool fsReadInto(const char* path, void* dst, size_t n, size_t offset) override {
     HalFile f;
     if (!Storage.openFileForRead(TAG, path, f)) return false;
+    if (offset && !f.seek(offset)) return false;
     return f.read(dst, n) == static_cast<int>(n);
+  }
+  bool fsWriteAt(const char* path, size_t offset, const void* data, size_t n) override {
+    HalFile f = Storage.open(path, O_RDWR);
+    if (!f) return false;
+    if (!f.seek(offset)) return false;
+    const bool ok = n == 0 || f.write(data, n) == n;
+    f.flush();
+    return ok;
   }
   bool fsWrite(const char* path, const void* data, size_t n, bool append) override {
     if (append) {

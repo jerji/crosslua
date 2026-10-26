@@ -1,4 +1,4 @@
-# CrossLua app API (v0.2 — Phase 1+2)
+# CrossLua app API (v0.3)
 
 An app is a plugin folder containing `main.lua`, in any plugin root
 (`/plugins`, `/.plugins`, `/.crosspoint/plugins`):
@@ -21,9 +21,13 @@ Libraries: base, `string`, `table`, `math`, `utf8`, `coroutine`. **No** `io`, `o
 `debug`, `dofile`, `loadfile`, `load` (and precompiled chunks are rejected). Files go through `fs`, code through `require`.
 `print(...)` goes to the serial/SD log (tag `LUA`).
 
-Memory: each app gets a hard heap cap computed at launch (free RAM − 56 KB, clamped 24–160 KB; ≈88 KB on a freshly booted X4),
+Memory: each app gets a hard heap cap computed at launch (free RAM − 56 KB, clamped 24–160 KB; ≈88 KB on a freshly booted X4; the collector starts a cycle at 130 % of live data),
 plus a device guard: no allocation may leave less than 40 KB of free RAM. Exceeding either raises a normal catchable `not enough memory` error.
 Speed on the X4: roughly 435k simple VM loop iterations per second. Script size limit: 64 KB.
+
+**Debug info is stripped** from every loaded script (line tables and local-variable names are ~1/3 of a compiled script's RAM;
+Study went from 70 KB to 48 KB). Errors then read `?:-1: attempt to index a nil value` instead of `app:store.lua:20: ... (local 't')`.
+While developing, create a file `data:debug.flag` (any content) to keep the full info; delete it when you ship.
 
 Scripts are preemptible: a count hook yields to the firmware every ~10k VM instructions, so a busy loop
 cannot freeze the device, drop the power button, or block sleep.
@@ -73,9 +77,10 @@ Anything else is rejected, so `fs.read("../../x")` cannot escape. Errors are ret
 
 | call | returns |
 |---|---|
-| `fs.read(path)` | contents \| nil, err (max 128 KB per file) |
+| `fs.read(path [, offset [, len]])` | contents \| nil, err. Whole file (max 128 KB), or just the byte range `offset`, `len` (clipped at the end; max 128 KB per call). Use ranges for files too big to hold in memory: a 600 KB deck is read in 4 KB pieces |
 | `fs.write(path, data)` | true \| nil, err. **Atomic** (temp file + rename): a power cut keeps the old file. Parent folders are created. Max 256 KB |
 | `fs.append(path, data)` | true \| nil, err |
+| `fs.write_at(path, offset, data)` | true \| nil, err. **In place, NOT atomic** (`data:` only; the file must exist; `offset` ≤ size; data ≤ 16 KB). For small fixed-size records in big files (a power cut can tear that one record, never the whole file) |
 | `fs.exists(path)` | bool |
 | `fs.size(path)` | bytes \| nil, err |
 | `fs.list(path)` | sorted array of names, folders end in `/` \| nil, err (`fs.list("data:")` lists your save folder) |
@@ -85,6 +90,15 @@ Anything else is rejected, so `fs.read("../../x")` cannot escape. Errors are ret
 `require("name")` loads `name.lua` (or `name/init.lua`) from the app folder, then from `/.crosslua/lib/`. Dots are folder
 separators: `require("util.strings")` → `util/strings.lua`. Modules are cached and may yield (e.g. call `input.wait`) while loading.
 Circular requires and missing modules raise a clear error listing the places searched. Module names may only use letters, digits, `_` and `.`.
+
+## time
+| call | returns |
+|---|---|
+| `time.now()` | UTC epoch seconds, or `nil` if the device clock is not trustworthy (never synced, no RTC). The X4 has no RTC: the clock is restored from flash and re-synced (SNTP) whenever WiFi connects — use File Transfer or the Clock settings once. Fits a 32-bit integer until 2038 |
+| `time.date([epoch])` | `{year, month, day, hour, min, sec, wday, yday}` in the **local** time zone (`wday` 1 = Sunday), or `nil` without a clock. Default epoch = now |
+
+For day-granular scheduling use the local calendar date, not `now() // 86400` (that rolls over at UTC midnight).
+`study_lua/main.lua` has a `days_from_civil(y, m, d)` helper.
 
 ## json
 `json.encode(value)` → string \| nil, err · `json.decode(string)` → value \| nil, "msg at byte N" · `json.null` (sentinel for JSON null).
@@ -97,4 +111,4 @@ Memory: the result is built in a few KB of staging chunks; budget roughly 2–3�
 Backends: `src/lua/LuaApi.h` (`Backend` interface). Host tests: `test/lua_host/run.sh`.
 
 ## Planned (see PLAN.md)
-`zip`, `wifi`/`http`/`net`, `ble`/`hid`, `radio`, orientation control, wall-clock `time`.
+`zip`, `wifi`/`http`/`net`, `ble`/`hid`, `radio`, orientation control.

@@ -16,4 +16,4 @@ re-check them first when merging `upstream/master`.
 | `src/activities/ActivityManager.{h,cpp}` | `#ifdef CROSSLUA_DEV`: `currentName()` for `CMD:PING` |
 | `lib/GfxRenderer/GfxRenderer.cpp` | `#ifdef CROSSLUA_DEV` hooks into `drawText`, `fillRect`, `fillRectDither`, `fillRoundedRect`, `clearScreen`, `displayBuffer(Async)` feeding `DevCapture` (text dump for `CMD:SCREEN`) |
 | `src/main.cpp` | also `CMD:SCREEN` |
-
+| `src/activities/plugins/LuaAppActivity.cpp` | uses `lib/TrustedTime` (`trustedtime::trustedNow()`) for `time.now()` — read-only use of an existing API |

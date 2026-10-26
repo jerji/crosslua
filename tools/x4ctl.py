@@ -168,7 +168,9 @@ def parse_screen(lines):
 
 def render_screen(scr):
     """Human/LLM-readable text. '>' marks text sitting inside a gray-filled (selection) rectangle."""
-    sel = [r for r in scr["rects"] if r[4] in SELECT_COLORS and r[2] >= 120 and r[3] >= 24]
+    # Native themes fill selected rows light/dark gray; CrossLua apps (ui.list) invert them: a big BLACK bar behind white text.
+    sel = [r for r in scr["rects"]
+           if (r[4] in SELECT_COLORS and r[2] >= 120 and r[3] >= 24) or (r[4] == 16 and r[2] >= 300 and 30 <= r[3] <= 120)]
     def selected(t):
         return any(r[0] - 2 <= t[0] < r[0] + r[2] and r[1] - 6 <= t[1] < r[1] + r[3] for r in sel)
     rows = {}

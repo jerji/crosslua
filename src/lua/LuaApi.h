@@ -46,14 +46,20 @@ class Backend {
   virtual size_t freeHeapQuick() { return freeHeap(); }
   virtual size_t minFreeHeap() = 0;
   virtual int battery() = 0;  // percent, or -1
+  // Wall clock. epochNow() = UTC seconds, or 0 when the clock is not trustworthy (never synced / no RTC).
+  virtual int64_t epochNow() = 0;
+  // Local broken-down time for `epoch` -> out[0..7] = year, month(1-12), day(1-31), hour, min, sec, wday(1=Sunday), yday(1-366).
+  virtual bool localDate(int64_t epoch, int out[8]) = 0;
   virtual void log(const char* msg) = 0;
 
   // --- storage ---------------------------------------------------------------
   // Absolute SD paths only. Sandboxing/validation happens in the API layer, never here.
   // Rule: no callbacks into Lua from these (a lua_error would longjmp over backend frames).
   virtual int64_t fsSize(const char* path) = 0;  // bytes; -1 = missing; -2 = directory
-  virtual bool fsReadInto(const char* path, void* dst, size_t n) = 0;  // exactly n bytes
+  virtual bool fsReadInto(const char* path, void* dst, size_t n, size_t offset) = 0;  // exactly n bytes from offset
   virtual bool fsWrite(const char* path, const void* data, size_t n, bool append) = 0;  // atomic unless append
+  // In-place write at `offset` (<= file size; may extend the file). NOT atomic: meant for small fixed-size records.
+  virtual bool fsWriteAt(const char* path, size_t offset, const void* data, size_t n) = 0;
   virtual bool fsMkdir(const char* path) = 0;   // recursive; ok if it exists
   virtual bool fsRemove(const char* path) = 0;  // file or empty directory
   // One iterator at a time; fsListBegin() closes any previous one.

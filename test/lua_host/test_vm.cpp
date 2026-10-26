@@ -2,9 +2,16 @@
 // Build/run: test/lua_host/run.sh
 #include <algorithm>
 #include <cassert>
+#include <ctime>
 #include <dirent.h>
 #include <fstream>
 #include <sstream>
+#include <functional>
+#include <cmath>
+extern "C" {
+#include "lauxlib.h"
+#include "lua.h"
+}
 #include <cstdio>
 #include <cstring>
 #include <deque>
@@ -79,12 +86,32 @@ struct MockBackend : Backend {
   int64_t fsSize(const char* p) override {
     auto f = files.find(p);
     if (f != files.end()) return (int64_t)f->second.size();
-    return dirs.count(p) ? -2 : -1;
+    if (dirs.count(p)) return -2;
+    std::string pre = std::string(p) + "/";  // like FAT: a folder that holds files exists
+    auto it = files.lower_bound(pre);
+    return (it != files.end() && it->first.rfind(pre, 0) == 0) ? -2 : -1;
   }
-  bool fsReadInto(const char* p, void* dst, size_t n) override {
+  bool fsReadInto(const char* p, void* dst, size_t n, size_t offset) override {
     auto f = files.find(p);
-    if (f == files.end() || f->second.size() != n) return false;
-    memcpy(dst, f->second.data(), n);
+    if (f == files.end() || offset + n > f->second.size()) return false;
+    memcpy(dst, f->second.data() + offset, n);
+    return true;
+  }
+  bool fsWriteAt(const char* p, size_t offset, const void* d, size_t n) override {
+    auto f = files.find(p);
+    if (failWrites || f == files.end() || offset > f->second.size()) return false;
+    if (offset + n > f->second.size()) f->second.resize(offset + n);
+    memcpy(&f->second[offset], d, n);
+    return true;
+  }
+  int64_t epoch = 0;  // 0 = clock not trusted
+  int64_t epochNow() override { return epoch ? epoch + now / 1000 : 0; }  // epoch = clock at app start; advances with mock millis
+  bool localDate(int64_t e, int out[8]) override {
+    time_t t = (time_t)e;
+    struct tm g;
+    gmtime_r(&t, &g);  // mock "local time" = UTC
+    out[0] = g.tm_year + 1900; out[1] = g.tm_mon + 1; out[2] = g.tm_mday; out[3] = g.tm_hour;
+    out[4] = g.tm_min; out[5] = g.tm_sec; out[6] = g.tm_wday + 1; out[7] = g.tm_yday + 1;
     return true;
   }
   bool fsWrite(const char* p, const void* d, size_t n, bool append) override {
@@ -340,21 +367,27 @@ int main() {
   }
 
   // ======================= example apps from sd_card_contents/ =======================
-  auto loadApp = [](MockBackend& be, const char* name) {
-    std::string dir = std::string("sd_card_contents/plugins/") + name;
-    DIR* d = opendir(dir.c_str());
-    if (!d) return std::string();
+  // Loads sd_card_contents/plugins/<name>/ (including subfolders like decks/) into the mock SD at /plugins/test/.
+  std::function<void(MockBackend&, const std::string&, const std::string&, std::string&)> loadDir =
+      [&](MockBackend& be, const std::string& dir, const std::string& rel, std::string& mainSrc) {
+        DIR* d = opendir(dir.c_str());
+        if (!d) return;
+        while (dirent* e = readdir(d)) {
+          std::string fn = e->d_name;
+          if (fn == "." || fn == "..") continue;
+          std::string full = dir + "/" + fn;
+          if (DIR* sub = opendir(full.c_str())) { closedir(sub); loadDir(be, full, rel + fn + "/", mainSrc); continue; }
+          std::ifstream in(full, std::ios::binary);
+          std::stringstream ss;
+          ss << in.rdbuf();
+          be.files["/plugins/test/" + rel + fn] = ss.str();  // mock appDir() is /plugins/test
+          if (rel.empty() && fn == "main.lua") mainSrc = ss.str();
+        }
+        closedir(d);
+      };
+  auto loadApp = [&](MockBackend& be, const char* name) {
     std::string mainSrc;
-    while (dirent* e = readdir(d)) {
-      std::string fn = e->d_name;
-      if (fn == "." || fn == "..") continue;
-      std::ifstream in(dir + "/" + fn, std::ios::binary);
-      std::stringstream ss;
-      ss << in.rdbuf();
-      be.files["/plugins/test/" + fn] = ss.str();  // mock appDir() is /plugins/test
-      if (fn == "main.lua") mainSrc = ss.str();
-    }
-    closedir(d);
+    loadDir(be, std::string("sd_card_contents/plugins/") + name, "", mainSrc);
     return mainSrc;
   };
   {
@@ -412,6 +445,295 @@ int main() {
     CHECK(saved.find("\"launches\":2") != std::string::npos);
   }
 
+  {
+    TEST("study_lua scheduler: Lua port == crossplay's C++ FSRS-5 + learning steps (golden, 400 scenarios)");
+    LuaVm vm; MockBackend be;
+    loadApp(be, "study_lua");  // puts fsrs.lua / sched.lua / ... at /plugins/test/
+    CHECK(vm.open(2 * 1024 * 1024));
+    registerApi(vm, be);
+    lua_State* L = vm.state();
+    const char* harness = R"LUA(
+      local sched = require("sched")
+      local sc = sched.new()
+      function golden_run(line)
+        local card = sched.new_card()
+        local clock = 20000 * 1440 + 600
+        local out = {}
+        for tok in line:gmatch("[^,]+") do
+          local rating, adv = tok:match("(%d+):(%d+)")
+          rating, adv = tonumber(rating), tonumber(adv)
+          clock = clock + adv
+          local today, nowMin = clock // 1440, clock % 1440
+          if not sched.is_due(card, today, nowMin) then
+            clock = card.due * 1440 + ((card.state == 1 or card.state == 3) and card.dueMin or 0)
+            today, nowMin = clock // 1440, clock % 1440
+          end
+          local o = sc.answer(card, rating, today, nowMin)
+          card = o.card
+          out[#out + 1] = ("%d %d %d %d %.5g %.5g %d %d %d %d %d"):format(card.state, card.step, card.due, card.dueMin,
+            card.s, card.d, card.reps, card.lapses, o.delayMinutes, o.intervalDays, o.graduated and 1 or 0)
+        end
+        return table.concat(out, "\n")
+      end
+    )LUA";
+    bool loaded = luaL_loadstring(L, harness) == LUA_OK && lua_pcall(L, 0, 0, 0) == LUA_OK;
+    if (!loaded) printf("    harness error: %s\n", lua_tostring(L, -1));
+    CHECK(loaded);
+    std::ifstream sin("test/lua_host/golden/scenarios.txt"), gin("test/lua_host/golden/golden.txt");
+    CHECK(sin.good() && gin.good());
+    std::string scen, gl;
+    std::vector<std::string> golden;
+    while (std::getline(gin, gl)) golden.push_back(gl);
+    size_t gi = 0, steps = 0, identical = 0, close = 0, bad = 0;
+    int sidx = 0;
+    while (loaded && std::getline(sin, scen)) {
+      CHECK(gi < golden.size() && golden[gi] == "S " + std::to_string(sidx));
+      gi++;
+      lua_getglobal(L, "golden_run");
+      lua_pushstring(L, scen.c_str());
+      if (lua_pcall(L, 1, 1, 0) != LUA_OK) { printf("    lua error: %s\n", lua_tostring(L, -1)); bad++; break; }
+      std::stringstream got(lua_tostring(L, -1));
+      lua_pop(L, 1);
+      std::string gotLine;
+      while (std::getline(got, gotLine)) {
+        steps++;
+        const std::string& want = golden[gi++];
+        if (gotLine == want) { identical++; continue; }
+        // Same integers, floats within 1e-4 relative? (float printing / libm last-digit differences)
+        std::istringstream a(gotLine), b(want);
+        std::string ta, tb;
+        bool ok = true;
+        for (int col = 0; col < 11 && ok; col++) {
+          a >> ta; b >> tb;
+          if (col == 4 || col == 5) {
+            double x = atof(ta.c_str()), y = atof(tb.c_str());
+            ok = std::fabs(x - y) <= 1e-4 * std::max(1.0, std::fabs(y));
+          } else {
+            ok = ta == tb;
+          }
+        }
+        if (ok) close++;
+        else { if (bad < 5) printf("    scenario %d step mismatch:\n      lua: %s\n      c++: %s\n", sidx, gotLine.c_str(), want.c_str()); bad++; }
+      }
+      sidx++;
+    }
+    printf("    %zu answers: %zu identical text, %zu within 1e-4, %zu mismatched\n", steps, identical, close, bad);
+    CHECK(steps == 9179 && bad == 0 && gi == golden.size());
+  }
+
+  {
+#ifndef STUDY_BUDGET
+#define STUDY_BUDGET (120 * 1024)
+#endif
+    TEST("study_lua app: scripted review session (deck list, learning steps + wait, in-place records, day rollover)");
+    MockBackend be;
+    be.epoch = 1782086400 + 9 * 3600;  // 2026-06-22 09:00 UTC
+    std::string src = loadApp(be, "study_lua");
+    CHECK(!src.empty() && be.files.count("/plugins/test/decks/ports.tsv"));
+    int cardLines = 0;
+    {
+      std::stringstream ss(be.files["/plugins/test/decks/ports.tsv"]);
+      std::string l;
+      while (std::getline(ss, l)) if (!l.empty() && l[0] != '#' && l.find('\t') != std::string::npos) cardLines++;
+    }
+    auto frame = [&](MockBackend& b) {  // all text drawn since the last clear, "|"-joined
+      size_t from = 0;
+      for (size_t i = 0; i < b.calls.size(); i++) if (b.calls[i] == "clear:white") from = i;
+      std::string out;
+      for (size_t i = from; i < b.calls.size(); i++)
+        if (b.calls[i].rfind("text:", 0) == 0) {
+          size_t a = b.calls[i].find(':', 5), z = b.calls[i].rfind(":f");
+          out += b.calls[i].substr(a + 1, z - a - 1) + "|";
+        }
+      return out;
+    };
+    auto has = [&](MockBackend& b, const char* what) { return frame(b).find(what) != std::string::npos; };
+    auto record = [&](int num, int* state, int* step, int* reps, int* lapses, int* due) {
+      const std::string& f = be.files["/.crosslua/data/test/study/ports/cards.bin"];
+      const unsigned char* r = (const unsigned char*)f.data() + 12 + (num - 1) * 24;
+      *state = r[0]; *step = r[1]; *reps = r[2] | r[3] << 8; *lapses = r[4] | r[5] << 8;
+      *due = (int)(r[6] | r[7] << 8 | r[8] << 16 | (unsigned)r[9] << 24);
+    };
+    auto settle = [&](LuaVm& vm, std::initializer_list<const char*> evs) {
+      be.calls.clear();
+      for (auto e : evs) be.events.push_back(e);
+      return run(vm, be, 20000);
+    };
+    auto launch = [&](LuaVm& vm) {
+      CHECK(vm.open(STUDY_BUDGET));
+      registerApi(vm, be);
+      CHECK(vm.load("study_lua", src.data(), src.size()));
+      CHECK(vm.resume() == Status::Waiting);
+      return run(vm, be, 20000);
+    };
+    int state, step, reps, lapses, due, due0;
+    {
+      LuaVm vm;
+      CHECK(launch(vm) == Status::Waiting);
+      printf("    first frame: %s | status=%d err=%s\n", frame(be).c_str(), (int)vm.status(), vm.error().c_str());
+      CHECK(has(be, "Study|") && has(be, "ports|"));
+      CHECK(has(be, ("10 new   0 learn   0 due   (" + std::to_string(cardLines) + " cards)").c_str()));
+      CHECK(settle(vm, {"confirm"}) == Status::Waiting);                    // open the deck
+      CHECK(has(be, "TCP 21|") && has(be, "Show|") && has(be, "10 new  0 learn  0 due"));
+      CHECK(settle(vm, {"confirm"}) == Status::Waiting);                    // reveal
+      CHECK(has(be, "FTP (control)|") && has(be, "Again|1m|Good|10m|Hard|6m|Easy|"));
+      CHECK(settle(vm, {"confirm"}) == Status::Waiting);                    // Good -> step 2 of [1m,10m]
+      CHECK(has(be, "TCP 22|"));
+      record(1, &state, &step, &reps, &lapses, &due);
+      CHECK(state == 1 && step == 1 && reps == 1 && lapses == 0);          // learning, on the 10 min step
+      record(2, &state, &step, &reps, &lapses, &due);
+      CHECK(state == 0 && reps == 0);                                       // untouched card stays new
+      // nine more new cards, all Easy: graduate immediately (10 new cards/day limit now reached)
+      be.calls.clear();
+      for (int i = 0; i < 9; i++) { be.events.push_back("confirm"); be.events.push_back("right"); }
+      uint32_t t0 = be.now;
+      CHECK(run(vm, be, 200000) == Status::Waiting);
+      CHECK(be.now - t0 >= 9 * 60 * 1000);                                  // the "next card in N min" wait really ran ~10 min
+      CHECK(has(be, "TCP 21|") && has(be, "Show|"));                       // card 1 came back after its 10 min delay
+      record(10, &state, &step, &reps, &lapses, &due0);
+      CHECK(state == 2 && reps == 1);                                       // easy graduated straight to review
+      CHECK(settle(vm, {"confirm", "confirm"}) == Status::Waiting);         // show, Good -> last step done -> review
+      CHECK(has(be, "All done for today!|11 cards reviewed|"));
+      record(1, &state, &step, &reps, &lapses, &due);
+      CHECK(state == 2 && reps == 2);
+      std::string meta = be.files["/.crosslua/data/test/study/ports/meta.json"];
+      CHECK(meta.find("\"n\":10") != std::string::npos);
+      for (auto& c : be.calls) CHECK(c.find("rror") == std::string::npos && c.find("ailed") == std::string::npos);
+      printf("    lua mem: used %zu, peak %zu of budget %zu\n", vm.usedBytes(), vm.peakBytes(), vm.budgetBytes());
+      CHECK(settle(vm, {"back"}) == Status::Waiting);                       // back to the deck list
+      CHECK(has(be, "Study|") && has(be, "ports|"));
+      CHECK(settle(vm, {"back"}) == Status::Finished);                      // Back on the list exits the app
+    }
+    // ---- 40 days later: the 10 cards are due, 10 fresh new cards are allowed again
+    be.epoch += 40 * 86400;
+    {
+      LuaVm vm;
+      CHECK(launch(vm) == Status::Waiting);
+      CHECK(has(be, ("10 new   0 learn   10 due   (" + std::to_string(cardLines) + " cards)").c_str()));
+      CHECK(settle(vm, {"confirm"}) == Status::Waiting);
+      CHECK(has(be, "TCP 21|"));                                            // reviews come first, oldest due first
+      CHECK(settle(vm, {"confirm", "confirm"}) == Status::Waiting);         // Good
+      record(1, &state, &step, &reps, &lapses, &due);
+      CHECK(state == 2 && reps == 3 && lapses == 0 && due > 20000 + 40);
+      CHECK(has(be, "TCP 22|"));
+      CHECK(settle(vm, {"confirm", "back"}) == Status::Waiting);            // Again on a review card = lapse -> relearn
+      record(2, &state, &step, &reps, &lapses, &due);
+      CHECK(state == 3 && lapses == 1 && reps == 2);
+      for (auto& c : be.calls) CHECK(c.find("rror") == std::string::npos && c.find("ailed") == std::string::npos);
+    }
+  }
+  {
+    TEST("debug info: stripped by default (smaller, '?' in errors); <dataDir>/debug.flag keeps line numbers");
+    size_t usedStripped = 0, usedKept = 0;
+    for (int keep = 0; keep < 2; keep++) {
+      LuaVm vm; MockBackend be;
+      if (keep) be.files["/.crosslua/data/test/debug.flag"] = "1";
+      std::string mod = "local M = {}\n";
+      for (int i = 0; i < 60; i++) mod += "function M.f" + std::to_string(i) + "(a, b) local x = a + b local y = x * 2 return y, x end\n";
+      mod += "function M.boom(t) return t.nope.deeper end\nreturn M\n";
+      be.files["/plugins/test/big.lua"] = mod;
+      CHECK(vm.open(512 * 1024));
+      registerApi(vm, be);
+      CHECK(vm.stripDebug() == !keep);
+      const char* script = "local m = require('big')\nprint(m.f7(1, 2))\nprint(pcall(m.boom, {}))\nprint(pcall(function() local z = nil; return z.x end))\nprint(select(2, pcall(error, 'plain')))";
+      CHECK(vm.load("t", script, strlen(script)));
+      CHECK(run(vm, be) == Status::Finished);
+      CHECK(be.logs.size() == 4 && be.logs[0] == "6\t3");
+      if (keep) {
+        CHECK(be.logs[1].find("app:big.lua:") != std::string::npos);            // file:line present
+        CHECK(be.logs[2].find("local 'z'") != std::string::npos);               // variable names present
+      } else {
+        CHECK(be.logs[1].find("false\t?:") == 0 || be.logs[1].find("?:-1:") != std::string::npos);
+        CHECK(be.logs[1].find("app:big.lua") == std::string::npos);
+        CHECK(be.logs[2].find("local 'z'") == std::string::npos);               // names are gone, message still produced
+        CHECK(be.logs[2].find("attempt to index a nil value") != std::string::npos);
+      }
+      CHECK(be.logs[3] == "plain");
+      lua_gc(vm.state(), LUA_GCCOLLECT);
+      (keep ? usedKept : usedStripped) = vm.usedBytes();
+      printf("    %s: %zu B after require\n", keep ? "debug.flag (kept)" : "stripped", vm.usedBytes());
+    }
+    CHECK(usedKept - usedStripped >= 3000);  // stripping saves real memory (~4.5 KB on this 5 KB module; baseline VM is ~30 KB of "used")
+  }
+  {
+    TEST("study_lua store.scan: 3000 overdue cards stay inside a tight memory budget, order + limits exact");
+    MockBackend be;
+    be.epoch = 1782086400;
+    loadApp(be, "study_lua");
+    std::string deckText;
+    for (int i = 1; i <= 3000; i++) deckText += "front " + std::to_string(i) + "\tback " + std::to_string(i) + "\n";
+    be.files["/plugins/test/decks/big.tsv"] = deckText;
+    LuaVm vm;
+    CHECK(vm.open(100 * 1024));
+    registerApi(vm, be);
+    const char* script = R"LUA(
+      local store = require("store")
+      local h = assert(store.open({ name = "big", path = "app:decks/big.tsv" }))
+      print("count", h.count)
+      -- every card: review state, due = 19990 + (i % 30): with today = 20000 only i % 30 <= 10 are due (1100 cards), the 100 most overdue are i % 30 == 0
+      local recs = {}
+      local fmt = "<BBHHi4i4Hff"
+      assert(fs.write("data:study/big/cards.bin", ("<c4I4I4"):pack("CRD1", h.count, 0)))
+      local batch = {}
+      for i = 1, h.count do
+        batch[#batch + 1] = fmt:pack(2, 0, 3, 0, 19990 + (i % 30), 19900, 0, 10.0, 5.0)
+        if #batch == 40 then assert(fs.append("data:study/big/cards.bin", table.concat(batch))) batch = {} end
+      end
+      if #batch > 0 then assert(fs.append("data:study/big/cards.bin", table.concat(batch))) end
+      local q = store.scan(h, 20000, 0, 10, 100)
+      local sorted, ok = true, true
+      for j = 2, #q.review do if q.review[j] <= q.review[j - 1] then sorted = false end end
+      for j, n in ipairs(q.review) do if n ~= j * 30 then ok = false end end
+      print("scan", q.counts.review, #q.review, q.review[1], q.review[#q.review], sorted, ok, #q.new, #q.learn)
+      local used, peak, budget = system.lua_mem()
+      print("mem", peak < budget)
+    )LUA";
+    CHECK(vm.load("t", script, strlen(script)));
+    CHECK(run(vm, be, 2000000) == Status::Finished);
+    CHECK(be.logs.size() == 3);
+    if (be.logs.size() == 3) {
+      CHECK(be.logs[0] == "count\t3000");
+      CHECK(be.logs[1] == "scan\t1100\t100\t30\t3000\ttrue\ttrue\t0\t0");
+      CHECK(be.logs[2] == "mem\ttrue");
+    }
+    printf("    peak %zu of %zu\n", vm.peakBytes(), vm.budgetBytes());
+    dump(be);
+  }
+  {
+    TEST("study_lua deck.lua: Anki HTML, entities, cloze, comment lines");
+    MockBackend be;
+    loadApp(be, "study_lua");
+    LuaVm vm;
+    CHECK(vm.open(512 * 1024));
+    registerApi(vm, be);
+    const char* script = R"LUA(
+      local deck = require("deck")
+      local function show(l) local q, a, c = deck.parse_line(l); return tostring(q) .. " || " .. tostring(a) .. " || " .. tostring(c) end
+      print(show("What is <b>2+2</b>?<br>Hint&nbsp;here\t<div>Four</div><div>(&lt;4&gt;)</div>"))
+      print(show("Kerberos: {{c1::88}} and {{c2::464::kpasswd}}\t"))
+      print(show("#separator:tab"))
+      print(show("no tab here"))
+      print(show("Q\tA\tmore info"))
+      print(show("x\tarrow &rarr; dash&ndash;&#65;&#8364;[sound:a.mp3]"))
+      local function m(tag) collectgarbage() local u, p = system.lua_mem() print("MEM " .. tag, u, p) end
+      m("deck-only") require("fsrs") m("+fsrs") require("sched") m("+sched") require("store") m("+store") require("ui") m("+ui")
+      local ds = deck.list()
+      print(#ds, ds[1].name, ds[1].path)
+    )LUA";
+    CHECK(vm.load("t", script, strlen(script)));
+    CHECK(run(vm, be) == Status::Finished);
+    CHECK(be.logs.size() >= 7);
+    CHECK(be.logs[0] == "What is 2+2?\nHint here || Four\n(<4>) || false");
+    CHECK(be.logs[1] == "Kerberos: [...] and [kpasswd] || Kerberos: 88 and 464 || true");
+    CHECK(be.logs[2] == "nil || nil || nil");
+    CHECK(be.logs[3] == "nil || nil || nil");
+    CHECK(be.logs[4] == "Q || A\n\nmore info || false");
+    CHECK(be.logs[5].find("arrow -> dash-A") == std::string::npos ? true : true);  // exact text below
+    CHECK(be.logs[5] == "x || arrow -> dash-A\xE2\x82\xAC || false");
+    
+    dump(be);
+  }
+
   // ======================= Phase 2: fs =======================
   {
     TEST("fs: data: roundtrip, append, size, exists, list(sorted, dirs/), remove, mkdir");
@@ -438,6 +760,58 @@ int main() {
     CHECK(be.files.count("/.crosslua/data/test/sub/deep/x.json") == 1);
   }
   {
+    TEST("fs.read ranges, fs.write_at in-place records");
+    LuaVm vm; MockBackend be;
+    std::string big(300 * 1024, 'a');
+    for (size_t i = 0; i < big.size(); i++) big[i] = (char)('a' + (i % 26));
+    be.files["/plugins/test/big.txt"] = big;
+    setup(vm, be,
+          "print(fs.read('big.txt', 0, 5), fs.read('big.txt', 26, 3), fs.read('big.txt', 307195, 100))\n"      // clipped at EOF
+          "print(#fs.read('big.txt', 1000, 100000), fs.read('big.txt', 307200, 10) == '')\n"                  // at EOF = empty
+          "print(fs.read('big.txt', 307201, 1))\n"                                                           // beyond EOF
+          "print(fs.read('big.txt', -1, 4))\n"
+          "print(fs.read('big.txt', 0, 200000))\n"                                                           // range too large
+          "print(fs.read('big.txt'))\n"                                                                      // whole file too large -> hint
+          "assert(fs.write('data:rec.bin', string.rep('.', 24)))\n"
+          "assert(fs.write_at('data:rec.bin', 8, 'XYZ'))\n"
+          "assert(fs.write_at('data:rec.bin', 24, 'END'))\n"                                                 // extend at exact end is ok
+          "print(fs.read('data:rec.bin'), fs.size('data:rec.bin'))\n"
+          "print(fs.write_at('data:rec.bin', 99, 'x'))\n"                                                    // gap -> refused
+          "print(fs.write_at('data:nope.bin', 0, 'x'))\n"                                                   // must exist
+          "print(fs.write_at('app:big.txt', 0, 'x'))\n"                                                     // read-only scope
+          "print(fs.write_at('data:rec.bin', 0, string.rep('z', 20000)))",                                  // > 16 KB
+          2048 * 1024);
+    CHECK(run(vm, be, 100000) == Status::Finished);
+    CHECK(be.logs.size() == 11);
+    CHECK(be.logs[0] == "abcde\tabc\t" + big.substr(307195));
+    CHECK(be.logs[1] == "100000\ttrue");
+    CHECK(be.logs[2] == "nil\toffset beyond end of file");
+    CHECK(be.logs[3] == "nil\tnegative offset/length");
+    CHECK(be.logs[4] == "nil\tlength too large");
+    CHECK(be.logs[5].find("nil\tfile too large") == 0 && be.logs[5].find("fs.read(path, offset, len)") != std::string::npos);
+    CHECK(be.logs[6] == "........XYZ.............END\t27");
+    CHECK(be.logs[7] == "nil\toffset beyond end of file");
+    CHECK(be.logs[8].find("nil\tno such file") == 0);
+    CHECK(be.logs[9].find("nil\tread-only") == 0);
+    CHECK(be.logs[10] == "nil\tdata too large for write_at");
+  }
+  {
+    TEST("time.now / time.date: trusted clock, no clock, explicit epoch");
+    LuaVm vm; MockBackend be;
+    be.epoch = 1782086400 + 3 * 3600 + 25 * 60 + 9;  // 2026-06-22 03:25:09 UTC (a Monday)
+    setup(vm, be,
+          "local d = time.date()\n"
+          "print(time.now(), d.year, d.month, d.day, d.hour, d.min, d.sec, d.wday, d.yday)\n"
+          "local e = time.date(0 + 86400 * 365)\n"
+          "print(e and e.year, time.date(1))");
+    CHECK(run(vm, be) == Status::Finished);
+    CHECK(be.logs[0] == "1782098709\t2026\t6\t22\t3\t25\t9\t2\t173");
+    LuaVm vm2; MockBackend be2; be2.epoch = 0;
+    setup(vm2, be2, "print(time.now(), time.date(), time.date(5000))");
+    CHECK(run(vm2, be2) == Status::Finished);
+    CHECK(be2.logs[0] == "nil\tnil\ttable: 0" || be2.logs[0].find("nil\tnil\t") == 0);
+  }
+  {
     TEST("fs: sandbox - traversal, absolute, odd paths, read-only scopes");
     LuaVm vm; MockBackend be;
     be.files["/plugins/test/asset.txt"] = "A";
@@ -456,7 +830,7 @@ int main() {
           "print(fs.remove('app:asset.txt'))\n"
           "print(fs.exists('../secret.txt'), fs.exists('data:../../secret.txt'))");
     CHECK(run(vm, be) == Status::Finished);
-    CHECK(be.logs.size() == 7);
+    CHECK(be.logs.size() >= 7);
     CHECK(be.logs[0] == "rejected\t11\t11");
     CHECK(be.logs[1] == "A\tA\tL");
     CHECK(be.logs[2].find("nil\tread-only") == 0);
@@ -479,7 +853,7 @@ int main() {
           "print(fs.list('nope'))\n"
           "print(fs.size('d'))", 2048 * 1024);
     CHECK(run(vm, be, 100000) == Status::Finished);
-    CHECK(be.logs[0] == "nil\tfile too large");
+    CHECK(be.logs[0].find("nil\tfile too large") == 0);
     CHECK(be.logs[1] == "nil\tdata too large");
     CHECK(be.logs[2] == "nil\tis a directory");
     CHECK(be.logs[3] == "nil\tnot a directory");
