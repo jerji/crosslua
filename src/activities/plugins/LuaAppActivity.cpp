@@ -2,6 +2,7 @@
 
 
 #include <BoardConfig.h>
+#include <DevCapture.h>
 #include <Buzzer.h>
 #include <EnvironmentSensor.h>
 #include <Epub.h>
@@ -489,6 +490,7 @@ class LuaAppActivity::Backend final : public crosslua::Backend {
       FD_SET(fd, &wset);
       timeval tv = {0, 40 * 1000};
       const int sel = select(fd + 1, nullptr, &wset, nullptr, &tv);
+      devcapture::pollSerial();  // serial-injected buttons (x4ctl) stay alive while the loop is blocked here
       in_.update(true);
       if (in_.wasPressed(MappedInputManager::Button::Back) || in_.isPressed(MappedInputManager::Button::Back)) {
         for (int i = 0; i < 200 && in_.isPressed(MappedInputManager::Button::Back); i++) {  // swallow the release like http

@@ -26,3 +26,10 @@ struct Suppress {
 void dump(Print& out, const char* activity, int screenW, int screenH);
 }  // namespace devcapture
 #endif
+
+// Dev/test serial channel pump, defined in main.cpp (this header is included there). Blocking backend calls
+// (net.connect's cancel loop, http transfers) call pollSerial() so CMD:BTN injections keep working while the
+// firmware loop is parked inside them. Compiled in all builds; outside CROSSLUA_DEV it only reads the port buffer.
+namespace devcapture {
+void pollSerial();
+}

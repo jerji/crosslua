@@ -236,7 +236,7 @@ Plain TCP over the Arduino `NetworkClient` that CrossPoint already links for its
 |---|---|
 | `net.info()` -> `{ip, mask, gateway, dns}` \| nil, err | The device's own addressing. (Not `net.local`: `local` is a Lua keyword.) |
 | `net.resolve(host)` -> `"a.b.c.d"` \| nil, err | DNS (system timeout, blocks). An IPv4 literal is returned as is with no DNS traffic. Host names: letters, digits, `.` `-` `_`, at most 253 characters. |
-| `net.connect(host, port [, {timeout_ms=5000}])` -> handle \| nil, err | Blocks up to `timeout_ms` (100..15000); Back does not interrupt it. Handles are small integers 1..8 (TCP and UDP share the table). Refused when 8 are open or under 16 KB free RAM. |
+| `net.connect(host, port [, {timeout_ms=5000}])` -> handle \| nil, err | Blocks up to `timeout_ms` (100..15000); **Back cancels** the wait (`nil, "cancelled"`), same as `http`. Handles are small integers 1..8 (TCP and UDP share the table). Refused when 8 are open or under 16 KB free RAM. |
 | `net.read(h [, max=512])` -> string \| nil, "closed" | Never blocks. `""` means nothing has arrived yet. `max` 1..4096. After the peer closes you still get everything it sent, then `nil, "closed"`. |
 | `net.write(h, data)` -> n \| nil, err | `data` at most 16384 bytes per call; **n can be less than `#data`**: loop on the returned count. |
 | `net.available(h)` -> n | Bytes waiting (0 when none or closed). |

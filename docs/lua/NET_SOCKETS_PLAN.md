@@ -76,7 +76,13 @@ What the device told us (WiFi up, memprobe_lua / socktest_lua against `echo_serv
 - Closed connections sit in TIME_WAIT: ~4.6 KB for the first ~40 cycles, then a plateau (+212 bytes over the next 120).
 - Timings: connect to a LAN host 16-26 ms; DNS 30-52 ms; refused port 18-19 ms; a blackhole host with `timeout_ms=1500` failed after 1504-1505 ms.
 
-Done: UDP (verified on the X4), `net.listen`/`accept` (host-tested, 14 mutants caught, firmware build pending), `net.mdns_query` (host-tested, 14 mutants caught, firmware build pending). Still open: TLS sockets (`SecureClient`, needs ~60 KB: that does not fit next to a socket-using Lua heap on the X4 without measurement), and a way for Back to interrupt a blocking `connect`.
+Done: UDP (verified on the X4), `net.listen`/`accept` (host-tested, 14 mutants caught, firmware build pending), `net.mdns_query` (host-tested, 14 mutants caught, firmware build pending). Still open: TLS sockets (`SecureClient`, needs ~60 KB: that does not fit next to a socket-using Lua heap on the X4 without measurement).
+
+Back-to-cancel for `net.connect` is DONE (verified on the X4): the backend performs the connect itself as a non-blocking
+socket + select in 40 ms slices, pumping the buttons and the dev serial channel each slice; Back (physical or injected)
+returns `nil, "cancelled"`. To make injected buttons work at all, main.cpp's CMD: serial handler moved into
+`devcapture::pollSerial()` (called from loop() and from the blocking pumps: previously the handler only ran in loop(),
+so x4ctl could not inject anything while an app was blocked in a backend call).
 
 ## 6. WiFi driver buffer tuning: measured, no gain (dropped)
 

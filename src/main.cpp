@@ -855,6 +855,63 @@ void setup() {
   allowSleepAt = millis() + 2000;
 }
 
+// The dev/test serial channel (CMD:...). Extracted from loop() so blocking backend calls can keep serving it: a
+// serial-injected button used to be dead while a Lua app sat in net.connect/http (the handler only ran in loop()).
+namespace devcapture {
+void pollSerial() {
+  if (logSerial.available() > 0) {
+    String line = logSerial.readStringUntil('\n');
+    if (line.startsWith("CMD:")) {
+      String cmd = line.substring(4);
+      cmd.trim();
+      if (cmd == "SCREENSHOT") {
+        const uint32_t bufferSize = display.getBufferSize();
+        logSerial.printf("SCREENSHOT_START:%d\n", bufferSize);
+        uint8_t* buf = display.getFrameBuffer();
+        logSerial.write(buf, bufferSize);
+        logSerial.printf("SCREENSHOT_END\n");
+#ifdef CROSSLUA_DEV
+      } else if (cmd.startsWith("BTN:")) {
+        // CrossLua dev/test channel: CMD:BTN:<back|confirm|left|right|up|down|power>[:holdMs] -- physical buttons.
+        String name = cmd.substring(4);
+        unsigned long hold = 120, delayMs = 0;
+        const int colon = name.indexOf(':');
+        if (colon > 0) {  // name[:holdMs[:delayMs]]  (delay arms the press for later: see HalGPIO::injectButton)
+          String rest = name.substring(colon + 1);
+          name = name.substring(0, colon);
+          const int colon2 = rest.indexOf(':');
+          if (colon2 > 0) {
+            delayMs = static_cast<unsigned long>(rest.substring(colon2 + 1).toInt());
+            rest = rest.substring(0, colon2);
+            if (delayMs > 120000) delayMs = 0;
+          }
+          hold = static_cast<unsigned long>(rest.toInt());
+          if (hold < 30 || hold > 5000) hold = 120;
+        }
+        const struct {
+          const char* n;
+          uint8_t idx;
+        } map[] = {{"back", HalGPIO::BTN_BACK}, {"confirm", HalGPIO::BTN_CONFIRM}, {"left", HalGPIO::BTN_LEFT},
+                   {"right", HalGPIO::BTN_RIGHT}, {"up", HalGPIO::BTN_UP},         {"down", HalGPIO::BTN_DOWN}};
+        bool ok = false;
+        for (const auto& m : map) {
+          if (name == m.n) {
+            gpio.injectButton(m.idx, hold, delayMs);
+            ok = true;
+          }
+        }
+        logSerial.printf("BTN_%s:%s\n", ok ? "OK" : "ERR", name.c_str());
+      } else if (cmd == "SCREEN") {
+        devcapture::dump(logSerial, activityManager.currentName(), renderer.getScreenWidth(), renderer.getScreenHeight());
+      } else if (cmd == "PING") {
+        logSerial.printf("PONG:%lu:%s\n", millis(), activityManager.currentName());
+#endif
+      }
+    }
+  }
+}  // devcapture::pollSerial
+}  // namespace devcapture
+
 void loop() {
   static unsigned long maxLoopDuration = 0;
   const unsigned long loopStartTime = millis();
@@ -920,58 +977,8 @@ void loop() {
     lastMemPrint = millis();
   }
 
-  // Handle incoming serial commands,
-  // nb: we use logSerial from logging to avoid deprecation warnings
-  if (logSerial.available() > 0) {
-    String line = logSerial.readStringUntil('\n');
-    if (line.startsWith("CMD:")) {
-      String cmd = line.substring(4);
-      cmd.trim();
-      if (cmd == "SCREENSHOT") {
-        const uint32_t bufferSize = display.getBufferSize();
-        logSerial.printf("SCREENSHOT_START:%d\n", bufferSize);
-        uint8_t* buf = display.getFrameBuffer();
-        logSerial.write(buf, bufferSize);
-        logSerial.printf("SCREENSHOT_END\n");
-#ifdef CROSSLUA_DEV
-      } else if (cmd.startsWith("BTN:")) {
-        // CrossLua dev/test channel: CMD:BTN:<back|confirm|left|right|up|down|power>[:holdMs] -- physical buttons.
-        String name = cmd.substring(4);
-        unsigned long hold = 120, delayMs = 0;
-        const int colon = name.indexOf(':');
-        if (colon > 0) {  // name[:holdMs[:delayMs]]  (delay arms the press for later: see HalGPIO::injectButton)
-          String rest = name.substring(colon + 1);
-          name = name.substring(0, colon);
-          const int colon2 = rest.indexOf(':');
-          if (colon2 > 0) {
-            delayMs = static_cast<unsigned long>(rest.substring(colon2 + 1).toInt());
-            rest = rest.substring(0, colon2);
-            if (delayMs > 120000) delayMs = 0;
-          }
-          hold = static_cast<unsigned long>(rest.toInt());
-          if (hold < 30 || hold > 5000) hold = 120;
-        }
-        const struct {
-          const char* n;
-          uint8_t idx;
-        } map[] = {{"back", HalGPIO::BTN_BACK}, {"confirm", HalGPIO::BTN_CONFIRM}, {"left", HalGPIO::BTN_LEFT},
-                   {"right", HalGPIO::BTN_RIGHT}, {"up", HalGPIO::BTN_UP},         {"down", HalGPIO::BTN_DOWN}};
-        bool ok = false;
-        for (const auto& m : map) {
-          if (name == m.n) {
-            gpio.injectButton(m.idx, hold, delayMs);
-            ok = true;
-          }
-        }
-        logSerial.printf("BTN_%s:%s\n", ok ? "OK" : "ERR", name.c_str());
-      } else if (cmd == "SCREEN") {
-        devcapture::dump(logSerial, activityManager.currentName(), renderer.getScreenWidth(), renderer.getScreenHeight());
-      } else if (cmd == "PING") {
-        logSerial.printf("PONG:%lu:%s\n", millis(), activityManager.currentName());
-#endif
-      }
-    }
-  }
+  devcapture::pollSerial();  // services the CMD: serial channel (see pollDevSerial below); keeps the dev channel alive even
+                             // when a Lua app blocks the loop inside a backend call (net.connect, http)
 
   // Check for any user activity (button press or release) or active background work
   static unsigned long lastActivityTime = millis();

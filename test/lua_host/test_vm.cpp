@@ -152,6 +152,7 @@ struct MockBackend : Backend {
   std::string txLog;             // "host:port<-data" for every write
   int connectCalls = 0;
   bool netReadFail = false;  // netRead reports "closed" although bytes were pending (the peer vanished between the two calls)
+  const char* connectFailMsg = nullptr;  // when set, netConnect fails with this message (e.g. "cancelled")
   int relaxOn = 0, relaxOff = 0;  // heapRelax(true/false) calls: must always balance
   void heapRelax(bool on) override { (on ? relaxOn : relaxOff)++; }
   size_t writeChunk = 0;  // 0 = accept everything; otherwise at most this many bytes per write (partial writes)
@@ -176,6 +177,10 @@ struct MockBackend : Backend {
   int netConnect(const char* host, int port, int timeoutMs, char* err, size_t errCap) override {
     connectCalls++;
     connectOpts.push_back(timeoutMs);
+    if (connectFailMsg) {
+      snprintf(err, errCap, "%s", connectFailMsg);
+      return -1;
+    }
     const std::string key = std::string(host) + ":" + std::to_string(port);
     if (sockRefused.count(key)) {
       snprintf(err, errCap, "connection refused (mock)");
@@ -3653,6 +3658,23 @@ int main() {
     CHECK(be.logs[1] == "false\tnot enough memory");
     vm.close();
     CHECK(vm.usedBytes() == 0);
+  }
+  {
+    TEST("net.connect: backend errors pass through verbatim (Back-cancel reaches Lua as nil, \"cancelled\")");
+    MockBackend be;
+    be.net = true;
+    be.wifiUp = true;
+    be.connectFailMsg = "cancelled";
+    LuaVm vm;
+    CHECK(vm.open(128 * 1024));
+    registerApi(vm, be);
+    const char* script = "local h, e = net.connect('blackhole.test', 80, {timeout_ms = 15000}); print(h, e)";
+    CHECK(vm.load("t", script, strlen(script)));
+    CHECK(run(vm, be, 100000) == Status::Finished);
+    CHECK(be.logs.size() == 1);
+    CHECK(be.logs[0] == "nil\tcancelled");
+    CHECK(be.connectCalls == 1 && be.connectOpts[0] == 15000);
+    CHECK(be.socks[0].used == false);  // no slot leaked on the failure path
   }
   {
     TEST("net.listen: basic listen, close, permission and WiFi gates");
