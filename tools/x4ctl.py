@@ -7,8 +7,9 @@ Needs a dev firmware (env:default: CROSSLUA_DEV) on the device. Run with:
 Commands
   ports                       list serial ports
   ping                        round-trip check; prints the current screen/activity name
-  btn <name[:holdMs]>...      press PHYSICAL buttons: back confirm left right up down (0.4 s apart; --gap to change).
-                              e.g. `btn right right confirm`, `btn back:1300` (1.3 s hold = long press)
+  btn <name[:holdMs[:delayMs]]>...  press PHYSICAL buttons: back confirm left right up down (0.4 s apart; --gap to change).
+                              e.g. `btn right right confirm`, `btn back:1300` (1.3 s hold = long press),
+                              `btn back:150:4000` (arm a tap 4 s from now: reaches a main loop that is blocked in a long call)
   screen [--raw]              the screen as TEXT (rows, highlighted row marked '>'): no vision model needed
   select <regex>              move the highlight (Down) until a row matching <regex> is marked '>' (max 20 presses)
   open <regex>                select, then press Confirm; prints the resulting screen
@@ -99,13 +100,16 @@ class Device:
 
     def press(self, names, gap=0.4):
         for n in names:
-            base, _, hold = n.partition(":")
-            if base not in BUTTONS or (hold and not hold.isdigit()):
-                raise SystemExit(f"unknown button {n!r}; use one of {BUTTONS}, optionally name:holdMs")
+            base, _, rest = n.partition(":")
+            hold, _, delay = rest.partition(":")
+            if base not in BUTTONS or (hold and not hold.isdigit()) or (delay and not delay.isdigit()):
+                raise SystemExit(f"unknown button {n!r}; use one of {BUTTONS}, optionally name:holdMs[:delayMs]")
             self.send(f"BTN:{n}")
             line = self.wait_for(r"^BTN_(OK|ERR):", 2.0)
             if not line or line.startswith("BTN_ERR"):
                 raise SystemExit(f"button {n!r} not acknowledged (dev firmware flashed?)")
+            if delay:  # armed for later: the ack is immediate, the press happens delayMs from now; don't wait for it
+                gap = 0.1
             for _ in self.lines(gap + (int(hold) / 1000.0 if hold else 0.12)):  # keep logging while we wait
                 pass
 

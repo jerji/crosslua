@@ -1,5 +1,6 @@
 #include "LuaApi.h"
 
+#include <algorithm>
 #include <cstdio>
 #include <cstring>
 
@@ -58,18 +59,62 @@ int gfx_clear(lua_State* L) {
   be(L).clear(!lua_toboolean(L, 1));  // gfx.clear() = white; gfx.clear(true) = black
   return 0;
 }
+// ---- clipping: apps may draw past the edge (e.g. a line to x = width); that must clip, never log errors or wrap.
+// Cohen-Sutherland on 64-bit intermediates. Returns false when nothing of the line is on screen.
+bool clipLine(int w, int h, int& x0, int& y0, int& x1, int& y1) {
+  auto code = [&](int x, int y) { return (x < 0 ? 1 : 0) | (x >= w ? 2 : 0) | (y < 0 ? 4 : 0) | (y >= h ? 8 : 0); };
+  int c0 = code(x0, y0), c1 = code(x1, y1);
+  for (int guard = 0; guard < 8; guard++) {
+    if (!(c0 | c1)) return true;   // both inside
+    if (c0 & c1) return false;     // both on the same outside side
+    const int out = c0 ? c0 : c1;
+    int64_t x = 0, y = 0;
+    const int64_t dx = x1 - x0, dy = y1 - y0;
+    if (out & 8) { y = h - 1; x = x0 + dx * (y - y0) / dy; }
+    else if (out & 4) { y = 0; x = x0 + dx * (y - y0) / dy; }
+    else if (out & 2) { x = w - 1; y = y0 + dy * (x - x0) / dx; }
+    else { x = 0; y = y0 + dy * (x - x0) / dx; }
+    if (out == c0) { x0 = static_cast<int>(x); y0 = static_cast<int>(y); c0 = code(x0, y0); }
+    else { x1 = static_cast<int>(x); y1 = static_cast<int>(y); c1 = code(x1, y1); }
+  }
+  return false;
+}
+
+void drawLineClipped(lua_State* L, int x0, int y0, int x1, int y1, bool black) {
+  if (clipLine(be(L).width(), be(L).height(), x0, y0, x1, y1)) be(L).line(x0, y0, x1, y1, black);
+}
+
 int gfx_pixel(lua_State* L) {
-  be(L).pixel(ci(L, 1), ci(L, 2), !lua_isboolean(L, 3) || lua_toboolean(L, 3));
+  const int x = ci(L, 1), y = ci(L, 2);
+  if (x >= 0 && y >= 0 && x < be(L).width() && y < be(L).height())
+    be(L).pixel(x, y, !lua_isboolean(L, 3) || lua_toboolean(L, 3));
   return 0;
 }
 int gfx_line(lua_State* L) {
-  be(L).line(ci(L, 1), ci(L, 2), ci(L, 3), ci(L, 4), !lua_isboolean(L, 5) || lua_toboolean(L, 5));
+  drawLineClipped(L, ci(L, 1), ci(L, 2), ci(L, 3), ci(L, 4), !lua_isboolean(L, 5) || lua_toboolean(L, 5));
   return 0;
 }
 // gfx.rect(x, y, w, h [, filled [, black]])
 int gfx_rect(lua_State* L) {
-  be(L).rect(ci(L, 1), ci(L, 2), ci(L, 3), ci(L, 4), !lua_isboolean(L, 6) || lua_toboolean(L, 6),
-             lua_toboolean(L, 5));
+  int x = ci(L, 1), y = ci(L, 2), w = ci(L, 3), h = ci(L, 4);
+  const bool black = !lua_isboolean(L, 6) || lua_toboolean(L, 6);
+  const bool filled = lua_toboolean(L, 5);
+  if (w <= 0 || h <= 0) return 0;
+  const int W = be(L).width(), H = be(L).height();
+  if (filled) {
+    const int x1 = std::min<int64_t>(static_cast<int64_t>(x) + w, W), y1 = std::min<int64_t>(static_cast<int64_t>(y) + h, H);
+    x = std::max(x, 0);
+    y = std::max(y, 0);
+    if (x1 > x && y1 > y) be(L).rect(x, y, x1 - x, y1 - y, black, true);
+  } else if (x >= 0 && y >= 0 && static_cast<int64_t>(x) + w <= W && static_cast<int64_t>(y) + h <= H) {
+    be(L).rect(x, y, w, h, black, false);
+  } else {  // partly off-screen outline: draw only the edges that are visible
+    const int x1 = x + w - 1, y1 = y + h - 1;
+    drawLineClipped(L, x, y, x1, y, black);
+    drawLineClipped(L, x, y1, x1, y1, black);
+    drawLineClipped(L, x, y, x, y1, black);
+    drawLineClipped(L, x1, y, x1, y1, black);
+  }
   return 0;
 }
 // gfx.text(x, y, str [, font [, flags]])   flags: b bold, i italic, w white, c center, r right
@@ -161,7 +206,8 @@ int sys_millis(lua_State* L) {
 int sys_heap(lua_State* L) {
   lua_pushinteger(L, static_cast<lua_Integer>(be(L).freeHeap()));
   lua_pushinteger(L, static_cast<lua_Integer>(be(L).minFreeHeap()));
-  return 2;
+  lua_pushinteger(L, static_cast<lua_Integer>(be(L).largestFreeBlock()));
+  return 3;
 }
 int sys_lua_mem(lua_State* L) {
   const LuaVm* vm = ctx(L)->vm;
@@ -260,6 +306,7 @@ void registerApi(LuaVm& vm, Backend& backend) {
   regTable(L, c, "time", timeFns);
   registerFs(L, c);
   registerJson(L, c);
+  registerNet(L, c);
   registerRequire(L, c);
 
   lua_pushlightuserdata(L, c);

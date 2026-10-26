@@ -6,13 +6,20 @@
 #include <HalStorage.h>
 #include <Logging.h>
 #include <TrustedTime.h>
+#include <ArduinoJson.h>
+#include <WiFi.h>
 
 #include <algorithm>
 #include <cstring>
 #include <deque>
 #include <vector>
 
+#include "MappedInputManager.h"
+#include "SilentRestart.h"
+#include "activities/network/WifiSelectionActivity.h"
 #include "fontIds.h"
+#include "network/HttpDownloader.h"
+#include "network/WifiPowerSaveGuard.h"
 #include "lua/LuaApi.h"
 #include "lua/LuaVm.h"
 
@@ -40,11 +47,14 @@ constexpr size_t EVENT_QUEUE_MAX = 16;
 // ---------------------------------------------------------------------------
 class LuaAppActivity::Backend final : public crosslua::Backend {
  public:
-  Backend(GfxRenderer& r, std::string name, std::string dir)
-      : r_(r), name_(std::move(name)), dir_(std::move(dir)), dataDir_("/.crosslua/data/" + name_) {}
+  Backend(GfxRenderer& r, MappedInputManager& in, std::string name, std::string dir)
+      : r_(r), in_(in), name_(std::move(name)), dir_(std::move(dir)), dataDir_("/.crosslua/data/" + name_) {
+    loadPermissions();
+  }
 
   std::deque<const char*> events;  // string literals only (see collectInput)
   bool exitRequested = false;
+  bool wifiConnectRequested = false;  // set by wifi.connect(); the activity launches the system WiFi UI
 
   int width() override { return r_.getScreenWidth(); }
   int height() override { return r_.getScreenHeight(); }
@@ -113,6 +123,148 @@ class LuaAppActivity::Backend final : public crosslua::Backend {
   const char* dataDir() override { return dataDir_.c_str(); }
   const char* libDir() override { return "/.crosslua/lib"; }
   void requestExit() override { exitRequested = true; }
+
+  // --- network ------------------------------------------------------------------------------------------------
+  // An app may only use the network if its manifest.json says so: {"permissions": ["network"]}.
+  bool netAllowed() override { return net_; }
+  bool wifiConnected() override { return WiFi.status() == WL_CONNECTED; }
+  void wifiRequestConnect() override { wifiConnectRequested = true; }
+  bool wifiInfo(char* ssid, size_t ssidCap, char* ip, size_t ipCap, int* rssi) override {
+    if (WiFi.status() != WL_CONNECTED) return false;
+    snprintf(ssid, ssidCap, "%s", WiFi.SSID().c_str());
+    snprintf(ip, ipCap, "%s", WiFi.localIP().toString().c_str());
+    *rssi = WiFi.RSSI();
+    return true;
+  }
+  void wifiOff() override {
+    WiFi.disconnect(false);
+    WiFi.mode(WIFI_OFF);
+  }
+  size_t largestFreeBlock() override { return HalMemory::getInternalHeap().largestBlockBytes; }
+
+  bool httpRequest(const crosslua::Backend::HttpRequest& rq, crosslua::Backend::HttpResult& rs) override {
+    auto fail = [&](const char* fmt, auto... a) {
+      snprintf(rs.error, sizeof(rs.error), fmt, a...);
+      return false;
+    };
+    if (WiFi.status() != WL_CONNECTED) return fail("wifi is not connected (call wifi.connect() first)");
+    const bool tls = !strncasecmp(rq.url, "https://", 8);
+    if (tls) {  // the TLS session + ~17 KB record buffer need real, contiguous RAM (see HttpDownloader.h)
+      const auto h = HalMemory::getInternalHeap();
+      if (h.freeBytes < HttpDownloader::MIN_TLS_FREE_HEAP || h.largestBlockBytes < HttpDownloader::MIN_TLS_MAX_ALLOC)
+        return fail("not enough free RAM for TLS (free %u, largest %u): free memory first", (unsigned)h.freeBytes,
+                    (unsigned)h.largestBlockBytes);
+    }
+    std::vector<HttpDownloader::Header> hdrs;
+    for (int i = 0; i < rq.headerCount; i++) hdrs.emplace_back(rq.headers[i].name, rq.headers[i].value);
+
+    bool cancelled = false;
+    auto pollCancel = [&]() {  // the Lua app is blocked in this call, so pump the buttons ourselves: Back cancels
+      in_.update(true);
+      if (in_.wasPressed(MappedInputManager::Button::Back) || in_.isPressed(MappedInputManager::Button::Back)) cancelled = true;  // a quick tap counts
+      return cancelled;
+    };
+    auto finishCancel = [&]() {
+      for (int i = 0; i < 200 && in_.isPressed(MappedInputManager::Button::Back); i++) {  // swallow the release so the
+        delay(10);                                                                          // app never sees this Back
+        in_.update(true);
+      }
+      events.clear();
+      return fail("cancelled");
+    };
+
+    WifiPowerSaveGuard psGuard;
+    const std::string url(rq.url);
+    if (!strcmp(rq.method, "POST")) {
+      std::string out;
+      int st = 0;
+      const bool ok = HttpDownloader::postForm(url, std::string(rq.body ? rq.body : "", rq.bodyLen), out, &st);
+      (void)ok;
+      rs.status = st;
+      if (st == 0) return fail("request failed (no response)");
+      rs.bodyLen = std::min(out.size(), rq.maxBody);
+      rs.bytes = rs.bodyLen;
+      rs.body = static_cast<char*>(malloc(rs.bodyLen ? rs.bodyLen : 1));
+      if (!rs.body) return fail("out of memory");
+      memcpy(rs.body, out.data(), rs.bodyLen);
+      return true;
+    }
+    if (rq.savePath) {
+      std::string dest(rq.savePath);
+      const size_t slash = dest.rfind('/');
+      if (slash != std::string::npos && slash > 0) Storage.ensureDirectoryExists(dest.substr(0, slash).c_str());
+      const auto err = HttpDownloader::downloadToFile(
+          url, dest, [&](size_t done, size_t) { rs.bytes = done; pollCancel(); }, &cancelled, "", "", hdrs, false);
+      rs.status = HttpDownloader::lastStatus();
+      if (cancelled) return finishCancel();
+      switch (err) {
+        case HttpDownloader::OK:
+          return true;
+        case HttpDownloader::UNAUTHORIZED:
+          return true;  // a real response (401/403): status says so, nothing was saved
+        case HttpDownloader::FILE_ERROR:
+          return fail("cannot write the file (SD card full or not writable)");
+        case HttpDownloader::ABORTED:
+          return fail("aborted");
+        default:
+          if (rs.status > 0) return true;  // non-2xx answer: nothing saved
+          return fail("download failed (no response)");
+      }
+    }
+    // in-memory GET
+    HttpDownloader::FetchOptions opt;
+    opt.headers = hdrs;
+    int st = 0;
+    opt.statusOut = &st;
+    char* buf = nullptr;
+    size_t n = 0, cap = 0;
+    bool tooBig = false, oom = false;
+    HttpDownloader::fetchUrl(
+        url,
+        [&](const uint8_t* d, size_t len) {
+          if (pollCancel()) return false;
+          if (n + len > rq.maxBody) {
+            tooBig = true;
+            return false;
+          }
+          if (n + len > cap) {
+            size_t nc = cap ? cap * 2 : 2048;
+            while (nc < n + len) nc *= 2;
+            if (nc > rq.maxBody) nc = rq.maxBody;
+            char* nb = static_cast<char*>(realloc(buf, nc));
+            if (!nb) {
+              oom = true;
+              return false;
+            }
+            buf = nb;
+            cap = nc;
+          }
+          memcpy(buf + n, d, len);
+          n += len;
+          return true;
+        },
+        opt);
+    rs.status = st;
+    if (cancelled) {
+      free(buf);
+      return finishCancel();
+    }
+    if (tooBig) {
+      free(buf);
+      return fail("response larger than max_body (%u bytes): use save_to", (unsigned)rq.maxBody);
+    }
+    if (oom) {
+      free(buf);
+      return fail("out of memory while reading the response");
+    }
+    if (st == 0) {
+      free(buf);
+      return fail("request failed (no response)");
+    }
+    rs.body = buf;
+    rs.bodyLen = rs.bytes = n;
+    return true;
+  }
 
   // --- storage. Paths arrive pre-sandboxed (app:/data:/lib: scopes) from the API layer. ---
   int64_t fsSize(const char* path) override {
@@ -187,6 +339,17 @@ class LuaAppActivity::Backend final : public crosslua::Backend {
   }
   GfxRenderer& r_;
   std::string name_;
+  void loadPermissions() {
+    std::string json;
+    if (!Storage.readFileToString(TAG, dir_ + "/manifest.json", 4096, json)) return;
+    JsonDocument doc;
+    if (deserializeJson(doc, json) != DeserializationError::Ok) return;
+    for (JsonVariantConst p : doc["permissions"].as<JsonArrayConst>())
+      if (p.is<const char*>() && !strcmp(p.as<const char*>(), "network")) net_ = true;
+  }
+
+  MappedInputManager& in_;
+  bool net_ = false;
   std::string dir_;
   std::string dataDir_;
   HalFile listDir_;
@@ -211,7 +374,15 @@ void LuaAppActivity::onEnter() {
   Activity::onEnter();
   RenderLock lock;
 
-  backend_.reset(new (std::nothrow) Backend(renderer, appName_, appDir_));
+  // Start from a quiet radio. Screens earlier in the same menu (the Plugin Hub, a book sync...) can leave WiFi up, which
+  // holds ~56 KB and would make every Lua app fail to start with "free RAM too low". An app that wants WiFi asks for it.
+  if (WiFi.getMode() != WIFI_MODE_NULL) {
+    LOG_INF(TAG, "radio was left on: switching it off before the app starts");
+    WiFi.disconnect(false);
+    WiFi.mode(WIFI_OFF);
+    delay(30);
+  }
+  backend_.reset(new (std::nothrow) Backend(renderer, mappedInput, appName_, appDir_));
   vm_.reset(new (std::nothrow) crosslua::LuaVm());
   if (!backend_ || !vm_) {
     showError("Out of memory", "Could not start the Lua runtime.");
@@ -261,6 +432,32 @@ void LuaAppActivity::onExit() {
   // Hand the picker underneath a clean waveform after an app scribbled on the panel.
   renderer.promoteNextRefresh(HalDisplay::HALF_REFRESH);
   Activity::onExit();
+  // Same rule as every other WiFi screen: after the radio (and possibly TLS) ran, the heap is fragmented, so drop the
+  // connection and reboot silently into Home on a pristine heap. Apps that never touched WiFi are unaffected.
+  if (WiFi.getMode() != WIFI_MODE_NULL) {
+    LOG_INF(TAG, "wifi was used: silent restart to defragment the heap");
+    WiFi.disconnect(false);
+    delay(30);
+    silentRestart();
+  }
+}
+
+void LuaAppActivity::launchWifi() {
+  WiFi.mode(WIFI_STA);
+  startActivityForResult(std::make_unique<WifiSelectionActivity>(renderer, mappedInput), [this](const ActivityResult& r) {
+    const bool ok = !r.isCancelled;
+    LOG_INF(TAG, "wifi.connect -> %s", ok ? "connected" : "not connected");
+    renderer.clearScreen();
+    if (vm_ && vm_->status() == crosslua::Status::Waiting) {
+      vm_->resume(ok ? "wifi:ok" : "wifi:fail");
+      armWait();
+    }
+  });
+}
+
+void LuaAppActivity::armWait() {
+  if (vm_ && vm_->status() == crosslua::Status::Waiting)
+    waitDeadline_ = vm_->timeoutMs() >= 0 ? millis() + static_cast<uint32_t>(vm_->timeoutMs()) : 0;
 }
 
 void LuaAppActivity::leave() {
@@ -325,11 +522,6 @@ void LuaAppActivity::collectInput() {
 void LuaAppActivity::step() {
   using crosslua::Status;
   const uint32_t start = millis();
-  auto armWait = [&]() {
-    if (vm_->status() == Status::Waiting) {
-      waitDeadline_ = vm_->timeoutMs() >= 0 ? millis() + static_cast<uint32_t>(vm_->timeoutMs()) : 0;
-    }
-  };
   while (millis() - start < SLICE_MS) {
     if (backend_->exitRequested) return leave();
     switch (vm_->status()) {
@@ -338,6 +530,10 @@ void LuaAppActivity::step() {
         armWait();
         break;
       case Status::Waiting: {
+        if (backend_->wifiConnectRequested) {  // wifi.connect(): hand the screen to the system's WiFi flow
+          backend_->wifiConnectRequested = false;
+          return launchWifi();
+        }
         if (vm_->wakesOnEvent()) {
           if (const char* e = backend_->popEvent()) {
             vm_->resume(e);

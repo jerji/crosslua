@@ -1,4 +1,4 @@
-# CrossLua app API (v0.3)
+# CrossLua app API (v0.4)
 
 An app is a plugin folder containing `main.lua`, in any plugin root
 (`/plugins`, `/.plugins`, `/.crosspoint/plugins`):
@@ -60,7 +60,7 @@ Event names: `back confirm left right up down`. Events are delivered on button *
 `app.sleep(ms)` (timer only — buttons stay queued) · `app.exit()` · `app.name()` · `app.dir()` (e.g. `/plugins/hello_lua`)
 
 ## system
-`system.millis()` (31-bit, wraps ~24 days — compare with subtraction) · `system.heap()` → free, min_free (device RAM) ·
+`system.millis()` (31-bit, wraps ~24 days — compare with subtraction) · `system.heap()` → free, min_free, largest free block (device RAM) ·
 `system.lua_mem()` → used, peak, budget (this app's Lua heap) · `system.battery()` → percent
 
 ## fs — sandboxed files
@@ -100,6 +100,34 @@ Circular requires and missing modules raise a clear error listing the places sea
 For day-granular scheduling use the local calendar date, not `now() // 86400` (that rolls over at UTC midnight).
 `study_lua/main.lua` has a `days_from_civil(y, m, d)` helper.
 
+## wifi / http — network (needs a permission)
+An app must declare it in `manifest.json`, or every call below fails with a clear error (and `wifi.status()` hides the SSID/IP):
+```json
+{"title": "My app", "permissions": ["network"]}
+```
+| call | notes |
+|---|---|
+| `wifi.connect()` → true \| false, reason | Parks your script and hands the screen to the system's WiFi flow, which auto-joins the last saved network (usually no UI at all; otherwise the normal network picker/keyboard). **The screen is the system's afterwards: redraw.** Returns immediately with `true` if already connected. Input events do not wake it. **Refuses up front** (`false, "not enough free RAM for WiFi + TLS (free 86K, need 96K)…"`) when less than 96 KB is free: WiFi costs ~56 KB and TLS wants 40 KB on top. Always show `reason`. |
+| `wifi.status()` → `{connected, ssid, ip, rssi}` | |
+| `wifi.off()` | radio off now (frees RAM). Leaving the app always tears WiFi down anyway. |
+| `http.request{url, method, headers, body, save_to, max_body}` → `{status, ok, bytes, body}` \| nil, err | see below |
+| `http.get(url [, opts])` | `http.request` with `url` filled in |
+
+`http.request` fields: `url` (`http://` or `https://`, ≤ 600 chars); `method` `"GET"` (default) or `"POST"` (body is sent as
+`application/x-www-form-urlencoded`, ≤ 8 KB, response ≤ a few KB); `headers` = `{Name = "value"}` (≤ 12; CR/LF/`:` rejected);
+`max_body` (1…65536, default 16384) caps an **in-memory** response; `save_to = "data:path"` streams the response to a file instead
+(no size limit but the card; the result has no `body`; read it back with `fs.read(path, offset, len)`).
+A non-2xx status is a result (`ok = false`), not an error. Errors (`nil, msg`): not connected, DNS/connect/TLS failure, response
+larger than `max_body`, not enough RAM for TLS, user pressed **Back** (`"cancelled"`), bad arguments.
+
+* **Calls block the device** (like every CrossPoint screen that talks to the network): draw "Loading…" and `gfx.present()` *before*
+  calling. **Back cancels** a transfer.
+* HTTPS is verified against CrossPoint's CA bundle. TLS needs ≥ 40 KB free RAM **and** a ≥ 20 KB contiguous block; otherwise the
+  call fails with `not enough free RAM for TLS (free N, largest M)`. `system.heap()` returns `free, min_free, largest_block`;
+  keep your Lua heap small in network apps (`collectgarbage()` first).
+* After WiFi was used, leaving the app does a **silent reboot** to Home (the same defragmentation every WiFi screen does).
+* Redirects, `Content-Length` checks and `.part` staging for downloads are done by CrossPoint's `HttpDownloader`.
+
 ## json
 `json.encode(value)` → string \| nil, err · `json.decode(string)` → value \| nil, "msg at byte N" · `json.null` (sentinel for JSON null).
 Arrays are tables with keys 1..n; everything else encodes as an object (string keys only). Decode never throws; nesting depth limit 24.
@@ -111,4 +139,4 @@ Memory: the result is built in a few KB of staging chunks; budget roughly 2–3�
 Backends: `src/lua/LuaApi.h` (`Backend` interface). Host tests: `test/lua_host/run.sh`.
 
 ## Planned (see PLAN.md)
-`zip`, `wifi`/`http`/`net`, `ble`/`hid`, `radio`, orientation control.
+`zip`, `net` (raw TCP), `ble`/`hid`, `radio`, orientation control, HTTP streaming callbacks.

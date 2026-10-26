@@ -916,11 +916,18 @@ void loop() {
       } else if (cmd.startsWith("BTN:")) {
         // CrossLua dev/test channel: CMD:BTN:<back|confirm|left|right|up|down|power>[:holdMs] -- physical buttons.
         String name = cmd.substring(4);
-        unsigned long hold = 120;
+        unsigned long hold = 120, delayMs = 0;
         const int colon = name.indexOf(':');
-        if (colon > 0) {
-          hold = static_cast<unsigned long>(name.substring(colon + 1).toInt());
+        if (colon > 0) {  // name[:holdMs[:delayMs]]  (delay arms the press for later: see HalGPIO::injectButton)
+          String rest = name.substring(colon + 1);
           name = name.substring(0, colon);
+          const int colon2 = rest.indexOf(':');
+          if (colon2 > 0) {
+            delayMs = static_cast<unsigned long>(rest.substring(colon2 + 1).toInt());
+            rest = rest.substring(0, colon2);
+            if (delayMs > 120000) delayMs = 0;
+          }
+          hold = static_cast<unsigned long>(rest.toInt());
           if (hold < 30 || hold > 5000) hold = 120;
         }
         const struct {
@@ -931,7 +938,7 @@ void loop() {
         bool ok = false;
         for (const auto& m : map) {
           if (name == m.n) {
-            gpio.injectButton(m.idx, hold);
+            gpio.injectButton(m.idx, hold, delayMs);
             ok = true;
           }
         }

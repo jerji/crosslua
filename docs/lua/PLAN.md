@@ -18,7 +18,7 @@ workflow, tests) · [UPSTREAM_TOUCHPOINTS.md](UPSTREAM_TOUCHPOINTS.md) (every ed
 | 0 Baseline | **done** — stock build measured, toolchain fixed |
 | 1 VM in firmware | **done and verified on the real X4** |
 | 2 Core API | **mostly done** — gfx, input, app, system, fs (+ range reads, in-place records), require, json, time. Remaining: `zip`, shared `ui` lib in `/.crosslua/lib/`, orientation |
-| 3 Network (wifi/http/net) | not started |
+| 3 Network (wifi/http) | **done and verified on the X4**: `wifi.connect/status/off`, `http.request/get` (HTTPS, POST form, stream-to-file, Back cancels), permission gate. Raw `net` sockets not started |
 | 4 BLE + radio | not started |
 | 5 Port features as apps | **started**: Study (flashcards, FSRS-5) and 2048 done and verified on the X4. Next: more crossplay games, AO3 library (needs Phase 3), the rest |
 | 6 Ecosystem | not started |
@@ -94,10 +94,25 @@ keyboard over `gfx`), `app.orientation()`, images/bitmaps.
   `tools/x4push.py` copies apps over WiFi. A full 16 MB flash backup of the device is in `/root/x4/backup/`.
 - Skill `crosslua-x4-device-testing` records the workflow and pitfalls.
 
-## Phase 3 — Network API (not started)
-`wifi` (connect via the existing saved-credential store and selection activity; AP mode), `http` (HTTPS over the
-wolfSSL already in the firmware), `net` (TCP). Radio-on costs 40–60 KB RAM, so apps must check `system.heap()`; the
-40 KB guard floor will need re-measuring with WiFi up. Needed by the AO3 port and any sync app.
+## Phase 3 — Network API (done; verified on hardware)
+`wifi.connect()` parks the script and runs CrossPoint's own `WifiSelectionActivity` as a sub-activity (it auto-joins the
+saved network; no password ever passes through an app), `http.request/get` wraps `HttpDownloader` (esp_http_client +
+wolfSSL, CA-bundle verified). Calls **block the main loop** like every CrossPoint network screen (no worker task: a
+10 KB stack is RAM we don't have); the response is POD + one `malloc` that is freed even when pushing it into Lua runs out
+of memory (ASAN/LSAN-tested, mutation-checked). Bigger-than-RAM responses go to a file (`save_to = "data:..."`) and are read
+back with `fs.read(path, off, len)`. Apps need `"permissions": ["network"]` in `manifest.json`; `wifi.status()` hides the
+SSID/IP without it. Leaving an app that used WiFi does the usual **silent reboot**; apps start with the radio forced off.
+Back cancels a transfer (verified: `nil, "cancelled"` after 16 s on a 3 MB download, no partial file, app keeps running).
+
+**Measured on the X4 (dev build, 20 KB Lua app, clean boot):** free RAM 106-108 KB at start -> **WiFi up: 51 KB** (the
+radio costs ~56 KB) -> HTTP 746 ms -> HTTPS 1.1 s with **min free 25 KB** -> a TLS file download dips to **9 KB min free**
+(wolfSSL needs ~17 KB contiguous; HttpDownloader transparently reconnects and resumes with Range when a record
+allocation fails, `-125`). A 174 KB download takes 3.2 s. TLS needs >= 40 KB free + a 20 KB block *before* it starts.
+Consequences: **an app needs >= 96 KB free to bring WiFi up usefully** (56 + 40), so network apps must keep their Lua heap
+small (~20-30 KB; Study's 48 KB would not fit) — `wifi.connect()` refuses up front with a readable reason instead of failing
+mid-request. A release build (no 9 KB capture buffers) has 9 KB more. Screens that leave the radio on and stay alive under
+the plugin picker (the Plugin Hub) cost another ~20 KB until the next reboot; Home -> Plugins on a fresh boot is clean.
+Not done: raw TCP (`net`), streaming callbacks, non-form POST bodies, response headers, WebSocket.
 
 ## Phase 4 — BLE + radio (not started)
 `ble` over NimBLE (already linked for the page turner), `hid` keyboard, `radio` (promiscuous ring buffer, channel hop,
@@ -121,7 +136,7 @@ It needed **no firmware change**, which is the point of the runtime. Apps stay s
 a shared `/.crosslua/lib/ui.lua` is deferred until three apps want the same helpers.
 
 Remaining order:
-Order by value/risk: (1) more crossplay games (Sudoku/solitaire first); (2) todo; (3) AvesO3 AO3 library browser (fs/json/http); (4) crossplay games — Sudoku/solitaire next, chess last
+Order by value/risk: (1) AO3 library (needs the Phase 3 API, keep its Lua heap small); (2) more crossplay games; (3) todo; (3) AvesO3 AO3 library browser (now unblocked); (4) crossplay games — Sudoku/solitaire next, chess last
 (depth-limited Lua engine); (5) biscuit recon apps (WiFi/BLE scanners, OUI lookup); (6) Ruby passive logger (needs an
 AES binding; mbedtls/wolfSSL are already linked).
 
@@ -129,7 +144,7 @@ AES binding; mbedtls/wolfSSL are already linked).
 App manifest/versioning (`min_api`), install via the existing file-transfer UI, shared `lib:` modules, docs, example repo.
 
 ## Risks
-- **RAM** remains the main constraint (Study already uses ~65 of 81 KB; a release build, without the 9 KB capture buffers, gives ~9 KB more): WiFi/BLE apps will have far less headroom than the ~144 KB measured with the radio off.
+- **RAM** remains the main constraint — WiFi alone eats 56 KB, so network apps must stay tiny (Study already uses ~65 of 81 KB; a release build, without the 9 KB capture buffers, gives ~9 KB more): WiFi/BLE apps will have far less headroom than the ~144 KB measured with the radio off.
 - **Upstream churn**: hooks are few and listed; merge `upstream/master` periodically and re-check the touchpoints.
 - **Dev firmware** has a serial control channel and screen capture; it is gated by `CROSSLUA_DEV` (only `env:default`)
   and must never ship in a release env.

@@ -36,7 +36,7 @@ struct MockBackend : Backend {
   int height() override { return 480; }
   void clear(bool white) override { calls.push_back(white ? "clear:white" : "clear:black"); }
   void pixel(int x, int y, bool b) override { calls.push_back("pixel:" + std::to_string(x) + "," + std::to_string(y)); }
-  void line(int a, int b, int c, int d, bool) override { calls.push_back("line"); }
+  void line(int a, int b, int c, int d, bool) override { calls.push_back("line:" + std::to_string(a) + "," + std::to_string(b) + "," + std::to_string(c) + "," + std::to_string(d)); }
   void rect(int x, int y, int ww, int h, bool b, bool f) override {
     calls.push_back("rect:" + std::to_string(x) + "," + std::to_string(y) + "," + std::to_string(ww) + "," +
                     std::to_string(h) + (f ? ":fill" : ":line") + (b ? ":b" : ":w"));
@@ -65,7 +65,8 @@ struct MockBackend : Backend {
     return hold.c_str();
   }
   uint32_t millis() override { return now; }
-  size_t freeHeap() override { return 123456; }
+  size_t freeHeapVal = 123456;
+  size_t freeHeap() override { return freeHeapVal; }
   size_t simTotal = 0;  // >0: freeHeapQuick() simulates a device heap of this size minus what Lua holds
   const LuaVm* simVm = nullptr;
   size_t freeHeapQuick() override { return simTotal ? simTotal - simVm->usedBytes() : freeHeap(); }
@@ -102,6 +103,45 @@ struct MockBackend : Backend {
     if (failWrites || f == files.end() || offset > f->second.size()) return false;
     if (offset + n > f->second.size()) f->second.resize(offset + n);
     memcpy(&f->second[offset], d, n);
+    return true;
+  }
+  // ---- network mock: scripted responses, records what reached the backend --------------------------------------
+  struct FakeResp { int status = 200; std::string body; std::string error; };
+  std::map<std::string, FakeResp> routes;  // by full url
+  bool net = true, wifiUp = false, wifiAsked = false;
+  size_t largest = 100000;
+  struct SeenReq { std::string method, url, body, savePath; std::vector<std::pair<std::string, std::string>> headers; size_t maxBody = 0; };
+  std::vector<SeenReq> seen;
+  bool netAllowed() override { return net; }
+  bool wifiConnected() override { return wifiUp; }
+  void wifiRequestConnect() override { wifiAsked = true; }
+  bool wifiInfo(char* ssid, size_t sc, char* ip, size_t ic, int* rssi) override {
+    if (!wifiUp) return false;
+    snprintf(ssid, sc, "TestNet"); snprintf(ip, ic, "192.168.1.50"); *rssi = -57;
+    return true;
+  }
+  void wifiOff() override { wifiUp = false; }
+  size_t largestFreeBlock() override { return largest; }
+  bool httpRequest(const HttpRequest& rq, HttpResult& res) override {
+    SeenReq r;
+    r.method = rq.method; r.url = rq.url; r.body = std::string(rq.body ? rq.body : "", rq.bodyLen);
+    r.savePath = rq.savePath ? rq.savePath : ""; r.maxBody = rq.maxBody;
+    for (int i = 0; i < rq.headerCount; i++) r.headers.emplace_back(rq.headers[i].name, rq.headers[i].value);
+    seen.push_back(r);
+    if (!wifiUp) { snprintf(res.error, sizeof(res.error), "wifi is not connected (call wifi.connect() first)"); return false; }
+    auto it = routes.find(rq.url);
+    if (it == routes.end()) { snprintf(res.error, sizeof(res.error), "request failed (no response)"); return false; }
+    const FakeResp& f = it->second;
+    if (!f.error.empty()) { snprintf(res.error, sizeof(res.error), "%s", f.error.c_str()); return false; }
+    res.status = f.status;
+    if (rq.savePath) {
+      if (f.status >= 200 && f.status < 300) { files[rq.savePath] = f.body; res.bytes = f.body.size(); }
+      return true;
+    }
+    if (f.body.size() > rq.maxBody) { snprintf(res.error, sizeof(res.error), "response larger than max_body (%zu bytes): use save_to", rq.maxBody); return false; }
+    res.body = (char*)malloc(f.body.size() ? f.body.size() : 1);  // like the firmware: malloc'd, the caller frees
+    memcpy(res.body, f.body.data(), f.body.size());
+    res.bodyLen = res.bytes = f.body.size();
     return true;
   }
   int64_t epoch = 0;  // 0 = clock not trusted
@@ -870,6 +910,189 @@ int main() {
       LuaVm vm3;
       CHECK(launch(vm3) == Status::Waiting);
     }
+  }
+  {
+    TEST("net: permission gate (wifi + http + status all refuse without the manifest permission)");
+    MockBackend be;
+    be.net = false;
+    be.wifiUp = true;
+    LuaVm vm;
+    CHECK(vm.open(128 * 1024));
+    registerApi(vm, be);
+    const char* script = "print(wifi.connect())\nprint(http.get('http://h/a'))\nprint(http.request{url='http://h/a'})\nprint(wifi.status().connected, wifi.status().ssid)";
+    CHECK(vm.load("t", script, strlen(script)));
+    CHECK(run(vm, be) == Status::Finished);
+    CHECK(be.logs.size() == 4);
+    CHECK(be.logs[0].find("false\tnetwork not permitted") == 0 && be.logs[0].find("manifest.json") != std::string::npos);  // wifi.connect: false, reason
+    for (int i = 1; i < 3; i++) CHECK(be.logs[i].find("nil\tnetwork not permitted") == 0 && be.logs[i].find("manifest.json") != std::string::npos);
+    CHECK(be.logs[3] == "false\tnil");
+    CHECK(be.seen.empty() && !be.wifiAsked);
+  }
+  {
+    TEST("net: wifi.connect parks the script (input does not wake it), resumes true/false, status/off");
+    for (int outcome = 0; outcome < 2; outcome++) {
+      MockBackend be;
+      LuaVm vm;
+      CHECK(vm.open(128 * 1024));
+      registerApi(vm, be);
+      const char* script =
+          "local ok = wifi.connect()\nprint('c1', ok)\nlocal ok2 = wifi.connect()\nprint('c2', ok2)\n"
+          "local st = wifi.status()\nprint(st.connected, st.ssid, st.ip, st.rssi)\nwifi.off()\nprint(wifi.status().connected)";
+      CHECK(vm.load("t", script, strlen(script)));
+      be.events = {"confirm", "back", "left"};
+      CHECK(run(vm, be) == Status::Waiting);                       // parked inside wifi.connect()
+      CHECK(be.wifiAsked && be.events.size() == 3 && be.logs.empty());  // button presses did NOT wake it
+      CHECK(vm.timeoutMs() == -1 && !vm.wakesOnEvent());
+      if (outcome == 0) {
+        be.wifiUp = true;
+        CHECK(vm.resume("wifi:ok") != Status::Error);
+        CHECK(run(vm, be, 1000, false) == Status::Finished);
+        CHECK(be.logs.size() == 4);
+        if (be.logs.size() == 4) {
+          CHECK(be.logs[0] == "c1\ttrue" && be.logs[1] == "c2\ttrue");  // 2nd connect: already up, no yield
+          CHECK(be.logs[2] == "true\tTestNet\t192.168.1.50\t-57" && be.logs[3] == "false");
+        }
+      } else {
+        CHECK(vm.resume("wifi:fail") != Status::Error);
+        CHECK(run(vm, be, 1000, false) == Status::Waiting);          // c1 false, then the 2nd connect() parks again
+        CHECK(be.logs.size() == 1 && be.logs[0] == "c1\tfalse");
+        CHECK(vm.status() == Status::Waiting);
+      }
+    }
+  }
+  {
+    TEST("net: http.request plumbing, status vs error, validation, save_to sandbox, max_body");
+    MockBackend be;
+    be.wifiUp = true;
+    be.routes["http://h/a"] = {200, "hello", ""};
+    be.routes["https://h/json"] = {200, "{\"x\":1}", ""};
+    be.routes["http://h/404"] = {404, "nope", ""};
+    be.routes["http://h/err"] = {0, "", "connection reset"};
+    LuaVm vm;
+    CHECK(vm.open(256 * 1024));
+    registerApi(vm, be);
+    const char* script = R"LUA(
+      local r = http.get("http://h/a"); print(r.status, r.ok, r.bytes, r.body)
+      r = http.get("https://h/json", {headers = {Accept = "application/json", ["X-Test"] = "1"}}); print(r.body)
+      r = http.get("http://h/404"); print(r.status, r.ok, r.body)
+      print(http.get("http://h/err"))
+      r = http.request{url = "http://h/a", method = "POST", body = "a=1&b=2"}; print(r.status)
+      print(http.get("http://h/missing"))
+      print(http.get("http://h/a", {max_body = 3}))
+      print(http.get("ftp://h/a")); print(http.get("file:///etc/passwd")); print(http.get("http://" .. ("a"):rep(700)))
+      print(http.request{url = "http://h/a", method = "PUT"})
+      print(http.request{url = "http://h/a", body = "x"})
+      print(http.request{url = "http://h/a", headers = {["X"] = "a\r\nInjected: 1"}})
+      print(http.request{url = "http://h/a", headers = {["Bad:Name"] = "v"}})
+      print(http.request{url = "http://h/a", headers = {x = 1}})
+      print(http.request{url = "http://h/a", max_body = 0}); print(http.request{url = "http://h/a", max_body = 70000})
+      print(http.request{url = "http://h/a", save_to = "../x"}); print(http.request{url = "http://h/a", save_to = "app:x"})
+      print(http.request{url = "http://h/a", save_to = "/abs"})
+      print(http.request{url = "http://h/a", method = "POST", save_to = "data:x"})
+      r = http.get("http://h/a", {save_to = "data:dl/a.txt"}); print(r.status, r.bytes, r.body, fs.read("data:dl/a.txt"))
+      print(pcall(http.request, "notatable"))
+      print(select("#", system.heap()))
+    )LUA";
+    CHECK(vm.load("t", script, strlen(script)));
+    CHECK(run(vm, be, 200000) == Status::Finished);
+    const char* want[] = {
+        "200\ttrue\t5\thello", "{\"x\":1}", "404\tfalse\tnope", "nil\tconnection reset", "200",
+        "nil\trequest failed (no response)", "nil\tresponse larger than max_body (3 bytes): use save_to",
+        "nil\tonly http:// and https:// urls are allowed", "nil\tonly http:// and https:// urls are allowed", "nil\turl too long",
+        "nil\tmethod must be GET or POST", "nil\ta GET request cannot have a body", "nil\tillegal header", "nil\tillegal header",
+        "nil\theaders must be a table of string = string",
+        "nil\tmax_body must be 1..65536 (use save_to for bigger responses)", "nil\tmax_body must be 1..65536 (use save_to for bigger responses)",
+        "nil\t'.' and '..' are not allowed", "nil\tsave_to must be a data: path", "nil\tabsolute paths are not allowed",
+        "nil\tsave_to is only supported for GET", "200\t5\tnil\thello",
+    };
+    const size_t nWant = sizeof(want) / sizeof(want[0]);
+    for (size_t i = 0; i < nWant; i++) {
+      CHECK(i < be.logs.size() && be.logs[i] == want[i]);
+      if (i < be.logs.size() && be.logs[i] != want[i]) printf("    [%zu] got '%s' want '%s'\n", i, be.logs[i].c_str(), want[i]);
+    }
+    CHECK(be.logs.size() == nWant + 2);
+    if (be.logs.size() == nWant + 2) {
+      CHECK(be.logs[nWant].find("false\t") == 0);   // pcall(http.request, "notatable") raised (bad argument)
+      CHECK(be.logs[nWant + 1] == "3");              // system.heap() -> free, min, largest block
+    }
+    // Only well-formed requests ever reached the backend: a, json, 404, err, POST, missing, max_body=3, save_to
+    CHECK(be.seen.size() == 8);
+    if (be.seen.size() == 8) {
+      CHECK(be.seen[0].method == "GET" && be.seen[0].maxBody == 16384 && be.seen[0].savePath.empty() && be.seen[0].headers.empty());
+      CHECK(be.seen[1].url == "https://h/json" && be.seen[1].headers.size() == 2);
+      std::map<std::string, std::string> h(be.seen[1].headers.begin(), be.seen[1].headers.end());
+      CHECK(h["Accept"] == "application/json" && h["X-Test"] == "1");
+      CHECK(be.seen[4].method == "POST" && be.seen[4].body == "a=1&b=2");
+      CHECK(be.seen[6].maxBody == 3);
+      CHECK(be.seen[7].savePath == "/.crosslua/data/test/dl/a.txt");
+    }
+    CHECK(be.files["/.crosslua/data/test/dl/a.txt"] == "hello");
+  }
+  {
+    TEST("net: a response too big for the Lua heap is an error, not a leak or a crash (ASAN/LSAN)");
+    MockBackend be;
+    be.wifiUp = true;
+    be.routes["http://h/big"] = {200, std::string(50 * 1024, 'x'), ""};
+    LuaVm vm;
+    CHECK(vm.open(72 * 1024));
+    registerApi(vm, be);
+    const char* script = "print(http.get('http://h/big', {max_body = 60000}))\nprint('alive', #string.rep('y', 100))";
+    CHECK(vm.load("t", script, strlen(script)));
+    CHECK(run(vm, be) == Status::Finished);
+    CHECK(be.logs.size() == 2);
+    if (be.logs.size() == 2) {
+      CHECK(be.logs[0].find("nil\tnot enough memory for the response") == 0);
+      CHECK(be.logs[1] == "alive\t100");
+    }
+  }
+  {
+    TEST("gfx clipping: drawing past the screen edge clips instead of erroring (mock screen is 800x480)");
+    MockBackend be;
+    LuaVm vm;
+    CHECK(vm.open(128 * 1024));
+    registerApi(vm, be);
+    const char* script = R"LUA(
+      gfx.line(0, 44, 800, 44)            -- a header rule one pixel too wide
+      gfx.line(-10, 5, 10, 5)
+      gfx.line(5, -10, 5, 10)
+      gfx.line(0, 0, 2000, 2000)          -- diagonal off the far corner
+      gfx.line(-50, -50, -10, -10)        -- fully off-screen
+      gfx.line(0, 500, 800, 500)          -- below the screen
+      gfx.line(10, 10, 20, 20)            -- fully inside: untouched
+      gfx.pixel(-1, 0); gfx.pixel(800, 0); gfx.pixel(0, 480); gfx.pixel(3, 4)
+      gfx.rect(790, 470, 50, 50, true)    -- filled, clipped to the 10x10 corner
+      gfx.rect(-5, -5, 20, 20, true)
+      gfx.rect(900, 900, 5, 5, true)      -- fully off
+      gfx.rect(10, 10, 30, 20)            -- outline inside: one call
+      gfx.rect(790, 10, 30, 20)           -- outline crossing the right edge: left/top/bottom edges only
+      gfx.rect(5, 5, 0, 10, true)         -- empty
+    )LUA";
+    CHECK(vm.load("t", script, strlen(script)));
+    CHECK(run(vm, be) == Status::Finished);
+    const char* want[] = {
+        "line:0,44,799,44", "line:0,5,10,5", "line:5,0,5,10", "line:0,0,479,479", "line:10,10,20,20", "pixel:3,4",
+        "rect:790,470,10,10:fill:b", "rect:0,0,15,15:fill:b", "rect:10,10,30,20:line:b",
+        "line:790,10,799,10", "line:790,29,799,29", "line:790,10,790,29",
+    };
+    const size_t n = sizeof(want) / sizeof(want[0]);
+    CHECK(be.calls.size() == n);
+    for (size_t i = 0; i < n && i < be.calls.size(); i++) {
+      CHECK(be.calls[i] == want[i]);
+      if (be.calls[i] != want[i]) printf("    [%zu] got '%s' want '%s'\n", i, be.calls[i].c_str(), want[i]);
+    }
+  }
+  {
+    TEST("net: wifi.connect refuses early when the app is too big for WiFi + TLS (96K free needed)");
+    MockBackend be;
+    be.freeHeapVal = 80 * 1024;
+    LuaVm vm;
+    CHECK(vm.open(128 * 1024));
+    registerApi(vm, be);
+    const char* script = "print(wifi.connect())";
+    CHECK(vm.load("t", script, strlen(script)));
+    CHECK(run(vm, be) == Status::Finished);
+    CHECK(be.logs.size() == 1 && be.logs[0] == "false\tnot enough free RAM for WiFi + TLS (free 80K, need 96K): this app is too big for network use");
+    CHECK(!be.wifiAsked);
   }
   {
     TEST("study_lua deck.lua: Anki HTML, entities, cloze, comment lines");

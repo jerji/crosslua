@@ -59,6 +59,7 @@ class HalGPIO {
   uint8_t injIndex = 0xFF;
   unsigned long injHoldMs = 120;
   unsigned long injStartMs = 0;
+  unsigned long injArmMs = 0;  // earliest time the pending press may start
   bool injPressedEdge = false;
   bool injReleasedEdge = false;
   bool injActive(uint8_t i) const { return injPhase == InjPhase::Down && injIndex == i; }
@@ -86,7 +87,9 @@ class HalGPIO {
   // CrossLua dev/test hook (serial `CMD:BTN:<name>[:holdMs]`): simulates a physical press that lasts holdMs, so every
   // consumer (button remapping, ButtonNavigator, long-press logic) sees what a real finger would produce.
   // Compiled out of release builds.
-  void injectButton(uint8_t buttonIndex, unsigned long holdMs = 120);
+  // delayMs > 0 arms the press for LATER, evaluated in update(): lets a test press a button while the main loop is
+  // blocked inside a long call (e.g. a network transfer), which no live serial command could reach.
+  void injectButton(uint8_t buttonIndex, unsigned long holdMs = 120, unsigned long delayMs = 0);
 #endif
 
   // Button input methods

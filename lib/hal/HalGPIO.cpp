@@ -108,10 +108,11 @@ void HalGPIO::begin() {
 }
 
 #ifdef CROSSLUA_DEV
-void HalGPIO::injectButton(uint8_t buttonIndex, unsigned long holdMs) {
+void HalGPIO::injectButton(uint8_t buttonIndex, unsigned long holdMs, unsigned long delayMs) {
   if (injPhase != InjPhase::None) return;  // one at a time; x4ctl waits for the ack + gap
   injIndex = buttonIndex;
   injHoldMs = holdMs;
+  injArmMs = millis() + delayMs;
   injPhase = InjPhase::Pending;
 }
 #endif
@@ -121,7 +122,7 @@ void HalGPIO::update() {
 #ifdef CROSSLUA_DEV
   injPressedEdge = false;
   injReleasedEdge = false;
-  if (injPhase == InjPhase::Pending) {
+  if (injPhase == InjPhase::Pending && static_cast<long>(millis() - injArmMs) >= 0) {
     injPhase = InjPhase::Down;
     injStartMs = millis();
     injPressedEdge = true;

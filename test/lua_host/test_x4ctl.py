@@ -34,7 +34,7 @@ def fake_device():
                 os.write(master, b"PONG:4242:LuaApp\n")
             elif line.startswith("CMD:BTN:"):
                 n = line[8:]
-                ok = n in x4ctl.BUTTONS
+                ok = n.split(":")[0] in x4ctl.BUTTONS
                 if ok: pressed.append(n)
                 os.write(master, f"BTN_{'OK' if ok else 'ERR'}:{n}\n".encode())
             elif line == "CMD:SCREEN":
@@ -61,6 +61,14 @@ r = dev.ping()
 check("ping returns uptime + activity name", r == (4242, "LuaApp"))
 dev.press(["confirm", "left", "down"], gap=0.01)
 check("btn sequence delivered in order", pressed == ["confirm", "left", "down"])
+pressed.clear()
+dev.press(["back:150:900", "confirm:200"], gap=0.01)
+check("armed press (name:hold:delay) and name:hold forwarded verbatim", pressed == ["back:150:900", "confirm:200"])
+for bad in ("back:x", "back:100:y", "back:100:200:5"):
+    try:
+        dev.press([bad], gap=0.01); check(f"malformed {bad!r} rejected", False)
+    except SystemExit:
+        check(f"malformed {bad!r} rejected", True)
 try:
     dev.press(["bogus"], gap=0.01); check("unknown button rejected client-side", False)
 except SystemExit:

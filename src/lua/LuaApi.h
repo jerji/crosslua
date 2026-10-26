@@ -73,6 +73,40 @@ class Backend {
   virtual const char* dataDir() = 0;  // read/write saves, e.g. /.crosslua/data/foo
   virtual const char* libDir() = 0;   // shared read-only Lua libraries, e.g. /.crosslua/lib
   virtual void requestExit() = 0;
+
+  // --- network (see LuaNet.cpp) --------------------------------------------
+  // All plain-old-data on purpose: bindings must not hold C++ objects across a Lua error.
+  struct HttpHeader {
+    const char* name;
+    const char* value;
+  };
+  struct HttpRequest {
+    const char* method;  // "GET" or "POST" (POST = application/x-www-form-urlencoded body)
+    const char* url;
+    const HttpHeader* headers;
+    int headerCount;
+    const char* body;
+    size_t bodyLen;
+    const char* savePath;  // absolute SD path to stream the response to, or nullptr = return it in memory
+    size_t maxBody;        // in-memory response cap (bytes)
+  };
+  struct HttpResult {
+    int status = 0;            // final HTTP status, 0 when no response arrived
+    char* body = nullptr;      // malloc'd by the backend, freed by the caller; null in save mode
+    size_t bodyLen = 0;
+    size_t bytes = 0;          // bytes received (save mode: bytes written)
+    char error[96] = {0};      // set when the call failed (no/aborted response)
+  };
+  virtual bool netAllowed() = 0;  // the app's manifest declares "network"
+  virtual bool wifiConnected() = 0;
+  // Ask the system to bring WiFi up (it may show its own network picker). Non-blocking: the script is parked and
+  // resumed with "wifi:ok" / "wifi:fail" once the system UI has finished.
+  virtual void wifiRequestConnect() = 0;
+  virtual bool wifiInfo(char* ssid, size_t ssidCap, char* ip, size_t ipCap, int* rssi) = 0;  // false when not connected
+  virtual void wifiOff() = 0;
+  // Blocking (the device's own screens do the same). true = a response arrived (res.status set), false = res.error set.
+  virtual bool httpRequest(const HttpRequest& req, HttpResult& res) = 0;
+  virtual size_t largestFreeBlock() = 0;
 };
 
 // Registers print + gfx/input/app/system tables into vm.state(). Call after open(), before load().

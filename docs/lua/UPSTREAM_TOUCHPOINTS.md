@@ -17,3 +17,6 @@ re-check them first when merging `upstream/master`.
 | `lib/GfxRenderer/GfxRenderer.cpp` | `#ifdef CROSSLUA_DEV` hooks into `drawText`, `fillRect`, `fillRectDither`, `fillRoundedRect`, `clearScreen`, `displayBuffer(Async)` feeding `DevCapture` (text dump for `CMD:SCREEN`) |
 | `src/main.cpp` | also `CMD:SCREEN` |
 | `src/activities/plugins/LuaAppActivity.cpp` | uses `lib/TrustedTime` (`trustedtime::trustedNow()`) for `time.now()` — read-only use of an existing API |
+| `lib/hal/HalGPIO.{h,cpp}`, `src/main.cpp` | `#ifdef CROSSLUA_DEV`: `injectButton(idx, hold, delay)` / `CMD:BTN:<name>:<hold>:<delay>` arms a press for later so tests can reach a blocked main loop |
+| `src/activities/plugins/LuaAppActivity.cpp` | uses `WifiSelectionActivity`, `HttpDownloader`, `WifiPowerSaveGuard`, `silentRestart()` — all existing APIs, none modified |
+

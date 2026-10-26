@@ -32,6 +32,8 @@ class LuaAppActivity final : public Activity {
   void showError(const std::string& title, const std::string& detail);
   void leave();
   void logMemory(const char* when) const;
+  void launchWifi();
+  void armWait();
 
   std::string appName_;
   std::string appDir_;

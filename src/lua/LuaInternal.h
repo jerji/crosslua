@@ -39,5 +39,6 @@ bool resolveIn(Backend& be, Scope scope, const char* rel, char* out, size_t cap,
 void registerFs(lua_State* L, Ctx* c);
 void registerJson(lua_State* L, Ctx* c);
 void registerRequire(lua_State* L, Ctx* c);
+void registerNet(lua_State* L, Ctx* c);
 
 }  // namespace crosslua
