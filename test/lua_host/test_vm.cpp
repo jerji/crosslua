@@ -700,6 +700,178 @@ int main() {
     dump(be);
   }
   {
+    TEST("game2048_lua rules: slide/merge-once, directions, spawn odds, win, game over, undo, save validation, invariants");
+    MockBackend be;
+    loadApp(be, "game2048_lua");
+    LuaVm vm;
+    CHECK(vm.open(300 * 1024));
+    registerApi(vm, be);
+    const char* script = R"LUA(
+      local G = require("game")
+      local function sl(a, b, c, d) local o, gn, ch = G.slide(a, b, c, d); return table.concat(o, " ") .. " | " .. gn .. " " .. tostring(ch) end
+      print(sl(1,1,1,1)); print(sl(1,1,2,0)); print(sl(0,0,0,0)); print(sl(1,2,3,4)); print(sl(0,0,1,1))
+      print(sl(1,0,1,2)); print(sl(2,1,1,2)); print(sl(3,3,3,0)); print(sl(0,2,0,0))
+      -- scripted rng: always the first empty cell, and never the 10% roll -> a "2"
+      local function scripted() return function(n) return n == 10 and 5 or 1 end end
+      local function fresh(cells)
+        local g = G.new(scripted()); for i = 1, 16 do g.b[i] = cells[i] or 0 end; g.score, g.moves, g.over, g.won = 0, 0, false, false; return g
+      end
+      local function pos(g) local t = {} for i = 1, 16 do if g.b[i] ~= 0 then t[#t + 1] = i .. "=" .. g.b[i] end end return table.concat(t, ",") end
+      local g = fresh({ [1] = 3 })
+      G.move(g, "right"); print("right", pos(g))               -- 3 slides to cell 4, spawn takes first empty (1)
+      g = fresh({ [1] = 3 }); G.move(g, "down"); print("down", pos(g))
+      g = fresh({ [16] = 3 }); G.move(g, "left"); print("left", pos(g))
+      g = fresh({ [16] = 3 }); G.move(g, "up"); print("up", pos(g))
+      -- a move that changes nothing: no spawn, no move counted, returns false
+      g = fresh({ [1] = 3 }); print(G.move(g, "left"), g.moves, pos(g))
+      -- game over: checkerboard cannot move; one empty cell can
+      local chk = {}
+      for i = 1, 16 do chk[i] = ((i - 1) // 4 + (i - 1) % 4) % 2 + 1 end
+      g = fresh(chk); print("can_move full", G.can_move(g), G.move(g, "left"))
+      chk[16] = 0; g = fresh(chk); print("can_move hole", G.can_move(g))
+      -- game over is set by the move that fills the board: checkerboard of 2/3, row 0 = [0,2,3,2] slides to [2,3,2,0],
+      -- the spawned "2" (exp 1) lands in cell 4 and touches nothing equal
+      local almost = {}
+      for i = 1, 16 do almost[i] = ((i - 1) // 4 + (i - 1) % 4) % 2 + 2 end
+      almost[1] = 0; almost[2] = 2; almost[3] = 3; almost[4] = 2
+      g = fresh(almost); G.move(g, "left"); print("over after", g.over, g.moves)
+      -- win
+      g = fresh({ [1] = 10, [2] = 10 }); G.move(g, "left"); print("win", g.b[1], g.won, g.just_won, g.score)
+      -- undo (one level)
+      g = fresh({ [1] = 1, [2] = 1 }); G.move(g, "left")
+      print("undo1", G.undo(g), pos(g), g.score, g.moves, "undo2", G.undo(g))
+      -- spawn odds with the real RNG
+      math.randomseed(12345)
+      local fours = 0
+      for i = 1, 4000 do local gg = G.new(); for j = 1, 16 do if gg.b[j] == 2 then fours = fours + 1 end end end
+      print("fours%", fours * 100 // 8000)
+      -- save validation
+      local ok = G.new()
+      local bad = { {}, { b = {} }, { b = { 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1 }, s = 0 },
+                    { b = { 18, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 }, s = 0 },
+                    { b = { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 }, s = 0 },
+                    { b = { 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 }, s = -5 },
+                    { b = { 1.5, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 }, s = 0 }, "x", 5 }
+      local rej = 0
+      for _, t in ipairs(bad) do if not G.restore(ok, t) then rej = rej + 1 end end
+      print("rejected", rej, #bad, G.restore(ok, { b = { 1, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 3 }, s = 24, m = 7 }), ok.score, ok.moves)
+      -- invariants over 3000 random moves from random positions: tile total only grows by the spawned tile; board stays valid
+      math.randomseed(777)
+      local dirs, violations, moved = { "left", "right", "up", "down" }, 0, 0
+      local gg = G.new()
+      for step = 1, 3000 do
+        if gg.over then gg = G.new() end
+        local before = 0; for i = 1, 16 do if gg.b[i] > 0 then before = before + (1 << gg.b[i]) end end
+        local changed = G.move(gg, dirs[math.random(4)])
+        local after = 0; for i = 1, 16 do if gg.b[i] > 0 then after = after + (1 << gg.b[i]) end if gg.b[i] < 0 or gg.b[i] > 17 then violations = violations + 1 end end
+        if changed then moved = moved + 1; local d = after - before; if d ~= 2 and d ~= 4 then violations = violations + 1 end
+        elseif after ~= before then violations = violations + 1 end
+      end
+      print("invariants", violations, moved > 500)
+    )LUA";
+    CHECK(vm.load("t", script, strlen(script)));
+    CHECK(run(vm, be, 3000000) == Status::Finished);
+    const char* want[] = {
+        "2 2 0 0 | 8 true", "2 2 0 0 | 4 true", "0 0 0 0 | 0 false", "1 2 3 4 | 0 false", "2 0 0 0 | 4 true",
+        "2 2 0 0 | 4 true", "2 2 2 0 | 4 true", "4 3 0 0 | 16 true", "2 0 0 0 | 0 true",
+        "right\t1=1,4=3", "down\t1=1,13=3", "left\t1=1,13=3", "up\t1=1,4=3",
+        "false\t0\t1=3", "can_move full\tfalse\tfalse", "can_move hole\ttrue", "over after\ttrue\t1",
+        "win\t11\ttrue\ttrue\t2048", "undo1\ttrue\t1=1,2=1\t0\t0\tundo2\tfalse",
+    };
+    for (size_t i = 0; i < sizeof(want) / sizeof(want[0]); i++) {
+      CHECK(i < be.logs.size() && be.logs[i] == want[i]);
+      if (i < be.logs.size() && be.logs[i] != want[i]) printf("    [%zu] got '%s' want '%s'\n", i, be.logs[i].c_str(), want[i]);
+    }
+    CHECK(be.logs.size() == 22);
+    if (be.logs.size() == 22) {
+      int pct = atoi(be.logs[19].c_str() + strlen("fours%\t"));
+      CHECK(pct >= 8 && pct <= 12);
+      CHECK(be.logs[20] == "rejected\t9\t9\ttrue\t24\t7");
+      CHECK(be.logs[21] == "invariants\t0\ttrue");
+    }
+    dump(be);
+  }
+  {
+    TEST("game2048_lua app: scripted session (moves, undo, menu, new game, persistence, corrupt save)");
+    auto frameOf = [](MockBackend& b) {
+      size_t from = 0;
+      for (size_t i = 0; i < b.calls.size(); i++) if (b.calls[i] == "clear:white") from = i;
+      std::string out;
+      for (size_t i = from; i < b.calls.size(); i++)
+        if (b.calls[i].rfind("text:", 0) == 0) {
+          size_t a = b.calls[i].find(':', 5), z = b.calls[i].rfind(":f");
+          out += b.calls[i].substr(a + 1, z - a - 1) + "|";
+        }
+      return out;
+    };
+    MockBackend be;
+    std::string src = loadApp(be, "game2048_lua");
+    const std::string STATE = "/.crosslua/data/test/state.json";
+    auto launch = [&](LuaVm& vm) {
+      CHECK(vm.open(96 * 1024));
+      registerApi(vm, be);
+      CHECK(vm.load("game2048_lua", src.data(), src.size()));
+      CHECK(vm.resume() == Status::Waiting);
+      return run(vm, be, 100000);
+    };
+    auto send = [&](LuaVm& vm, std::initializer_list<const char*> evs) {
+      be.calls.clear();
+      for (auto e : evs) be.events.push_back(e);
+      return run(vm, be, 100000);
+    };
+    auto field = [&](const char* key) {  // integer after "key": in the saved JSON
+      const std::string& f = be.files[STATE];
+      size_t k = f.find(std::string("\"") + key + "\":");
+      return k == std::string::npos ? -1 : atoi(f.c_str() + k + strlen(key) + 3);
+    };
+    {
+      LuaVm vm;
+      CHECK(launch(vm) == Status::Waiting);
+      std::string f0 = frameOf(be);
+      CHECK(f0.find("2048|") == 0 && f0.find("Score 0|") != std::string::npos && f0.find("Best 0|") != std::string::npos);
+      CHECK(f0.find("Moves 0|") != std::string::npos && f0.find("Menu|Undo|Left|Right|") != std::string::npos);
+      for (int i = 0; i < 12; i++) CHECK(send(vm, {"left", "up", "right", "down"}) == Status::Waiting);
+      int moves = field("m"), score = field("s");
+      CHECK(moves > 8 && score > 0 && field("best") == score);
+      CHECK(frameOf(be).find("Moves " + std::to_string(moves) + "|") != std::string::npos);
+      CHECK(send(vm, {"confirm"}) == Status::Waiting);                     // undo one move
+      CHECK(field("m") == moves - 1);
+      CHECK(send(vm, {"back"}) == Status::Waiting);                        // menu
+      CHECK(frameOf(be).find("Resume|New game|Exit|") != std::string::npos);
+      CHECK(send(vm, {"down", "confirm"}) == Status::Waiting);             // New game
+      CHECK(field("m") == 0 && field("s") == 0 && field("best") == score); // best score survives a new game
+      CHECK(frameOf(be).find("Moves 0|") != std::string::npos);
+      CHECK(send(vm, {"left", "right"}) == Status::Waiting);
+      int movesBefore = field("m");
+      CHECK(movesBefore >= 1);
+      for (auto& c : be.calls) CHECK(c.find("rror") == std::string::npos);
+      CHECK(send(vm, {"back", "down", "down", "confirm"}) == Status::Finished);  // menu -> Exit
+    }
+    {
+      // relaunch resumes exactly where it was
+      int m = field("m"), s = field("s");
+      LuaVm vm;
+      CHECK(launch(vm) == Status::Waiting);
+      CHECK(frameOf(be).find("Moves " + std::to_string(m) + "|") != std::string::npos);
+      CHECK(frameOf(be).find("Score " + std::to_string(s) + "|") != std::string::npos);
+      CHECK(frameOf(be).find("Best ") != std::string::npos);
+    }
+    {
+      // a damaged save file never crashes the game: fresh board, best score kept if readable
+      be.files[STATE] = "{\"g\":{\"b\":[1,2,3],\"s\":4},\"best\":999}";
+      LuaVm vm;
+      CHECK(launch(vm) == Status::Waiting);
+      CHECK(frameOf(be).find("Score 0|") != std::string::npos && frameOf(be).find("Best 999|") != std::string::npos);
+      be.files[STATE] = "not json at all";
+      LuaVm vm2;
+      CHECK(launch(vm2) == Status::Waiting);
+      CHECK(frameOf(be).find("Score 0|") != std::string::npos);
+      be.files.erase(STATE);
+      LuaVm vm3;
+      CHECK(launch(vm3) == Status::Waiting);
+    }
+  }
+  {
     TEST("study_lua deck.lua: Anki HTML, entities, cloze, comment lines");
     MockBackend be;
     loadApp(be, "study_lua");

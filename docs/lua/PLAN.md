@@ -20,7 +20,7 @@ workflow, tests) · [UPSTREAM_TOUCHPOINTS.md](UPSTREAM_TOUCHPOINTS.md) (every ed
 | 2 Core API | **mostly done** — gfx, input, app, system, fs (+ range reads, in-place records), require, json, time. Remaining: `zip`, shared `ui` lib in `/.crosslua/lib/`, orientation |
 | 3 Network (wifi/http/net) | not started |
 | 4 BLE + radio | not started |
-| 5 Port features as apps | **started**: Study (flashcards, FSRS-5) done and verified on the X4. Next: 2048 (quick), AO3 library (needs Phase 3), the rest |
+| 5 Port features as apps | **started**: Study (flashcards, FSRS-5) and 2048 done and verified on the X4. Next: more crossplay games, AO3 library (needs Phase 3), the rest |
 | 6 Ecosystem | not started |
 
 ## Why
@@ -113,8 +113,14 @@ never below 52.9 KB. What the port forced into the core: `time`, `fs.read` range
 a tighter GC pause (130 %), and the `string.pack('l')` portability trap (use `i4`, never `l`: host 8 bytes, device 4).
 Not done in Study: undo, per-deck options, parameter optimisation, `.apkg` import, images/audio.
 
+**Done: 2048** (`game2048_lua`): rules in a pure module (`game.lua`: merge-once, win, game over, one-level undo, validated
+save) with ~9,000-assertion-equivalent coverage (edge cases + a 3,000-move invariant test; two mutants caught), board/best
+score saved after every move, menu (resume/new/exit). On the X4: Lua peak 39 KB of 81 KB, device free never below 75 KB.
+It needed **no firmware change**, which is the point of the runtime. Apps stay self-contained (each ships what it needs);
+a shared `/.crosslua/lib/ui.lua` is deferred until three apps want the same helpers.
+
 Remaining order:
-Order by value/risk: (1) 2048 (quick; exercises `gfx` heavily); (2) todo; (3) AvesO3 AO3 library browser (fs/json/http); (4) crossplay games — Sudoku/solitaire first, chess last
+Order by value/risk: (1) more crossplay games (Sudoku/solitaire first); (2) todo; (3) AvesO3 AO3 library browser (fs/json/http); (4) crossplay games — Sudoku/solitaire next, chess last
 (depth-limited Lua engine); (5) biscuit recon apps (WiFi/BLE scanners, OUI lookup); (6) Ruby passive logger (needs an
 AES binding; mbedtls/wolfSSL are already linked).
 
