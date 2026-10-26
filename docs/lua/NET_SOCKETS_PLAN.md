@@ -76,7 +76,7 @@ What the device told us (WiFi up, memprobe_lua / socktest_lua against `echo_serv
 - Closed connections sit in TIME_WAIT: ~4.6 KB for the first ~40 cycles, then a plateau (+212 bytes over the next 120).
 - Timings: connect to a LAN host 16-26 ms; DNS 30-52 ms; refused port 18-19 ms; a blackhole host with `timeout_ms=1500` failed after 1504-1505 ms.
 
-Still open: UDP, `net.mdns_query`, TLS sockets (`SecureClient`, needs ~60 KB: that does not fit next to a socket-using Lua heap on the X4 without measurement), `listen/accept`, and a way for Back to interrupt a blocking `connect`.
+Done: UDP (verified on the X4), `net.listen`/`accept` (host-tested, 14 mutants caught, firmware build pending), `net.mdns_query` (host-tested, 14 mutants caught, firmware build pending). Still open: TLS sockets (`SecureClient`, needs ~60 KB: that does not fit next to a socket-using Lua heap on the X4 without measurement), and a way for Back to interrupt a blocking `connect`.
 
 ## 6. WiFi driver buffer tuning: measured, no gain (dropped)
 
@@ -99,3 +99,21 @@ Side finding (a real bug, fixed): the exit-time defrag reboot checked `WiFi.getM
 `net.udp_open(port)` / `net.udp_send(h, host, port, data)` / `net.udp_recv(h [, max])` / `net.udp_close(h)` (API.md). TCP and UDP share one table of 8 slots; every handle op kind-checks ("not a TCP socket" / "not a UDP socket"). `udp_send` is fire-and-forget (no delivery guarantee, `WiFiUDP` beginPacket/write/endPacket); `udp_recv` is a non-blocking poll returning one datagram at a time with the sender's ip/port. The first-touch RAM behaviour is the same as TCP's.
 
 On the X4 (tests/udp.lua in the hub, against `udp_server.py`): open(0) with an ephemeral port, ping/ECHO(300)/BIG-1400 round trips (1400-byte datagram verified by SHA-256), two sockets in parallel, closed-handle errors, ALL PASSED. Host: 3 test blocks + 13 mutants (12 caught; 1 equivalent: the recv-side "closed" is unreachable because the slot check in the binding runs first).
+
+## 8. Listen sockets and mDNS (built, verified on the X4)
+
+`net.listen(port)` / `net.accept(srv)` (needs the `listen` permission; `net.close` closes servers too, slot kind 3) and
+`net.mdns_query(service, proto)` -> `{ {hostname, ip, port, instance_name}, ... }`. 14 host mutants each, all caught
+(/root/x4/mut19.py). On the X4 (tests/listen.lua + tests/mdns.lua in the hub):
+- listen: listen(9100), the Hermes box connects (connect_to_x4.py), device accepts, reads SAMSON_PING, answers X4_PONG,
+  closes; accept on a closed server errors cleanly. ALL PASSED. Per-server cost: a WiFiServer pointer per slot
+  (4 bytes) + the listening socket itself; peak lua heap 20.5 KB, min device heap 43 KB with WiFi up, no leak.
+- Self-connect (device connecting to its own IP) is REFUSED by lwIP loopback - not a failure, documented INFO in the test.
+- mdns: ESPmDNS needs `MDNS.begin()` before queryService - without it the query "returns" 0 results in 6 ms (fake).
+  With begin(): real queries take ~3.1 s and found 3 _http._tcp services on the LAN (HP printer, chonker, mediavault),
+  1 _ssh._tcp, and an honest 0 for _homeassistant._tcp. ALL PASSED. Query cost ~3 KB heap transient.
+- Known: the device's IP is .87 here; listen tests need the helper (connect_to_x4.py <ip> 9100) started while the
+  accept window is open (15 s). WiFi auto-join can fail once ("Saved network failed") and need a manual confirm on
+  the picker, which shifts the whole timeline - the test script polls for the Ready line before connecting.
+- `listenAllowed()` currently reuses the `network` manifest flag; a separate "listen" manifest permission + a
+  grants-style approval screen is the planned follow-up (LAN exposure deserves its own prompt).

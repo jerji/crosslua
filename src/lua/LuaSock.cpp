@@ -351,6 +351,90 @@ int net_close(lua_State* L) {
   return 1;
 }
 
+// ---- listen sockets (server on a TCP port) ----------------------------------------------
+
+// Permission + WiFi up gate for listen sockets (asks for "listen" permission on top of "network").
+int gateListen(lua_State* L) {
+  if (!be(L).listenAllowed()) return pushFail(L, LISTEN_DENIED);
+  if (!be(L).wifiConnected()) return pushFail(L, NOT_CONNECTED);
+  return 0;
+}
+
+// net.listen(port) -> handle | nil, err. Binds a TCP server on `port` (1..65535).
+// Needs "listen" permission in the app's manifest (on top of "network").
+int net_listen(lua_State* L) {
+  const lua_Number port = luaL_checknumber(L, 1);
+  if (int r = gateListen(L)) return r;
+  if (port < 1 || port > 65535 || port != static_cast<int>(port)) return pushFail(L, "port must be an integer 1..65535");
+  bool free = false;
+  for (int i = 0; i < Backend::MAX_SOCKETS; i++) free = free || !be(L).netIsOpen(i);
+  if (!free) return pushFail(L, "too many open sockets (max 8)");
+  const size_t freeNow = be(L).freeHeap();
+  if (freeNow < SOCK_MIN_FREE_BYTES) {
+    char msg[96];
+    snprintf(msg, sizeof(msg), "not enough free RAM for a socket (free %uK, need %uK)", static_cast<unsigned>(freeNow / 1024),
+             static_cast<unsigned>(SOCK_MIN_FREE_BYTES / 1024));
+    return pushFail(L, msg);
+  }
+  char err[96] = {0};
+  const int slot = be(L).netListen(static_cast<int>(port), err, sizeof(err));
+  if (slot < 0) return pushFail(L, err[0] ? err : "cannot listen on port");
+  lua_pushinteger(L, slot + 1);
+  return 1;
+}
+
+// net.accept(server) -> handle | nil | nil, err. Non-blocking: nil = nothing waiting yet.
+// Returns a TCP client handle (kind 1) that can be used with net.read/write/close.
+int net_accept(lua_State* L) {
+  int slot = 0;
+  if (int r = slotArg(L, 1, &slot)) return r;
+  if (int r = checkKind(L, slot, 3, "server")) return r;
+  if (!be(L).listenAllowed()) return pushFail(L, LISTEN_DENIED);
+  const int clientSlot = be(L).netAccept(slot);
+  if (clientSlot == -2) return pushFail(L, "accept failed");
+  if (clientSlot < 0) {
+    lua_pushnil(L);  // nothing waiting, no error
+    return 1;
+  }
+  lua_pushinteger(L, clientSlot + 1);
+  return 1;
+}
+
+// ---- mDNS query -------------------------------------------------------------------------
+
+// net.mdns_query(service, proto) -> { {hostname, ip, port, instance_name}, ... } | nil, err
+// `service` e.g. "_http" or "http"; `proto` "tcp" or "udp". Needs WiFi up.
+int net_mdns_query(lua_State* L) {
+  const char* service = luaL_checkstring(L, 1);
+  const char* proto = luaL_checkstring(L, 2);
+  if (int r = gateOnline(L)) return r;
+  if (strlen(service) == 0 || strlen(service) > 60) return pushFail(L, "invalid service type");
+  if (strcmp(proto, "tcp") != 0 && strcmp(proto, "udp") != 0) return pushFail(L, "proto must be \"tcp\" or \"udp\"");
+  // Strip leading underscore from service if present (ESPmDNS expects the bare name)
+  const char* cleanSvc = (service[0] == '_') ? service + 1 : service;
+  char err[96] = {0};
+  const int n = be(L).mdnsQuery(cleanSvc, proto, err, sizeof(err));
+  if (n < 0) return pushFail(L, err[0] ? err : "mDNS query failed");
+  lua_createtable(L, n, 0);
+  for (int i = 0; i < n; i++) {
+    char hostname[64], ip[16], instanceName[64];
+    int port = 0;
+    if (!be(L).mdnsResult(i, hostname, sizeof(hostname), ip, sizeof(ip), &port, instanceName, sizeof(instanceName)))
+      break;
+    lua_createtable(L, 0, 4);
+    lua_pushstring(L, hostname);
+    lua_setfield(L, -2, "hostname");
+    lua_pushstring(L, ip);
+    lua_setfield(L, -2, "ip");
+    lua_pushinteger(L, port);
+    lua_setfield(L, -2, "port");
+    lua_pushstring(L, instanceName);
+    lua_setfield(L, -2, "instance_name");
+    lua_rawseti(L, -2, i + 1);
+  }
+  return 1;
+}
+
 }  // namespace
 
 void registerSock(lua_State* L, Ctx* c) {
@@ -359,6 +443,8 @@ void registerSock(lua_State* L, Ctx* c) {
                                  {"connected", net_connected}, {"close", net_close},
                                  {"udp_open", net_udp_open},   {"udp_send", net_udp_send}, {"udp_recv", net_udp_recv},
                                  {"udp_close", net_udp_close},
+                                 {"listen", net_listen},       {"accept", net_accept},
+                                 {"mdns_query", net_mdns_query},
                                  {nullptr, nullptr}};
   regTable(L, c, "net", fns);
 }

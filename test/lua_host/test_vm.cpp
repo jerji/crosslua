@@ -253,6 +253,75 @@ struct MockBackend : Backend {
   void netClose(int s) override {
     if (netIsOpen(s)) socks[s] = MockSock{};
   }
+  // --- listen / accept mock ---
+  bool listenOk = true;  // false = netListen fails
+  bool acceptOk = true;  // false = netAccept returns error
+  std::map<int, std::deque<MockSock>> acceptQueue;  // server slot -> queued clients
+  int acceptCount = 0;  // clients accepted via netAccept so far (for unique slot content)
+  int serverPort = 0;   // last port listened on
+  bool listenPermitted = false;
+  int netListen(int port, char* err, size_t errCap) override {
+    if (!listenOk) { snprintf(err, errCap, "listen failed (mock)"); return -1; }
+    for (int i = 0; i < Backend::MAX_SOCKETS; i++) {
+      if (socks[i].used) continue;
+      socks[i] = MockSock{};
+      socks[i].used = true;
+      socks[i].kind = 3;
+      socks[i].port = port;
+      serverPort = port;
+      acceptQueue[i] = {};
+      return i;
+    }
+    snprintf(err, errCap, "no free slot (mock)");
+    return -1;
+  }
+  int netAccept(int serverSlot) override {
+    if (!acceptOk) return -2;
+    auto it = acceptQueue.find(serverSlot);
+    if (it == acceptQueue.end() || it->second.empty()) return -1;
+    // Find a free slot for the client
+    for (int i = 0; i < Backend::MAX_SOCKETS; i++) {
+      if (socks[i].used) continue;
+      MockSock cl = it->second.front();
+      it->second.pop_front();
+      socks[i] = cl;
+      socks[i].used = true;
+      socks[i].kind = 1;
+      acceptCount++;
+      return i;
+    }
+    return -2;  // no free slot for the client
+  }
+  bool listenAllowed() override { return listenPermitted; }
+  // --- mDNS mock ---
+  struct MdnsResult {
+    std::string hostname;
+    std::string ip;
+    int port;
+    std::string instanceName;
+  };
+  std::vector<MdnsResult> mdnsResults;
+  bool mdnsQueryCalled = false;
+  std::string mdnsLastQuery;
+  int mdnsQueryFailCode = 0;  // 0 ok, -1 = failure
+  int mdnsQuery(const char* service, const char* proto, char* err, size_t errCap) override {
+    mdnsQueryCalled = true;
+    mdnsLastQuery = std::string(service) + "::" + proto;
+    if (mdnsQueryFailCode < 0) {
+      snprintf(err, errCap, "mDNS query failed (mock)");
+      return -1;
+    }
+    return static_cast<int>(mdnsResults.size());
+  }
+  bool mdnsResult(int i, char* hostname, size_t hnCap, char* ip, size_t ipCap, int* port, char* instanceName, size_t inCap) override {
+    if (i < 0 || i >= static_cast<int>(mdnsResults.size())) return false;
+    const auto& r = mdnsResults[i];
+    snprintf(hostname, hnCap, "%s", r.hostname.c_str());
+    snprintf(ip, ipCap, "%s", r.ip.c_str());
+    *port = r.port;
+    snprintf(instanceName, inCap, "%s", r.instanceName.c_str());
+    return true;
+  }
   bool wifiConnected() override { return wifiUp; }
   void wifiRequestConnect() override { wifiAsked = true; }
   bool wifiInfo(char* ssid, size_t sc, char* ip, size_t ic, int* rssi) override {
@@ -3582,6 +3651,344 @@ int main() {
     CHECK(be.logs[1] == "false\tnot enough memory");
     vm.close();
     CHECK(vm.usedBytes() == 0);
+  }
+  {
+    TEST("net.listen: basic listen, close, permission and WiFi gates");
+    {
+      MockBackend be;
+      be.net = true;
+      be.wifiUp = true;
+      be.listenPermitted = true;
+      LuaVm vm;
+      CHECK(vm.open(128 * 1024));
+      registerApi(vm, be);
+      const char* script = "print(net.listen(8080))";
+      CHECK(vm.load("t", script, strlen(script)));
+      CHECK(run(vm, be, 100000) == Status::Finished);
+      CHECK(be.logs.size() == 1);
+      CHECK(be.logs[0] == "1");
+      CHECK(be.serverPort == 8080);
+    }
+    {
+      MockBackend be;  // no listen permission
+      be.net = true;
+      be.wifiUp = true;
+      be.listenPermitted = false;
+      LuaVm vm;
+      CHECK(vm.open(128 * 1024));
+      registerApi(vm, be);
+      const char* script = "print(net.listen(8080))";
+      CHECK(vm.load("t", script, strlen(script)));
+      CHECK(run(vm, be, 100000) == Status::Finished);
+      CHECK(be.logs.size() == 1);
+      CHECK(be.logs[0].rfind("nil\tlisten not permitted", 0) == 0);
+    }
+    {
+      MockBackend be;  // WiFi down
+      be.net = true;
+      be.wifiUp = false;
+      be.listenPermitted = true;
+      LuaVm vm;
+      CHECK(vm.open(128 * 1024));
+      registerApi(vm, be);
+      const char* script = "print(net.listen(8080))";
+      CHECK(vm.load("t", script, strlen(script)));
+      CHECK(run(vm, be, 100000) == Status::Finished);
+      CHECK(be.logs.size() == 1);
+      CHECK(be.logs[0].rfind("nil\tnot connected", 0) == 0);
+    }
+    {
+      MockBackend be;  // port validation
+      be.net = true;
+      be.wifiUp = true;
+      be.listenPermitted = true;
+      LuaVm vm;
+      CHECK(vm.open(128 * 1024));
+      registerApi(vm, be);
+      const char* script = "print(net.listen(0))\nprint(net.listen(65536))\nprint(net.listen(-1))";
+      CHECK(vm.load("t", script, strlen(script)));
+      CHECK(run(vm, be, 100000) == Status::Finished);
+      CHECK(be.logs.size() == 3);
+      for (size_t i = 0; i < 3; i++) CHECK(be.logs[i].rfind("nil\t", 0) == 0);
+    }
+    {
+      MockBackend be;  // slot exhaustion: 8 connects leave no room for listen
+      be.net = true;
+      be.wifiUp = true;
+      be.listenPermitted = true;
+      be.dnsMap["h.test"] = "1.2.3.4";
+      LuaVm vm;
+      CHECK(vm.open(128 * 1024));
+      registerApi(vm, be);
+      const char* script = "local hs = {} for i = 1, 8 do hs[i] = net.connect('h.test', 80) end\nprint(net.listen(8080))";
+      CHECK(vm.load("t", script, strlen(script)));
+      CHECK(run(vm, be, 100000) == Status::Finished);
+      CHECK(be.logs.size() == 1);
+      CHECK(be.logs[0].rfind("nil\ttoo many", 0) == 0);
+    }
+    {
+      MockBackend be;  // backend error propagates
+      be.net = true;
+      be.wifiUp = true;
+      be.listenPermitted = true;
+      be.listenOk = false;
+      LuaVm vm;
+      CHECK(vm.open(128 * 1024));
+      registerApi(vm, be);
+      const char* script = "print(net.listen(8080))";
+      CHECK(vm.load("t", script, strlen(script)));
+      CHECK(run(vm, be, 100000) == Status::Finished);
+      CHECK(be.logs.size() == 1);
+      CHECK(be.logs[0] == "nil\tlisten failed (mock)");
+    }
+  }
+  {
+    TEST("net.accept: accept a queued client, read/write, close");
+    MockBackend be;
+    be.net = true;
+    be.wifiUp = true;
+    be.listenPermitted = true;
+    LuaVm vm;
+    CHECK(vm.open(128 * 1024));
+    registerApi(vm, be);
+    // First run listen to create the server slot
+    const char* setupSc = "local s = net.listen(9090); print(s)";
+    CHECK(vm.load("t", setupSc, strlen(setupSc)));
+    CHECK(run(vm, be, 100000) == Status::Finished);
+    CHECK(be.logs.size() == 1 && be.logs[0] == "1");
+    // Queue a client on server slot 0 with some data
+    MockBackend::MockSock client;
+    client.used = true;
+    client.kind = 1;
+    client.rx = "HELLO from mock\n";
+    client.host = "192.168.1.100";
+    client.port = 54321;
+    be.acceptQueue[0].push_back(client);
+    // Now accept it in a fresh VM
+    be.logs.clear();
+    LuaVm vm2;
+    CHECK(vm2.open(128 * 1024));
+    registerApi(vm2, be);
+    // The server is still open in the mock's slots (slot 0, kind 3)
+    // net.accept should find the queued client
+    const char* sc = "local cl = net.accept(1); print(cl); print(net.read(cl, 20)); print(net.write(cl, 'ok')); print(net.close(cl))";
+    CHECK(vm2.load("t", sc, strlen(sc)));
+    CHECK(run(vm2, be, 100000) == Status::Finished);
+    CHECK(be.logs.size() == 4);
+    if (be.logs.size() == 4) {
+      CHECK(be.logs[0] == "2");    // client handle (next free slot)
+      CHECK(be.logs[1] == "HELLO from mock\n");
+      CHECK(be.logs[2] == "2");    // wrote 2 bytes
+      CHECK(be.logs[3] == "true"); // close succeeded
+      CHECK(be.acceptCount == 1);
+    }
+  }
+  {
+    TEST("net.accept: permission, server handle validation, no pending client returns nil");
+    {
+      MockBackend be;  // no listen permission
+      be.net = true;
+      be.wifiUp = true;
+      be.listenPermitted = false;
+      LuaVm vm;
+      CHECK(vm.open(128 * 1024));
+      registerApi(vm, be);
+      const char* sc = "print(net.accept(1))";
+      CHECK(vm.load("t", sc, strlen(sc)));
+      CHECK(run(vm, be, 100000) == Status::Finished);
+      CHECK(be.logs.size() == 1);
+      CHECK(be.logs[0].rfind("nil\tnot an open socket handle", 0) == 0);
+    }
+    {
+      MockBackend be;  // server with nothing waiting
+      be.net = true;
+      be.wifiUp = true;
+      be.listenPermitted = true;      LuaVm vm;
+      CHECK(vm.open(128 * 1024));
+      registerApi(vm, be);
+      // Create the server first
+      const char* s1 = "local s = net.listen(9090); print(s)";
+      CHECK(vm.load("t", s1, strlen(s1)));
+      CHECK(run(vm, be, 100000) == Status::Finished);
+      CHECK(be.logs[0] == "1");
+      // Now accept - nothing waiting -> nil
+      be.logs.clear();
+      LuaVm vm2;
+      CHECK(vm2.open(128 * 1024));
+      registerApi(vm2, be);
+      const char* sc = "print(net.accept(1))";
+      CHECK(vm2.load("t", sc, strlen(sc)));
+      CHECK(run(vm2, be, 100000) == Status::Finished);
+      CHECK(be.logs.size() == 1);
+      CHECK(be.logs[0] == "nil");
+    }
+    {
+      MockBackend be;  // listen permission check on accept (server exists but no listen permission)
+      be.net = true;
+      be.wifiUp = true;
+      be.listenPermitted = true;
+      LuaVm vm;
+      CHECK(vm.open(128 * 1024));
+      registerApi(vm, be);
+      CHECK(vm.load("t", "local s = net.listen(9090); print(s)", strlen("local s = net.listen(9090); print(s)")));
+      CHECK(run(vm, be, 100000) == Status::Finished);
+      CHECK(be.logs[0] == "1");
+      be.logs.clear();
+      be.listenPermitted = false;  // revoke permission before accept
+      LuaVm vm2;
+      CHECK(vm2.open(128 * 1024));
+      registerApi(vm2, be);
+      const char* sc2 = "print(net.accept(1))";
+      CHECK(vm2.load("t", sc2, strlen(sc2)));
+      CHECK(run(vm2, be, 100000) == Status::Finished);
+      CHECK(be.logs.size() == 1);
+      CHECK(be.logs[0] == "nil\tlisten not permitted: add \"permissions\": [\"listen\"] to this app's manifest.json");
+    }
+    {
+      MockBackend be;  // accept on a TCP handle (not a server)
+      be.net = true;
+      be.wifiUp = true;
+      be.listenPermitted = true;
+      be.dnsMap["h.test"] = "1.2.3.4";
+      LuaVm vm;
+      CHECK(vm.open(128 * 1024));
+      registerApi(vm, be);
+      const char* sc = "local c = net.connect('h.test', 80); print(net.accept(c))";
+      CHECK(vm.load("t", sc, strlen(sc)));
+      CHECK(run(vm, be, 100000) == Status::Finished);
+      CHECK(be.logs.size() == 1);
+      CHECK(be.logs[0] == "nil\tnot a server socket");
+    }
+    {
+      MockBackend be;  // accept backend error
+      be.net = true;
+      be.wifiUp = true;
+      be.listenPermitted = true;
+      be.acceptOk = false;
+      LuaVm vm;
+      CHECK(vm.open(128 * 1024));
+      registerApi(vm, be);
+      CHECK(vm.load("t", "local s = net.listen(9090); print(s)", strlen("local s = net.listen(9090); print(s)")));
+      CHECK(run(vm, be, 100000) == Status::Finished);
+      CHECK(be.logs[0] == "1");
+      be.logs.clear();
+      LuaVm vm2;
+      CHECK(vm2.open(128 * 1024));
+      registerApi(vm2, be);
+      CHECK(vm2.load("t", "print(net.accept(1))", strlen("print(net.accept(1))")));
+      CHECK(run(vm2, be, 100000) == Status::Finished);
+      CHECK(be.logs.size() == 1);
+      CHECK(be.logs[0] == "nil\taccept failed");
+    }
+  }
+  {
+    TEST("net.mdns_query: basic query, empty results, permission and WiFi gates");
+    {
+      MockBackend be;
+      be.net = true;
+      be.wifiUp = true;
+      be.mdnsResults = {
+        {"printer", "192.168.1.100", 631, "Office Printer"},
+        {"nas", "192.168.1.50", 5000, "My NAS"},
+      };
+      LuaVm vm;
+      CHECK(vm.open(128 * 1024));
+      registerApi(vm, be);
+      const char* script = R"LUA(
+        local r = net.mdns_query("_ipp", "tcp")
+        print(#r)
+        print(r[1].hostname, r[1].ip, r[1].port, r[1].instance_name)
+        print(r[2].hostname, r[2].ip, r[2].port, r[2].instance_name)
+      )LUA";
+      CHECK(vm.load("t", script, strlen(script)));
+      CHECK(run(vm, be, 100000) == Status::Finished);
+      CHECK(be.logs.size() == 3);
+      CHECK(be.logs[0] == "2");
+      CHECK(be.logs[1] == "printer\t192.168.1.100\t631\tOffice Printer");
+      CHECK(be.logs[2] == "nas\t192.168.1.50\t5000\tMy NAS");
+      CHECK(be.mdnsQueryCalled);
+      CHECK(be.mdnsLastQuery.find("ipp::tcp") != std::string::npos);
+    }
+    {
+      MockBackend be;  // empty results
+      be.net = true;
+      be.wifiUp = true;
+      LuaVm vm;
+      CHECK(vm.open(128 * 1024));
+      registerApi(vm, be);
+      const char* script = "print(#net.mdns_query('_http', 'tcp'))";
+      CHECK(vm.load("t", script, strlen(script)));
+      CHECK(run(vm, be, 100000) == Status::Finished);
+      CHECK(be.logs.size() == 1);
+      CHECK(be.logs[0] == "0");
+    }
+    {
+      MockBackend be;  // no network permission
+      be.net = false;
+      be.wifiUp = true;
+      LuaVm vm;
+      CHECK(vm.open(128 * 1024));
+      registerApi(vm, be);
+      const char* script = "print(net.mdns_query('_http', 'tcp'))";
+      CHECK(vm.load("t", script, strlen(script)));
+      CHECK(run(vm, be, 100000) == Status::Finished);
+      CHECK(be.logs.size() == 1);
+      CHECK(be.logs[0].rfind("nil\tnetwork not permitted", 0) == 0);
+    }
+    {
+      MockBackend be;  // WiFi down
+      be.net = true;
+      be.wifiUp = false;
+      LuaVm vm;
+      CHECK(vm.open(128 * 1024));
+      registerApi(vm, be);
+      const char* script = "print(net.mdns_query('_http', 'tcp'))";
+      CHECK(vm.load("t", script, strlen(script)));
+      CHECK(run(vm, be, 100000) == Status::Finished);
+      CHECK(be.logs.size() == 1);
+      CHECK(be.logs[0].rfind("nil\tnot connected", 0) == 0);
+    }
+    {
+      MockBackend be;  // argument validation
+      be.net = true;
+      be.wifiUp = true;
+      LuaVm vm;
+      CHECK(vm.open(128 * 1024));
+      registerApi(vm, be);
+      const char* script = "print(net.mdns_query('', 'tcp'))\nprint(net.mdns_query('http', ''))\nprint(net.mdns_query('http', 'foo'))";
+      CHECK(vm.load("t", script, strlen(script)));
+      CHECK(run(vm, be, 100000) == Status::Finished);
+      CHECK(be.logs.size() == 3);
+      for (size_t i = 0; i < 3; i++) CHECK(be.logs[i].rfind("nil\t", 0) == 0);
+    }
+    {
+      MockBackend be;  // service type auto-prepends _
+      be.net = true;
+      be.wifiUp = true;
+      LuaVm vm;
+      CHECK(vm.open(128 * 1024));
+      registerApi(vm, be);
+      const char* script = "print(#net.mdns_query('http', 'tcp'))\nprint(#net.mdns_query('_http', 'tcp'))";
+      CHECK(vm.load("t", script, strlen(script)));
+      CHECK(run(vm, be, 100000) == Status::Finished);
+      CHECK(be.logs.size() == 2);
+      // The mdnsLastQuery should be the same in both cases: _http._tcp
+      CHECK(be.mdnsLastQuery == "http::tcp");
+    }
+    {
+      MockBackend be;  // mDNS query failure
+      be.net = true;
+      be.wifiUp = true;
+      be.mdnsQueryFailCode = -1;
+      LuaVm vm;
+      CHECK(vm.open(128 * 1024));
+      registerApi(vm, be);
+      const char* script = "local r, err = net.mdns_query('_http', 'tcp'); print(r, err)";
+      CHECK(vm.load("t", script, strlen(script)));
+      CHECK(run(vm, be, 100000) == Status::Finished);
+      CHECK(be.logs.size() == 1);
+      CHECK(be.logs[0].find("nil\t") == 0);  // nil + error message
+    }
   }
   printf(g_fail ? "\n%d FAILED\n" : "\nALL PASSED\n", g_fail);
   return g_fail ? 1 : 0;

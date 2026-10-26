@@ -1,4 +1,4 @@
-# CrossLua app API (v0.16)
+# CrossLua app API (v0.17)
 
 An app is a plugin folder containing `main.lua`, in any plugin root
 (`/plugins`, `/.plugins`, `/.crosspoint/plugins`):
@@ -228,9 +228,9 @@ CrossPoint runs on more boards than the X4. Hardware features are gated by the f
 | `input.pos()` → `x, y` \| `nil` | screen-pixel position of the touch event `poll`/`wait` returned last; `nil` after a button event or an empty poll. A `"release"` reports where the finger last was |
 | `input.text(title [, initial [, max_len [, mode]]])` → `string` \| `nil, "cancelled"` \| `nil, err` | the system on-screen keyboard (touch or buttons, whatever the board offers). `title` ≤ 60 chars, `initial` ≤ 256 bytes and ≤ `max_len`, `max_len` 1..256 (default 128), `mode` `"text"` (default) \| `"password"` (masked) \| `"url"` (URL helper keys). Parks the script while the keyboard is up (like `wifi.connect`), so redraw afterwards; an empty string means the user confirmed an empty field |
 
-## net — raw TCP client sockets (needs the `network` permission and WiFi up)
+## net — raw TCP client sockets + UDP + listen + mDNS (needs the `network` permission and WiFi up)
 
-Plain TCP over the Arduino `NetworkClient` that CrossPoint already links for its web server (no extra network code). Join WiFi first with `wifi.connect()`. Same permission and "WiFi up" rules as `http.*`. Not implemented yet: TLS sockets (`{tls=true}` is refused, never silently ignored), UDP, mDNS, listening/accepting.
+Plain TCP over the Arduino `NetworkClient` that CrossPoint already links for its web server (no extra network code). Join WiFi first with `wifi.connect()`. Same permission and "WiFi up" rules as `http.*`. Not implemented yet: TLS sockets (`{tls=true}` is refused, never silently ignored).
 
 | call | |
 |---|---|
@@ -251,6 +251,9 @@ UDP datagrams live in the same socket table as TCP (8 slots total, TCP and UDP t
 | `net.udp_send(h, host, port, data)` -> bytes \| nil, err | Fire-and-forget: no delivery guarantee. `host` may be a name (resolved via DNS, blocks briefly) or an IPv4 literal; `data` at most 16384 bytes and not empty. |
 | `net.udp_recv(h [, max=1472])` -> `{data, ip, port}` \| nil \| nil, "closed" | Never blocks. `nil` means nothing has arrived. One datagram per call, truncated to `max` (1..16384). `ip`/`port` are the sender's. |
 | `net.udp_close(h)` -> true \| nil, err | A TCP handle is refused with "not a UDP socket". |
+| `net.listen(port)` -> handle \\| nil, err | Needs `"listen"` permission in addition to `"network"`. Binds a TCP server on `port` (1..65535). Refused when 8 handles are open or under 16 KB free RAM. |
+| `net.accept(server)` -> handle \\| nil \\| nil, err | Non-blocking: `nil` (one value) = nothing waiting; `nil, err` = error. Returns a TCP client handle for `net.read`/`write`/`close`. |
+| `net.mdns_query(service, proto)` -> `{ {hostname, ip, port, instance_name}, ... }` \\| nil, err | Queries mDNS on the LAN (e.g. `net.mdns_query("http", "tcp")`). `service` may have a leading `_` or not. `proto` is `"tcp"` or `"udp"`. Needs the `"network"` permission and WiFi up. Returns an empty array when nothing is found (not an error). |
 
 Sockets still open when the app ends are closed (the radio is shut down then anyway).
 

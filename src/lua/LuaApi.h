@@ -103,7 +103,7 @@ class Backend {
 
   // --- raw TCP client sockets (net.*): a fixed table of MAX_SOCKETS slots; handles seen by Lua are slot + 1 -------------
   static constexpr int MAX_SOCKETS = 8;
-  // Slot kinds (netKind): 0 free, 1 TCP (net.connect), 2 UDP (net.udp_open). Handles seen by Lua are slot + 1 for both.
+  // Slot kinds (netKind): 0 free, 1 TCP (net.connect), 2 UDP (net.udp_open), 3 server (net.listen). Handles seen by Lua are slot + 1.
   virtual bool netLocal(char* ip, char* mask, char* gateway, char* dns, size_t cap) = 0;  // false: WiFi is down
   virtual bool netResolve(const char* host, char* ip, size_t ipCap, char* err, size_t errCap) = 0;
   virtual int netConnect(const char* host, int port, int timeoutMs, char* err, size_t errCap) = 0;  // slot, or -1 + err
@@ -119,6 +119,16 @@ class Backend {
   virtual int udpOpen(int port, char* err, size_t errCap) = 0;       // slot, or -1 + err (port 0 = system-assigned)
   virtual int udpSend(int slot, const char* host, int port, const void* data, size_t n, char* err, size_t errCap) = 0;  // bytes, or -1
   virtual int udpRecv(int slot, void* buf, size_t max, char* ip, size_t ipCap, int* port) = 0;  // n bytes; 0 nothing waiting; -1 closed
+
+  // --- listen (server) sockets: kind 3 on the same slot table ---
+  virtual int netListen(int port, char* err, size_t errCap) = 0;  // server slot, or -1 + err
+  virtual int netAccept(int serverSlot) = 0;  // client slot (kind 1), or -1 (nothing waiting), or -2 (error)
+  virtual bool listenAllowed() = 0;  // the app's manifest declares "listen"
+
+  // --- mDNS query (ESPmDNS, like biscuit MdnsBrowserActivity) ---
+  virtual int mdnsQuery(const char* service, const char* proto, char* err, size_t errCap) = 0;  // >= 0 count, -1 error
+  virtual bool mdnsResult(int i, char* hostname, size_t hnCap, char* ip, size_t ipCap, int* port, char* instanceName, size_t inCap) = 0;
+
   virtual bool wifiConnected() = 0;
   // Ask the system to bring WiFi up (it may show its own network picker). Non-blocking: the script is parked and
   // resumed with "wifi:ok" / "wifi:fail" once the system UI has finished.

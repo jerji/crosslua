@@ -23,6 +23,7 @@
 #include <ArduinoJson.h>
 #include <WiFi.h>
 #include <WiFiUdp.h>
+#include <ESPmDNS.h>
 #include <ZipFile.h>
 
 #include <algorithm>
@@ -417,7 +418,8 @@ class LuaAppActivity::Backend final : public crosslua::Backend {
   WiFiClient socks_[crosslua::Backend::MAX_SOCKETS];
   WiFiUDP udps_[crosslua::Backend::MAX_SOCKETS];
   bool sockUsed_[crosslua::Backend::MAX_SOCKETS] = {};
-  int sockKind_[crosslua::Backend::MAX_SOCKETS] = {};  // 0 free, 1 TCP, 2 UDP
+  int sockKind_[crosslua::Backend::MAX_SOCKETS] = {};  // 0 free, 1 TCP, 2 UDP, 3 server
+  WiFiServer* sockServers_[crosslua::Backend::MAX_SOCKETS] = {};  // non-null for kind-3 slots
   static void fmtIp(char* out, size_t cap, const IPAddress& ip) { snprintf(out, cap, "%u.%u.%u.%u", ip[0], ip[1], ip[2], ip[3]); }
   bool netLocal(char* ip, char* mask, char* gw, char* dns, size_t cap) override {
     if (WiFi.status() != WL_CONNECTED) return false;
@@ -524,7 +526,9 @@ class LuaAppActivity::Backend final : public crosslua::Backend {
   void netClose(int s) override {
     if (!netIsOpen(s)) return;
     if (sockKind_[s] == 2) udps_[s].stop();
-    else socks_[s].stop();
+    else if (sockKind_[s] == 3) {
+      if (sockServers_[s]) { delete sockServers_[s]; sockServers_[s] = nullptr; }
+    } else socks_[s].stop();
     sockUsed_[s] = false;
     sockKind_[s] = 0;
   }
@@ -1064,6 +1068,62 @@ class LuaAppActivity::Backend final : public crosslua::Backend {
           requested_.push_back({rel, w == 1});
       }
   }
+
+  // --- listen sockets ---
+    int netListen(int port, char* err, size_t errCap) override {
+      WiFiServer* srv = new WiFiServer(port);
+      if (!srv) { snprintf(err, errCap, "out of memory for server"); return -1; }
+      srv->begin();
+      for (int i = 0; i < Backend::MAX_SOCKETS; i++) {
+        if (sockUsed_[i]) continue;
+        sockUsed_[i] = true;
+        sockKind_[i] = 3;
+        sockServers_[i] = srv;
+        return i;
+      }
+      delete srv;
+      snprintf(err, errCap, "no free slot");
+      return -1;
+    }
+    int netAccept(int serverSlot) override {
+      if (!sockUsed_[serverSlot] || sockKind_[serverSlot] != 3 || !sockServers_[serverSlot]) return -2;
+      WiFiClient cl = sockServers_[serverSlot]->available();
+      if (!cl) return -1;
+      for (int i = 0; i < Backend::MAX_SOCKETS; i++) {
+        if (sockUsed_[i]) continue;
+        sockUsed_[i] = true;
+        sockKind_[i] = 1;
+        socks_[i] = cl;
+        return i;
+      }
+      cl.stop();
+      return -2;
+    }
+    bool listenAllowed() override { return net_; }  // simplifies: "listen" permission can be added to the manifest parser later
+
+    // --- mDNS ---
+  // ESPmDNS needs begin() (responder + query machinery) before queryService works; without it the
+  // query returns 0 in microseconds. Track it globally: the radio teardown / reboot resets it.
+  bool mdnsBegun_ = false;
+  int mdnsQuery(const char* service, const char* proto, char* err, size_t errCap) override {
+    if (!mdnsBegun_) {
+      if (!MDNS.begin("crosspoint")) { snprintf(err, errCap, "mDNS could not start"); return -1; }
+      mdnsBegun_ = true;
+    }
+    int n = MDNS.queryService(service, proto);
+    if (n < 0) { snprintf(err, errCap, "mDNS query failed"); return -1; }
+    return n;
+  }
+    bool mdnsResult(int i, char* hostname, size_t hnCap, char* ip, size_t ipCap, int* port, char* instanceName, size_t inCap) override {
+      if (i < 0) return false;
+      auto addr = MDNS.address(i);
+      if (!addr) return false;
+      snprintf(ip, ipCap, "%s", addr.toString().c_str());
+      snprintf(hostname, hnCap, "%s", MDNS.hostname(i).c_str());
+      *port = MDNS.port(i);
+      snprintf(instanceName, inCap, "%s", MDNS.instanceName(i).c_str());
+      return true;
+    }
 
   MappedInputManager& in_;
   bool net_ = false;

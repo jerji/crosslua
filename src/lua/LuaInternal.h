@@ -61,5 +61,7 @@ void registerGfxImage(lua_State* L);
 
 // Shared by wifi.*, http.* and net.*: what an app sees when its manifest lacks the permission.
 inline constexpr const char* NET_DENIED = "network not permitted: add \"permissions\": [\"network\"] to this app's manifest.json";
+// For net.listen and net.accept (exposes the device to the LAN): an extra permission beyond the base network permission.
+inline constexpr const char* LISTEN_DENIED = "listen not permitted: add \"permissions\": [\"listen\"] to this app's manifest.json";
 
 }  // namespace crosslua
