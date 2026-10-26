@@ -114,7 +114,8 @@ a tighter GC pause (130 %), and the `string.pack('l')` portability trap (use `i4
 Not done in Study: undo, per-deck options, parameter optimisation, `.apkg` import, images/audio.
 
 **Done: 2048** (`game2048_lua`): rules in a pure module (`game.lua`: merge-once, win, game over, one-level undo, validated
-save) with ~9,000-assertion-equivalent coverage (edge cases + a 3,000-move invariant test; two mutants caught), board/best
+save), tested with an edge-case table (slides, all four directions, win, game over, undo, save validation), a 3,000-move
+invariant check (tile total only grows by the spawned tile) and a scripted app session; two deliberate bugs were caught. Board/best
 score saved after every move, menu (resume/new/exit). On the X4: Lua peak 39 KB of 81 KB, device free never below 75 KB.
 It needed **no firmware change**, which is the point of the runtime. Apps stay self-contained (each ships what it needs);
 a shared `/.crosslua/lib/ui.lua` is deferred until three apps want the same helpers.
