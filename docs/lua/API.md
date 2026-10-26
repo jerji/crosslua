@@ -1,4 +1,4 @@
-# CrossLua app API (v0.11)
+# CrossLua app API (v0.12)
 
 An app is a plugin folder containing `main.lua`, in any plugin root
 (`/plugins`, `/.plugins`, `/.crosspoint/plugins`):
@@ -221,6 +221,11 @@ CrossPoint runs on more boards than the X4. Hardware features are gated by the f
 | `input.poll()` / `input.wait()` touch events | on touch boards also `"press"` (finger down), `"long"` (held), `"tap"` (quick touch), `"release"` (finger up). **UNTESTED on hardware** (needs a touch board; compiles and links for `x4pro` and `metalio_eink4`) |
 | `input.pos()` → `x, y` \| `nil` | screen-pixel position of the touch event `poll`/`wait` returned last; `nil` after a button event or an empty poll. A `"release"` reports where the finger last was |
 | `input.text(title [, initial [, max_len [, mode]]])` → `string` \| `nil, "cancelled"` \| `nil, err` | the system on-screen keyboard (touch or buttons, whatever the board offers). `title` ≤ 60 chars, `initial` ≤ 256 bytes and ≤ `max_len`, `max_len` 1..256 (default 128), `mode` `"text"` (default) \| `"password"` (masked) \| `"url"` (URL helper keys). Parks the script while the keyboard is up (like `wifi.connect`), so redraw afterwards; an empty string means the user confirmed an empty field |
+
+## epub — book metadata without opening the book
+| call | notes |
+|---|---|
+| `epub.meta(path)` → `{title = , author = }` \| `nil, err` | title and author from the EPUB's OPF, using the firmware's own metadata-only parse (the one the library indexer runs on books nobody has opened: no cache is built, no pages laid out). `path` must end in `.epub` (any case) and is resolved like `zip.*` (`app:` / `data:` / `sd:` with the `library` permission or a storage grant). Fields are always strings (`author` is `""` when the book has none); results are cut at 199 / 119 bytes on a whole UTF-8 character. Errors: `not an .epub file`, the sandbox's message, `cannot read the book (not an EPUB, corrupt, or no RAM)`, or `not enough free RAM to read the book (free NK, need 64K)`. **RAM (measured on the X4): the parse peaks at about 55 KB of heap and takes ~17 ms**, so call it from an app that has not claimed most of the heap (the call itself leaves no leak: free changed by -224 B, largest block unchanged) |
 
 ## json
 `json.encode(value)` → string \| nil, err · `json.decode(string)` → value \| nil, "msg at byte N" · `json.null` (sentinel for JSON null).

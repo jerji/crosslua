@@ -174,6 +174,19 @@ struct MockBackend : Backend {
   std::map<std::string, std::vector<std::pair<std::string, std::string>>> zips;
   std::string openedBook;
   bool libraryAllowed() override { return library; }
+  std::map<std::string, std::pair<std::string, std::string>> epubs;  // abs path -> {title, author}
+  std::vector<std::string> epubAsked;
+  bool epubMeta(const char* path, char* title, size_t titleCap, char* author, size_t authorCap, char* err, size_t errCap) override {
+    epubAsked.push_back(path);
+    auto it = epubs.find(path);
+    if (it == epubs.end()) {
+      snprintf(err, errCap, "mock: no such book");
+      return false;
+    }
+    snprintf(title, titleCap, "%s", it->second.first.c_str());    // truncates like the firmware (may cut mid-character)
+    snprintf(author, authorCap, "%s", it->second.second.c_str());
+    return true;
+  }
   int zipList(const char* path, ZipEntryInfo* out, int maxEntries, int* total, char* err, size_t errCap) override {
     auto it = zips.find(path);
     if (it == zips.end()) { snprintf(err, errCap, "cannot open zip (missing, not a zip, or damaged)"); return -1; }
@@ -2598,6 +2611,71 @@ int main() {
     CHECK(vm.load("t", script, strlen(script)));
     CHECK(run(vm, be, 100000) == Status::Finished);
     CHECK(be.logs.size() == 1 && be.logs[0] == "nil\ttemperature/humidity sensor read failed");
+  }
+  {
+    TEST("epub.meta: title/author through the path sandbox, .epub only, UTF-8-safe truncation, honest errors");
+    MockBackend be;
+    be.library = true;
+    be.epubs["/Books/a.epub"] = {"A Tale of Two Cities", "Charles Dickens"};
+    be.epubs["/Books/anon.epub"] = {"No Author Here", ""};
+    std::string longTitle;
+    for (int i = 0; i < 150; i++) longTitle += "\xC3\xA9";  // 300 bytes of 2-byte characters: the cap lands mid-character
+    std::string longAuthor;
+    for (int i = 0; i < 100; i++) longAuthor += "\xC3\xA9";  // 200 bytes: the 120-byte author cap also lands mid-character
+    be.epubs["/Books/long.epub"] = {longTitle, longAuthor};
+    be.epubs["/Books/cafe.epub"] = {"Caf\xC3\xA9", "\xE2\x82\xAC"};  // complete 2- and 3-byte characters at the very end must survive
+    be.epubs["/Books/emoji.epub"] = {std::string(197, 'a') + "\xF0\x9F\x98\x80", "x"};  // a 4-byte character cut by the cap
+    be.files["/Books/notes.txt"] = "x";
+    LuaVm vm;
+    CHECK(vm.open(128 * 1024));
+    registerApi(vm, be);
+    const char* script = R"LUA(
+      local m = epub.meta("sd:Books/a.epub")
+      print(m.title, m.author)
+      local n = epub.meta("sd:Books/anon.epub")
+      print(n.title, "[" .. n.author .. "]", type(n.author))
+      local l = epub.meta("sd:Books/long.epub")
+      print(#l.title, l.title:sub(-2) == "\xC3\xA9", #l.author, l.author:sub(-2) == "\xC3\xA9")
+      local c = epub.meta("sd:Books/cafe.epub")
+      print(#c.title, c.title, #c.author, c.author)
+      print(#epub.meta("sd:Books/emoji.epub").title)
+      print(epub.meta("sd:Books/notes.txt"))
+      print(epub.meta("sd:Books/missing.epub"))
+      print(epub.meta("sd:Books/A.EPUB"))
+      print(epub.meta("app:../x.epub"))
+      print(pcall(epub.meta))
+    )LUA";
+    CHECK(vm.load("t", script, strlen(script)));
+    CHECK(run(vm, be, 200000) == Status::Finished);
+    CHECK(be.logs.size() == 10);
+    if (be.logs.size() == 10) {
+      CHECK(be.logs[0] == "A Tale of Two Cities\tCharles Dickens");
+      CHECK(be.logs[1] == "No Author Here\t[]\tstring");
+      CHECK(be.logs[2] == "198\ttrue\t118\ttrue");  // title cut at 199 bytes, author at 119: both trimmed back to the last whole character
+      CHECK(be.logs[3] == "5\tCaf\xC3\xA9\t3\t\xE2\x82\xAC");  // complete multi-byte tails are NOT trimmed
+      CHECK(be.logs[4] == "197");              // the cut 4-byte character is dropped whole
+      CHECK(be.logs[5] == "nil\tnot an .epub file");
+      CHECK(be.logs[6] == "nil\tmock: no such book");  // the backend's own message is passed through
+      CHECK(be.logs[7] == "nil\tmock: no such book");  // ".EPUB": extension check is case-insensitive
+      CHECK(be.logs[8].rfind("nil\t", 0) == 0);  // sandbox: '..' refused before the backend is asked
+      CHECK(be.logs[9].rfind("false\t", 0) == 0);
+    }
+    const std::vector<std::string> asked = {"/Books/a.epub", "/Books/anon.epub", "/Books/long.epub", "/Books/cafe.epub", "/Books/emoji.epub", "/Books/missing.epub", "/Books/A.EPUB"};
+    CHECK(be.epubAsked == asked);  // notes.txt and the '..' path never reached the backend
+  }
+  {
+    TEST("epub.meta: sd: without the library permission or a grant is refused before the backend is asked");
+    MockBackend be;
+    be.library = false;
+    be.epubs["/Books/a.epub"] = {"T", "A"};
+    LuaVm vm;
+    CHECK(vm.open(128 * 1024));
+    registerApi(vm, be);
+    const char* script = "print(epub.meta('sd:Books/a.epub'))";
+    CHECK(vm.load("t", script, strlen(script)));
+    CHECK(run(vm, be, 100000) == Status::Finished);
+    CHECK(be.logs.size() == 1 && be.logs[0].rfind("nil\t", 0) == 0);
+    CHECK(be.epubAsked.empty());
   }
   {
     TEST("require: a big module loads in a tight heap (the unstripped copy is dropped before the stripped one loads)");

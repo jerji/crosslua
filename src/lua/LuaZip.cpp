@@ -4,6 +4,8 @@
 // result is pushed from inside lua_pcall so an out-of-memory error can never skip the free().
 #include <cctype>
 #include <cstdlib>
+#include <strings.h>
+
 #include <cstring>
 
 #include "LuaInternal.h"
@@ -80,6 +82,38 @@ int zip_list(lua_State* L) {
     return pushFail(L, "not enough memory for the entry list (lower max)");
   }
   return 2;
+}
+
+// A byte cut can land inside a multi-byte UTF-8 character: drop the partial tail so Lua never sees invalid UTF-8.
+void trimUtf8Tail(char* s) {
+  size_t n = strlen(s);
+  size_t i = n;
+  while (i > 0 && (static_cast<unsigned char>(s[i - 1]) & 0xC0) == 0x80) i--;  // continuation bytes
+  if (i == 0) return;
+  const unsigned char lead = static_cast<unsigned char>(s[i - 1]);
+  const size_t want = lead >= 0xF0 ? 4 : lead >= 0xE0 ? 3 : lead >= 0xC0 ? 2 : 1;
+  if (want > 1 && n - (i - 1) < want) s[i - 1] = 0;  // incomplete sequence: cut it off
+}
+
+// epub.meta(path) -> { title = , author = } | nil, err. Needs a .epub path (any case) the app may read.
+int epub_meta(lua_State* L) {
+  char path[MAX_PATH_LEN + 80];
+  if (!resolveArg(L, 1, path, sizeof(path))) return 2;
+  const size_t n = strlen(path);
+  if (n < 5 || strcasecmp(path + n - 5, ".epub") != 0) return pushFail(L, "not an .epub file");
+  char title[200] = {0}, author[120] = {0}, err[96] = {0};
+  if (!be(L).epubMeta(path, title, sizeof(title), author, sizeof(author), err, sizeof(err)))
+    return pushFail(L, err[0] ? err : "cannot read the book (not an EPUB, corrupt, or no RAM)");
+  title[sizeof(title) - 1] = 0;
+  author[sizeof(author) - 1] = 0;
+  trimUtf8Tail(title);
+  trimUtf8Tail(author);
+  lua_createtable(L, 0, 2);
+  lua_pushstring(L, title);
+  lua_setfield(L, -2, "title");
+  lua_pushstring(L, author);
+  lua_setfield(L, -2, "author");
+  return 1;
 }
 
 struct PushData {
@@ -182,6 +216,8 @@ static int gfx_image(lua_State* L) {
 void registerZip(lua_State* L, Ctx* c) {
   static const luaL_Reg fns[] = {{"list", zip_list}, {"read", zip_read}, {"inflate", zip_inflate}, {nullptr, nullptr}};
   regTable(L, c, "zip", fns);
+  static const luaL_Reg epubFns[] = {{"meta", epub_meta}, {nullptr, nullptr}};
+  regTable(L, c, "epub", epubFns);
   lua_getglobal(L, "gfx");  // gfx.image lives here because it shares the path sandbox with zip/fs
   if (lua_istable(L, -1)) {
     lua_pushlightuserdata(L, c);

@@ -115,6 +115,9 @@ class Backend {
     uint32_t size;  // uncompressed bytes
   };
   // Fills up to maxEntries entries; *total = entries in the archive. Returns the number filled, or -1 with err set.
+  // EPUB title/author via the firmware's own metadata-only OPF parse (Epub::loadMetadata). Strings may be cut at the cap.
+  virtual bool epubMeta(const char* path, char* title, size_t titleCap, char* author, size_t authorCap, char* err,
+                        size_t errCap) = 0;
   virtual int zipList(const char* path, ZipEntryInfo* out, int maxEntries, int* total, char* err, size_t errCap) = 0;
   // Inflates one entry into a malloc'd buffer (caller free()s). Refuses entries over maxBytes.
   virtual bool zipRead(const char* path, const char* name, size_t maxBytes, char** data, size_t* len, char* err,

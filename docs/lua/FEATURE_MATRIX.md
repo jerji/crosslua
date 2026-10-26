@@ -29,7 +29,7 @@ Lua heap). Verdicts in the per-fork files; here only the gaps.
 | `crypto.sha256/hmac_sha1/hmac_sha256/aes_*` | biscuit TOTP×2, PIN lock, SD encryption; Grimoire "pin your own content" pattern | wolfSSL already linked; expose digest + HMAC first, AES-CBC/GCM later. |
 | `input.text()` modal keyboard (sub-activity, like the WiFi picker) | search/forms in apps: biscuit password manager, Grimoire settings UI | `KeyboardEntryActivity` exists; same parked-VM pattern as `wifi.connect`. |
 | `gfx.rounded_rect`, `gfx.snapshot()`/`gfx.save_bmp(path)` | Ruby chrome, screenshots (3 forks) | snapshot = framebuffer readout via DevCapture-style capture or Bitmap copy; save_bmp is ~50 lines of Lua once snapshot exists. |
-| `epub.meta(path)` → title/author/language (no layout) | AvesO3 library, "about this book" apps | Container/OPF parse already in lib/Epub; stream, don't cache. |
+| `epub.meta(path)` → `{title, author}` (no layout) | AvesO3 library, "about this book" apps | **done**: binds the firmware's `Epub::loadMetadata` (metadata-only OPF parse, no cache). Language is not exposed (that parse path does not return it). Measured on the X4: ~17 ms, ~55 KB heap peak, no leak; 10 mutants caught. |
 
 ## Principle: CrossPoint is not only the X4 (decided with Angel)
 Build the feature for every board the firmware supports, even when the X4 (our only test device) lacks the hardware.

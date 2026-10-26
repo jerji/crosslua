@@ -3,6 +3,7 @@
 #include <BoardConfig.h>
 #include <Buzzer.h>
 #include <EnvironmentSensor.h>
+#include <Epub.h>
 #include <GfxRenderer.h>
 #include <Imu.h>
 #include <LedManager.h>
@@ -364,7 +365,27 @@ class LuaAppActivity::Backend final : public crosslua::Backend {
   // *_DECODER_APPROX_SIZE constants in lib/Epub/Epub/converters) plus a little slack for its line buffers.
   static constexpr size_t PNG_MIN_BLOCK = 62 * 1024;  // sizeof(PNG) = 59.5 KB: PNGdec 45.7 KB + the build raises PNG_MAX_BUFFERED_PIXELS to 16416
   static constexpr size_t JPEG_MIN_BLOCK = 24 * 1024;
+  static constexpr size_t EPUB_META_MIN_FREE = 64 * 1024;  // measured on the X4: the metadata parse peaks at ~55 KB (epubtest_lua PEAK line)
   static constexpr size_t BMP_MIN_BLOCK = 16 * 1024;  // Bitmap row buffers (<= 2048 px wide) + dither state
+  bool epubMeta(const char* path, char* title, size_t titleCap, char* author, size_t authorCap, char* err,
+                size_t errCap) override {
+    // The same metadata-only parse the library indexer uses for books nobody has opened (no cache is built).
+    const auto h = HalMemory::getInternalHeap();
+    if (h.freeBytes < EPUB_META_MIN_FREE) {
+      snprintf(err, errCap, "not enough free RAM to read the book (free %uK, need %uK)",
+               static_cast<unsigned>(h.freeBytes / 1024), static_cast<unsigned>(EPUB_META_MIN_FREE / 1024));
+      return false;
+    }
+    Epub epub(path, "/.crosspoint");
+    std::string t, a;
+    if (!epub.loadMetadata(t, a)) {
+      snprintf(err, errCap, "cannot read the book (not an EPUB, corrupt, or no RAM)");
+      return false;
+    }
+    snprintf(title, titleCap, "%s", t.c_str());
+    snprintf(author, authorCap, "%s", a.c_str());
+    return true;
+  }
   int zipList(const char* path, crosslua::Backend::ZipEntryInfo* out, int maxEntries, int* total, char* err,
               size_t errCap) override {
     const std::string p(path);
