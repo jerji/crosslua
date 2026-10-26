@@ -1,3 +1,5 @@
+-- hub test: the body is wrapped so an early `return` or an error still goes back to the menu (app.restart("main.lua")).
+local function __test()
 -- Pads the Lua heap until free RAM is ~90 KB (between the plain gate 80K and the TLS gate 96K), then checks both gates
 -- and that plain TCP works and https fails cleanly. Needs /root/x4/echo_server.py on 192.168.1.67:9099.
 local fails = 0
@@ -32,3 +34,11 @@ local body, herr = http.get("https://example.com/")
 check("https fails cleanly (not a crash) at this heap", body == nil and type(herr) == "string", herr)
 print(fails == 0 and "ALL PASSED" or (fails .. " FAILED"))
 wifi.off()
+end
+local __ok, __err = pcall(__test)
+if not __ok then
+  print("[hub] ERROR: " .. tostring(__err))
+  gfx.clear(); gfx.text(10, 10, "Test error (see serial log)", "ui12", "b"); gfx.text(10, 50, tostring(__err):sub(1, 48), "small"); gfx.present()
+  while input.wait() ~= "back" do end
+end
+app.restart("main.lua")

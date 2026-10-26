@@ -1,1 +1,0 @@
-{"title": "Socket test", "description": "net.* TCP client against a LAN test server: integrity, timings, RAM, leaks", "permissions": ["network"]}

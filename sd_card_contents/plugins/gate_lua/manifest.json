@@ -1,1 +1,0 @@
-{"title": "WiFi gate test", "description": "wifi.connect{tls=false}: plain TCP at ~90 KB free where the TLS gate refuses", "permissions": ["network"]}

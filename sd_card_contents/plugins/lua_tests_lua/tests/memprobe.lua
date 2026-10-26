@@ -1,3 +1,5 @@
+-- hub test: the body is wrapped so an early `return` or an error still goes back to the menu (app.restart("main.lua")).
+local function __test()
 -- Heap cost of OPEN but idle sockets, and of one active conversation. DEVELOPMENT BUILD ONLY (system.dev_floor).
 local SERVER = "192.168.1.67"
 if not wifi.connect() then print("no wifi"); return end
@@ -26,3 +28,11 @@ print(("1 socket after a ping/echo: free %d (%+d vs before)  min-free %d"):forma
 net.close(h)
 print("DONE")
 wifi.off()
+end
+local __ok, __err = pcall(__test)
+if not __ok then
+  print("[hub] ERROR: " .. tostring(__err))
+  gfx.clear(); gfx.text(10, 10, "Test error (see serial log)", "ui12", "b"); gfx.text(10, 50, tostring(__err):sub(1, 48), "small"); gfx.present()
+  while input.wait() ~= "back" do end
+end
+app.restart("main.lua")

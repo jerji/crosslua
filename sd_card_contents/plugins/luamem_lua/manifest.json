@@ -1,1 +1,0 @@
-{"title": "Lua mem", "description": "Lua heap at start and after touching every namespace (RAM regression check)", "permissions": ["network"]}

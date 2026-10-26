@@ -1,3 +1,10 @@
+-- hub test: the body is wrapped so an early `return` or an error still goes back to the menu (app.restart("main.lua")).
+local function __test()
+print("== wifi")
+local ok, why = wifi.connect()
+print((ok and "PASS " or "FAIL ") .. "wifi.connect " .. tostring(why or ""))
+if not ok then return end
+src = nil
 -- net.* on-device test (loaded by main.lua after WiFi is up). Needs /root/x4/echo_server.py running on SERVER:9099.
 local SERVER, PORT = "192.168.1.67", 9099
 local BIG_SHA = "510b126e1d4ced49107fe4ab03ee54cb1c8e4caf6064e1dd29c48d4a3e74c38b"
@@ -117,3 +124,11 @@ gfx.text(16, 60, fails == 0 and "ALL PASSED" or (fails .. " FAILED"), "ui12")
 gfx.text(16, 100, "see the serial log for timings + RAM", "small")
 gfx.present("full")
 wifi.off()
+end
+local __ok, __err = pcall(__test)
+if not __ok then
+  print("[hub] ERROR: " .. tostring(__err))
+  gfx.clear(); gfx.text(10, 10, "Test error (see serial log)", "ui12", "b"); gfx.text(10, 50, tostring(__err):sub(1, 48), "small"); gfx.present()
+  while input.wait() ~= "back" do end
+end
+app.restart("main.lua")
