@@ -300,6 +300,24 @@ struct MockBackend : Backend {
   }
   // Pure manifest+approval flags: the binding checks the base network permission separately (gateListen / net_accept).
   bool listenAllowed() override { return listenPermitted && listenApproved; }
+  // --- audio mock ---
+  bool audioPermitted = false;   // manifest declared "audio"
+  bool audioApproved = true;     // user approved (mock default like listen)
+  bool audioOk = true;           // false = play fails (mock codec error)
+  struct AudioCall { std::string path; bool loop; };
+  std::vector<AudioCall> audioPlays;
+  int audioStops = 0, audioVolumes = 0, audioVolumeLast = -1;
+  bool audioPlayingState = false;
+  bool audioAllowed() override { return audioPermitted && audioApproved; }
+  bool audioPlay(const char* path, bool loop, char* err, size_t errCap) override {
+    if (!audioOk) { snprintf(err, errCap, "cannot play (mock codec error)"); return false; }
+    audioPlays.push_back({path, loop});
+    audioPlayingState = true;
+    return true;
+  }
+  void audioStop() override { audioStops++; audioPlayingState = false; }
+  void audioVolume(int pct) override { audioVolumes++; audioVolumeLast = pct; }
+  bool audioPlaying() override { return audioPlayingState; }
   // --- mDNS mock ---
   struct MdnsResult {
     std::string hostname;
@@ -4065,6 +4083,120 @@ int main() {
       CHECK(run(vm, be, 100000) == Status::Finished);
       CHECK(be.logs.size() == 1);
       CHECK(be.logs[0].find("nil\t") == 0);  // nil + error message
+    }
+  }
+  {
+    TEST("audio: play/stop/volume/playing through the mock; permission and approval gates; arg validation");
+    {
+      MockBackend be;  // happy path
+      be.files["/plugins/test/ding.wav"] = std::string(1000, 'R');
+      be.audioPermitted = true;
+      LuaVm vm;
+      CHECK(vm.open(128 * 1024));
+      registerApi(vm, be);
+      const char* script = R"LUA(
+        print(audio.play("app:ding.wav"))
+        print(audio.play("app:ding.wav", true))
+        print(audio.playing())
+        print(audio.volume(40))
+        print(audio.volume(0))
+        print(audio.stop())
+        print(audio.playing())
+      )LUA";
+      CHECK(vm.load("t", script, strlen(script)));
+      CHECK(run(vm, be, 100000) == Status::Finished);
+      const char* want[] = {"true", "true", "true", "true", "true", "true", "false"};
+      const size_t N = sizeof(want) / sizeof(want[0]);
+      CHECK(be.logs.size() == N);
+      for (size_t i = 0; i < N && i < be.logs.size(); i++) {
+        CHECK(be.logs[i] == want[i]);
+        if (be.logs[i] != want[i]) printf("    audio #%zu got '%s' want '%s'\n", i + 1, be.logs[i].c_str(), want[i]);
+      }
+      CHECK(be.audioPlays.size() == 2);
+      if (be.audioPlays.size() == 2) {
+        CHECK(be.audioPlays[0].path == "/plugins/test/ding.wav" && !be.audioPlays[0].loop);
+        CHECK(be.audioPlays[1].loop);
+      }
+      CHECK(be.audioStops == 1 && be.audioVolumes == 2 && be.audioVolumeLast == 0);
+    }
+    {
+      MockBackend be;  // permission not declared
+      be.files["/plugins/test/ding.wav"] = std::string(1000, 'R');
+      LuaVm vm;
+      CHECK(vm.open(128 * 1024));
+      registerApi(vm, be);
+      const char* script =
+          "print(audio.play('app:ding.wav'))\nprint(audio.stop())\nprint(audio.volume(50))\nprint(audio.playing())";
+      CHECK(vm.load("t", script, strlen(script)));
+      CHECK(run(vm, be, 100000) == Status::Finished);
+      CHECK(be.logs.size() == 4);
+      for (size_t i = 0; i < be.logs.size(); i++) CHECK(be.logs[i].rfind("nil\taudio not permitted", 0) == 0);
+      CHECK(be.audioPlays.empty() && be.audioStops == 0 && be.audioVolumes == 0);
+    }
+    {
+      MockBackend be;  // declared but NOT approved
+      be.files["/plugins/test/ding.wav"] = std::string(1000, 'R');
+      be.audioPermitted = true;
+      be.audioApproved = false;
+      LuaVm vm;
+      CHECK(vm.open(128 * 1024));
+      registerApi(vm, be);
+      const char* script = "print(audio.play('app:ding.wav'))";
+      CHECK(vm.load("t", script, strlen(script)));
+      CHECK(run(vm, be, 100000) == Status::Finished);
+      CHECK(be.logs.size() == 1 && be.logs[0].rfind("nil\taudio not permitted", 0) == 0);
+      CHECK(be.audioPlays.empty());
+    }
+    {
+      MockBackend be;  // backend failure + argument validation: nothing invalid reaches the backend
+      be.files["/plugins/test/ding.wav"] = std::string(1000, 'R');
+      be.audioPermitted = true;
+      be.audioOk = false;
+      LuaVm vm;
+      CHECK(vm.open(128 * 1024));
+      registerApi(vm, be);
+      be.files["/plugins/test/big.wav"] = std::string(4 * 1024 * 1024 + 1, 'R');  // one byte over the cap
+      const char* script = R"LUA(
+        print(audio.play("app:ding.wav"))
+        print(audio.play("app:big.wav"))
+        print(audio.play("app:song.mp3"))
+        print(audio.play("app:tiny.wav"))
+        print(audio.play("app:nope.wav"))
+        print(audio.play("data:dir"))
+        print(audio.volume(101))
+        print(audio.volume(-1))
+        print(audio.volume(50.5))
+      )LUA";
+      be.files["/plugins/test/tiny.wav"] = std::string(10, 'R');
+      be.files["/plugins/test/song.mp3"] = std::string(1000, 'R');
+      CHECK(vm.load("t", script, strlen(script)));
+      CHECK(run(vm, be, 100000) == Status::Finished);
+      const char* want[] = {"nil\tcannot play (mock codec error)", "nil\twav is over 4 MB (the SD card read during playback would stutter)",
+                            "nil\tnot a .wav file",
+                            "nil\tfile is too small to be a WAV", "nil\tno such file",
+                            "nil\tnot a .wav file",  // the extension check runs before the size/type checks (data:dir)
+                            "nil\tvolume must be an integer 0..100",
+                            "nil\tvolume must be an integer 0..100", "nil\tvolume must be an integer 0..100"};
+      const size_t N = sizeof(want) / sizeof(want[0]);
+      CHECK(be.logs.size() == N);
+      if (be.logs.size() != N || getenv("DUMP_LOGS")) for (size_t i = 0; i < be.logs.size(); i++) printf("    audio2 log[%zu] '%s'\n", i, be.logs[i].c_str());
+      for (size_t i = 0; i < N && i < be.logs.size(); i++) {
+        CHECK(be.logs[i] == want[i]);
+        if (be.logs[i] != want[i]) printf("    audio2 #%zu got '%s' want '%s'\n", i + 1, be.logs[i].c_str(), want[i]);
+      }
+      CHECK(be.audioPlays.empty());  // the failing play never recorded (mock refuses first)
+    }
+    {
+      MockBackend be;  // the mock is permissive about .wav so the BINDING extension check is what is tested:
+      be.audioPermitted = true;  // a non-.wav path must be refused BEFORE the backend (mock accepts anything)
+      LuaVm vm;
+      CHECK(vm.open(128 * 1024));
+      registerApi(vm, be);
+      const char* script = "print(audio.play('app:notwav'))";
+      CHECK(vm.load("t", script, strlen(script)));
+      CHECK(run(vm, be, 100000) == Status::Finished);
+      CHECK(be.logs.size() == 1 && be.logs[0] == "nil\tnot a .wav file");
+      CHECK(be.audioPlays.empty());
     }
   }
   printf(g_fail ? "\n%d FAILED\n" : "\nALL PASSED\n", g_fail);

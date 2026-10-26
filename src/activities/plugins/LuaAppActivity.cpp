@@ -3,6 +3,7 @@
 
 #include <BoardConfig.h>
 #include <DevCapture.h>
+#include <AudioManager.h>
 #include <Buzzer.h>
 #include <EnvironmentSensor.h>
 #include <Epub.h>
@@ -118,12 +119,13 @@ class LuaAppActivity::Backend final : public crosslua::Backend {
 
   // ---- storage grants ("storage": {"read": [...], "write": [...]} in manifest.json) ------------------------------
   // Parsed from the manifest but INVISIBLE to the API (grantCount() == 0) until the user approved exactly this request.
-  bool hasGrantRequest() const { return !requested_.empty() || listenReq_; }
+  bool hasGrantRequest() const { return !requested_.empty() || listenReq_ || audioReq_; }
   // Canonical text of the request; an approval is valid only for an identical request (any change asks again).
   std::string grantCanonical() const {
     std::vector<std::string> v;
     for (const Grant& g : requested_) v.push_back(std::string(g.write ? "w:" : "r:") + g.rel);
     if (listenReq_) v.push_back("p:listen");  // accepting connections from the LAN is part of the approved request too
+    if (audioReq_) v.push_back("p:audio");    // playing sounds is consented to for the same reason (a device that talks)
     std::sort(v.begin(), v.end());
     std::string s;
     for (const std::string& x : v) s += x + "\n";
@@ -156,6 +158,7 @@ class LuaAppActivity::Backend final : public crosslua::Backend {
     }
     std::string s;
     if (listenReq_) s += "NETWORK: accept incoming connections from your local network\n";
+    if (audioReq_) s += "AUDIO: play sounds through the speaker\n";
     if (!rd.empty()) s += "READ: " + rd + "\n";
     if (!wr.empty()) s += "WRITE: " + wr + "\n";
     if (*danger) s += "\nWARNING: this includes the whole card or the plugins folder, i.e. other apps' code.";
@@ -164,8 +167,11 @@ class LuaAppActivity::Backend final : public crosslua::Backend {
   }
   // Title of the confirmation screen: says what is being asked for.
   std::string grantTitle(const std::string& app) const {
-    if (listenReq_ && !requested_.empty()) return app + " wants network and file access";
+    const bool files = !requested_.empty();
+    const int n = (listenReq_ ? 1 : 0) + (audioReq_ ? 1 : 0) + (files ? 1 : 0);
+    if (n > 1) return app + " wants access to your device";
     if (listenReq_) return app + " wants to accept connections";
+    if (audioReq_) return app + " wants to play sounds";
     return app + " wants access to your files";
   }
   void randomBytes(uint8_t* out, size_t n) override { esp_fill_random(out, n); }
@@ -323,6 +329,8 @@ class LuaAppActivity::Backend final : public crosslua::Backend {
     }
     if (led_.begun()) led_.clear();
     if (imu_.present()) imu_.sleep();  // the tilt page-turner wakes it again when it needs it
+    audio_.stop();                     // waits for the playback task, so the WAV callbacks die with us
+    if (audioFile_) audioFile_.close();
   }
   SensorStatus motionRead(Motion* o) override {
     if (!BoardConfig::hasImu()) return SensorStatus::Absent;
@@ -1133,6 +1141,7 @@ class LuaAppActivity::Backend final : public crosslua::Backend {
       if (p.is<const char*>() && !strcmp(p.as<const char*>(), "network")) net_ = true;
       else if (p.is<const char*>() && !strcmp(p.as<const char*>(), "library")) lib_ = true;
       else if (p.is<const char*>() && !strcmp(p.as<const char*>(), "listen")) listenReq_ = true;
+      else if (p.is<const char*>() && !strcmp(p.as<const char*>(), "audio")) audioReq_ = true;
     for (int w = 0; w < 2; w++)
       for (JsonVariantConst v : doc["storage"][w ? "write" : "read"].as<JsonArrayConst>()) {
         char rel[104];
@@ -1174,6 +1183,34 @@ class LuaAppActivity::Backend final : public crosslua::Backend {
     // "permissions": ["network", "listen"]: the device may accept connections from the LAN. Needs the user's approval (same screen
   // and stored record as the storage grants), so an app that merely declares it still reads as "not permitted".
   bool listenAllowed() override { return net_ && listenReq_ && approved_; }
+  // --- audio (boards with the AUDIO cap; the SDK stub links elsewhere and begin() reports absence) ---
+  AudioManager audio_;
+  bool audioBegun_ = false;
+  HalFile audioFile_;  // open while the playback task streams from the SD card
+  bool audioAllowed() override { return audioReq_ && approved_; }
+  bool audioPlay(const char* path, bool loop, char* err, size_t errCap) override {
+    if (!audioBegun_) {
+      if (!audio_.begin()) { snprintf(err, errCap, "no audio on this board"); return false; }
+      audioBegun_ = true;
+    }
+    if (audio_.isPlaying()) audio_.stop();
+    if (!Storage.openFileForRead(TAG, path, audioFile_)) { snprintf(err, errCap, "cannot open the file"); return false; }
+    AudioManager::WavSource src;
+    src.read = [this](uint8_t* dst, size_t len) -> int { return audioFile_ ? audioFile_.read(dst, len) : -1; };
+    src.seek = [this](size_t pos) -> bool { return audioFile_ && audioFile_.seek(pos); };
+    if (!audio_.play(src, loop)) {
+      audioFile_.close();
+      snprintf(err, errCap, "cannot play (not a 16-bit PCM WAV, or the codec refused it)");
+      return false;
+    }
+    return true;
+  }
+  void audioStop() override { audio_.stop(); if (audioFile_) audioFile_.close(); }
+  void audioVolume(int pct) override {
+    if (!audioBegun_ && !audio_.begin()) return;
+    audio_.setVolume(static_cast<uint8_t>(pct));
+  }
+  bool audioPlaying() override { return audioBegun_ && audio_.isPlaying(); }
 
     // --- mDNS ---
   // ESPmDNS needs begin() (responder + query machinery) before queryService works; without it the
@@ -1203,6 +1240,7 @@ class LuaAppActivity::Backend final : public crosslua::Backend {
   bool net_ = false;
   bool lib_ = false;
   bool listenReq_ = false;  // manifest asked for "listen" (effective only after approval)
+  bool audioReq_ = false;   // manifest asked for "audio" (effective only after approval)
   struct Grant {
     std::string rel;
     bool write;

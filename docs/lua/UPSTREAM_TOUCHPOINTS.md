@@ -28,3 +28,4 @@ re-check them first when merging `upstream/master`.
 | `src/activities/plugins/LuaAppActivity.cpp` | also uses `freeink::Imu`, `Buzzer`, `LedManager`, `EnvironmentSensor` and the `BoardConfig::has*()` runtime queries — existing APIs, none modified |
 | `src/main.cpp` | the dev serial `CMD:` handler block moved verbatim into `devcapture::pollSerial()` (called from `loop()` as before, and from blocking Lua backend pumps so x4ctl injections survive a blocked loop; the dev channel previously died during `net.connect`/`http`) |
 | `lib/GfxRenderer/DevCapture.h` | declares `devcapture::pollSerial()` (defined in main.cpp; compiled in all builds, meaningful only in dev builds) |
+| `platformio.ini` | `[base] lib_deps` gains `AudioManager=symlink://freeink-sdk/libs/hardware/AudioManager` so the Lua `audio.*` backend links (the lib is already part of the SDK; boards without a speaker get its absence path) |

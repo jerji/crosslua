@@ -60,7 +60,7 @@ Source of truth: `freeink-sdk/libs/hardware/BoardConfig` (16 flags) and the libs
 | `BUZZER` | Buzzer | `device.tone(freq_hz [, ms])`, `device.tone()` stops | **done** (host-tested, 21 mutants; absence path verified on the X4; hardware path UNTESTED) |
 | `LED` | LedManager | `led.count()`, `led.set(i, r, g, b)`, `led.all(r, g, b)`, `led.flash(r, g, b, n)`, `led.off()` | **done** (host-tested, 21 mutants; absence path verified on the X4; hardware path UNTESTED) |
 | `RTC` | Rtc | caps flag; `time.*` already uses the trusted clock; later `device.wake_in(seconds)` (RTC wake timer for alarm-clock apps) | caps flag **done**; wake_in park |
-| `AUDIO` | AudioManager | `audio.play(path [, loop])` (WAV from the SD card, same path rules as `fs`), `audio.stop()`, `audio.volume(pct)`, `audio.playing()` | permission |
+| `AUDIO` | AudioManager | `audio.play(path [, loop])` (WAV from the SD card, same path rules as `fs`), `audio.stop()`, `audio.volume(pct)`, `audio.playing()` | **done** (host-tested, 9 mutants; absence path verified on the X4; hardware path UNTESTED — needs a board with a speaker) |
 | `MIC` | Microphone | `mic.read(samples)` / `mic.record(path, seconds)`; a recording device must be consented to: `"microphone"` permission with an approval screen, never silent | permission |
 | `BLE_KEYBOARD` / `BLE_HID_HOST` | BlePageTurner / HID host | key events into `input.wait` + caps; behind a `"ble"` permission | park |
 | `COLOR` | display / gfx | needs a colour `gfx` model (RGB565 palette, `gfx.color(r,g,b)`); caps flag first | caps flag **done**; rest park |

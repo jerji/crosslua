@@ -123,7 +123,13 @@ class Backend {
   // --- listen (server) sockets: kind 3 on the same slot table ---
   virtual int netListen(int port, char* err, size_t errCap) = 0;  // server slot, or -1 + err
   virtual int netAccept(int serverSlot) = 0;  // client slot (kind 1), or -1 (nothing waiting), or -2 (error)
-  virtual bool listenAllowed() = 0;  // the app's manifest declares "listen"
+  virtual bool listenAllowed() = 0;  // the app's manifest declares "listen" AND the user approved it
+  // --- audio output (boards with the AUDIO cap; others report "no audio on this board") ---
+  virtual bool audioAllowed() = 0;  // "audio" manifest permission AND the user approved it
+  virtual bool audioPlay(const char* path, bool loop, char* err, size_t errCap) = 0;
+  virtual void audioStop() = 0;
+  virtual void audioVolume(int pct) = 0;  // 0..100
+  virtual bool audioPlaying() = 0;
 
   // --- mDNS query (ESPmDNS, like biscuit MdnsBrowserActivity) ---
   virtual int mdnsQuery(const char* service, const char* proto, char* err, size_t errCap) = 0;  // >= 0 count, -1 error

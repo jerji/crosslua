@@ -1,4 +1,4 @@
-# CrossLua app API (v0.17)
+# CrossLua app API (v0.18)
 
 An app is a plugin folder containing `main.lua`, in any plugin root
 (`/plugins`, `/.plugins`, `/.crosspoint/plugins`):
@@ -260,6 +260,15 @@ Sockets still open when the app ends are closed (the radio is shut down then any
 **RAM, measured on the X4 with WiFi up (44.7 KB free):** an open idle socket costs 3.4-3.8 KB (4 idle sockets: 14.3 KB, all returned on close); one after a ping/echo 6.8 KB; one whose receive window is full about 16 KB. Streaming 64 KB with prompt reads dips free heap to ~16.7 KB with a small script (to ~5.8 KB with a 13 KB-larger Lua heap, which still completed with a matching hash) and took 212-856 ms across runs (74-301 KB/s: WiFi and LAN variance). Closed sockets sit in lwIP TIME_WAIT: the first ~40 connect/close cycles cost ~4.6 KB, then the cost plateaus (the next 120 cycles: +212 bytes). **Two or more sockets being flooded at once while the app does not read can exhaust memory**: read promptly, and treat one busy socket as the norm. `net.read` may go down to a 6 KB floor for the single allocation that copies data out of the stack (that relieves the pressure; the floor is restored right after).
 
 `wifi.connect()` itself still needs 96 KB free to start (sized for TLS), so keep `main.lua` small and load bigger code after the radio is up (`load(fs.read("app:tests.lua"))`), as `socktest_lua` does.
+
+## audio — play a WAV through the speaker (needs the `audio` permission AND its approval)
+
+`audio.play(path [, loop])` plays a 16-bit PCM WAV (8-48 kHz; Metalio boards accept 16 kHz only) from `app:`/`data:`/`sd:`
+(read scopes like `fs.read`; at most 4 MB). Returns immediately — playback runs in the SDK's own task. `audio.stop()`
+ends it, `audio.playing()` reports the state, `audio.volume(0..100)` sets the output volume. Boards without a speaker
+(the X4 among them) report `nil, "no audio on this board"` from `play` — absence is a normal result, `device.caps().audio`
+tells apps what to expect. **UNTESTED ON HARDWARE** on boards that have a speaker (host-tested + compile-and-link on
+metalio_eink4 only).
 
 ## epub — book metadata without opening the book
 | call | notes |
