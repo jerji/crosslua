@@ -10,12 +10,15 @@
 
 New code goes here (planned):
 ```
-lib/lua/                 vendored Lua 5.4.7 (pure C)
-src/lua/                 LuaHost (VM+allocator), LuaAppActivity, bindings/
-  bindings/gfx.cpp input.cpp fs.cpp ... wifi.cpp ble.cpp radio.cpp
-docs/lua/                PLAN.md, INFRASTRUCTURE.md, API.md (later)
+lib/lua/                 vendored Lua 5.4.7 (pure C, LUA_32BITS; see CROSSLUA_PATCHES.md)
+lib/GfxRenderer/DevCapture.*   dev-only text capture of what is drawn (CMD:SCREEN)
+src/lua/                 LuaVm (VM, allocator, heap guard), LuaApi (gfx/input/app/system/print),
+                         LuaFs (fs + require), LuaJson
+src/activities/plugins/LuaAppActivity.*   the Activity + firmware Backend
+docs/lua/                PLAN.md, INFRASTRUCTURE.md, API.md, UPSTREAM_TOUCHPOINTS.md
 sd_card_contents/plugins/  reference apps: <name>/{main.lua,manifest.json,...}; shared libs go to /.crosslua/lib/ on the card
-tools/                   fetch_lua.py, luac size checks, SD packer
+test/lua_host/           host tests (run.sh, test_vm.cpp, test_x4ctl.py)
+tools/                   x4ctl.py (serial control), x4push.py (WiFi upload)
 ```
 
 ## Toolchain
