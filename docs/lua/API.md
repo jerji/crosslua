@@ -1,4 +1,4 @@
-# CrossLua app API (v0.6)
+# CrossLua app API (v0.7)
 
 An app is a plugin folder containing `main.lua`, in any plugin root
 (`/plugins`, `/.plugins`, `/.crosspoint/plugins`):
@@ -67,6 +67,14 @@ Event names: `back confirm left right up down`. Events are delivered on button *
 
 ## app
 `app.sleep(ms)` (timer only — buttons stay queued) · `app.exit()` · `app.name()` · `app.dir()` (e.g. `/plugins/hello_lua`)
+
+`app.entry()` → the script this VM was started from (`"main.lua"` unless `app.restart` chose another).
+
+`app.restart([entry="main.lua"])` → `false, err` | never returns. The app quits and starts again from `entry` (a plain
+`.lua` file name in the app's own folder: letters, digits, `_ - .`, no slashes, no leading dot) in a **fresh VM**: a new heap
+budget, no leftover globals or modules, WiFi radio switched off. Nothing else is carried over, so pass state through `data:`
+files. Use it to give a heavy sub-app a lean start (a launcher that holds a menu, then restarts into a worker script). Errors
+are values (`entry must be a plain .lua file name...`, `no such entry script`); on success the call never returns.
 
 ## system
 `system.millis()` (31-bit, wraps ~24 days — compare with subtraction) · `system.heap()` → free, min_free, largest free block (device RAM) ·

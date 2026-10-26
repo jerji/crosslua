@@ -63,7 +63,7 @@ Lua heap). Verdicts in the per-fork files; here only the gaps.
   - Test: host-test the discovery/grouping logic (folder vs manifest precedence, empty categories hidden, sort order, 100+ apps).
 
 ## Also requested by Angel, scheduled for later
-- **`app.restart(entry)` (priority raised)** — the app quits itself and is relaunched immediately with a different entry script (`main.lua` by
+- **`app.restart(entry)` (implemented, host-tested; on-device test pending)** — the app quits itself and is relaunched immediately with a different entry script (`main.lua` by
   default), giving a fresh VM and a fresh budget while still being ONE plugin entry. Use case: a menu shell (browse /
   update / about) whose network sub-app needs a lean start. Needs a small `LuaAppActivity` change (re-enter with a new
   entry name; WiFi radio torn down first). Alternative/complement: manifest `"apps": [...]` listing several entry

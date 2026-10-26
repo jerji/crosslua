@@ -58,8 +58,9 @@ constexpr size_t EVENT_QUEUE_MAX = 16;
 // ---------------------------------------------------------------------------
 class LuaAppActivity::Backend final : public crosslua::Backend {
  public:
-  Backend(GfxRenderer& r, MappedInputManager& in, std::string name, std::string dir)
-      : r_(r), in_(in), name_(std::move(name)), dir_(std::move(dir)), dataDir_("/.crosslua/data/" + name_) {
+  Backend(GfxRenderer& r, MappedInputManager& in, std::string name, std::string dir, std::string entry)
+      : r_(r), in_(in), name_(std::move(name)), dir_(std::move(dir)), dataDir_("/.crosslua/data/" + name_),
+        entry_(std::move(entry)) {
     loadPermissions();
   }
 
@@ -67,6 +68,7 @@ class LuaAppActivity::Backend final : public crosslua::Backend {
   bool exitRequested = false;
   bool wifiConnectRequested = false;  // set by wifi.connect(); the activity launches the system WiFi UI
   std::string openBookPath;           // set by app.open_book(); the activity hands it to the reader
+  std::string restartEntry;          // set by app.restart(); the activity starts a fresh VM from this script
 
   int width() override { return r_.getScreenWidth(); }
   int height() override { return r_.getScreenHeight(); }
@@ -228,6 +230,11 @@ class LuaAppActivity::Backend final : public crosslua::Backend {
     *len = got;
     return true;
   }
+  bool requestRestart(const char* entry) override {
+    restartEntry = entry;
+    return true;
+  }
+  const char* entryName() override { return entry_.c_str(); }
   bool openBook(const char* absPath) override {
     if (!Storage.exists(absPath)) return false;
     openBookPath = absPath;
@@ -623,6 +630,7 @@ class LuaAppActivity::Backend final : public crosslua::Backend {
   bool lib_ = false;
   std::string dir_;
   std::string dataDir_;
+  std::string entry_;
   HalFile listDir_;
 };
 
@@ -643,7 +651,14 @@ void LuaAppActivity::logMemory(const char* when) const {
 
 void LuaAppActivity::onEnter() {
   Activity::onEnter();
+  startApp();
+}
+
+// (Re)starts the app from entry_ in a fresh VM. Also used by app.restart().
+void LuaAppActivity::startApp() {
   RenderLock lock;
+  errorShown_ = false;
+  waitDeadline_ = 0;
 
   // Start from a quiet radio. Screens earlier in the same menu (the Plugin Hub, a book sync...) can leave WiFi up, which
   // holds ~56 KB and would make every Lua app fail to start with "free RAM too low". An app that wants WiFi asks for it.
@@ -653,7 +668,7 @@ void LuaAppActivity::onEnter() {
     WiFi.mode(WIFI_OFF);
     delay(30);
   }
-  backend_.reset(new (std::nothrow) Backend(renderer, mappedInput, appName_, appDir_));
+  backend_.reset(new (std::nothrow) Backend(renderer, mappedInput, appName_, appDir_, entry_));
   vm_.reset(new (std::nothrow) crosslua::LuaVm());
   if (!backend_ || !vm_) {
     showError("Out of memory", "Could not start the Lua runtime.");
@@ -669,7 +684,7 @@ void LuaAppActivity::onEnter() {
   }
   const size_t budget = std::clamp(heap.freeBytes - LUA_RESERVE_BYTES, LUA_MIN_BUDGET, LUA_MAX_BUDGET);
 
-  const std::string path = appDir_ + "/main.lua";
+  const std::string path = appDir_ + "/" + entry_;
   std::string src;
   if (!Storage.readFileToString(TAG, path, MAX_SCRIPT_BYTES, src)) {
     showError("Cannot load app", path + " is missing, empty, or larger than " + std::to_string(MAX_SCRIPT_BYTES) +
@@ -799,6 +814,14 @@ void LuaAppActivity::step() {
       LOG_INF(TAG, "open_book: %s", path.c_str());
       leaving_ = true;
       activityManager.goToReader(std::move(path));
+      return;
+    }
+    if (!backend_->restartEntry.empty()) {  // app.restart(): fresh VM (and quiet radio) from another script of this app
+      entry_ = std::move(backend_->restartEntry);
+      LOG_INF(TAG, "restart: %s", entry_.c_str());
+      vm_.reset();
+      backend_.reset();
+      startApp();
       return;
     }
     if (backend_->exitRequested) return leave();

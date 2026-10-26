@@ -121,6 +121,9 @@ class Backend {
                        size_t errCap) = 0;
   // Ask the host to open `absPath` in the reader (replaces the app). false = no such file.
   virtual bool openBook(const char* absPath) = 0;
+  // app.restart(entry): ask the host to tear this VM down and start `entry` (a .lua file in the app folder) in a fresh one.
+  virtual bool requestRestart(const char* entry) = 0;
+  virtual const char* entryName() = 0;  // the script this VM was started from ("main.lua" by default)
 
   // --- small device/network/time extensions (docs/lua/API.md v0.6) ----------------------------------------------
   struct WifiScanInfo {

@@ -27,6 +27,7 @@ class LuaAppActivity final : public Activity {
  private:
   class Backend;  // firmware implementation of crosslua::Backend (in the .cpp)
 
+  void startApp();
   void collectInput();
   void step();
   void showError(const std::string& title, const std::string& detail);
@@ -37,6 +38,7 @@ class LuaAppActivity final : public Activity {
 
   std::string appName_;
   std::string appDir_;
+  std::string entry_ = "main.lua";
   std::unique_ptr<Backend> backend_;
   std::unique_ptr<crosslua::LuaVm> vm_;
   uint32_t waitDeadline_ = 0;

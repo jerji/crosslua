@@ -288,6 +288,10 @@ struct MockBackend : Backend {
     *outW = dw; *outH = dh;
     return true;
   }
+  // ---- restart mock: records the requested entry script ---------------------------------------------------------
+  std::string restartedTo;
+  bool requestRestart(const char* entry) override { restartedTo = entry; return true; }
+  const char* entryName() override { return "main.lua"; }
   int64_t epoch = 0;  // 0 = clock not trusted
   int64_t epochNow() override { return epoch ? epoch + now / 1000 : 0; }  // epoch = clock at app start; advances with mock millis
   bool localDate(int64_t e, int out[8]) override {
@@ -1882,6 +1886,44 @@ int main() {
     CHECK(vm.load("t", s2, strlen(s2)));
     CHECK(run(vm, be) == Status::Finished);
     CHECK(be.logs.size() == 2 && be.logs[0] == "nil\tdecode failed (corrupt image or not enough RAM)" && be.logs[1] == "alive");
+  }
+  {
+    TEST("app.restart: plain .lua names in the app folder only, parks the app, hands the entry to the host");
+    const char* names[] = {"run.lua", "", "../x.lua", "sub/run.lua", "x.txt", ".hidden.lua", "a..b.lua", "run.LUA", "missing.lua", "with space.lua", "run.lua\\n"};
+    const char* wantErr[] = {"", "", "entry must", "entry must", "entry must", "entry must", "entry must", "entry must", "no such entry script", "entry must", "entry must"};
+    const char* wantRestart[] = {"run.lua", "main.lua", "", "", "", "", "", "", "", "", ""};
+    for (int i = 0; i < 11; i++) {
+      MockBackend be;
+      be.files["/plugins/test/main.lua"] = "-- main";
+      be.files["/plugins/test/run.lua"] = "-- run";
+      be.files["/plugins/test/.hidden.lua"] = "x";
+      LuaVm vm;
+      CHECK(vm.open(128 * 1024));
+      registerApi(vm, be);
+      std::string script;
+      if (i == 1) script = "print(app.restart())\nprint('after')";            // no argument = main.lua
+      else script = std::string("print(app.restart('") + names[i] + "'))\nprint('after')";
+      if (i == 10) script = "print(app.restart('run.lua\\n'))\nprint('after')";  // a newline inside the name
+      CHECK(vm.load("t", script.data(), script.size()));
+      Status st = run(vm, be);
+      CHECK(be.restartedTo == wantRestart[i]);
+      if (wantRestart[i][0]) {
+        CHECK(st == Status::Waiting && vm.timeoutMs() == -1 && !vm.wakesOnEvent() && be.logs.empty());  // parked: 'after' never runs
+      } else {
+        CHECK(st == Status::Finished && be.logs.size() == 2 && be.logs[1] == "after");
+        CHECK(be.logs.size() == 2 && be.logs[0].find("false\t") == 0 && be.logs[0].find(wantErr[i]) != std::string::npos);
+        if (be.logs.size() != 2 || be.logs[0].find(wantErr[i]) == std::string::npos)
+          printf("    [%d] '%s' -> '%s'\n", i, names[i], be.logs.empty() ? "" : be.logs[0].c_str());
+      }
+    }
+    MockBackend be;
+    LuaVm vm;
+    CHECK(vm.open(64 * 1024));
+    registerApi(vm, be);
+    const char* s2 = "print(app.entry(), pcall(app.restart, 42))";
+    CHECK(vm.load("t", s2, strlen(s2)));
+    CHECK(run(vm, be) == Status::Finished);
+    CHECK(be.logs.size() == 1 && be.logs[0].find("main.lua\ttrue\tfalse") == 0 && be.restartedTo.empty());
   }
   {
     TEST("require: a big module loads in a tight heap (the unstripped copy is dropped before the stripped one loads)");

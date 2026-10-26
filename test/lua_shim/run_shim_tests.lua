@@ -419,6 +419,45 @@ local function runAllDirect()
         check("(h) draw after close raises 'image is closed'", shown:find("D:false:image is closed", 1, true) ~= nil, shown:gsub("\n", " | "))
     end
 
+    -- (r) app.restart mode: the launcher hands the spell to a FRESH VM (run.lua) and run.lua hands control back
+    do
+        local function runEntry(file, script, pre)
+            fake.hasRestart = true
+            local env = setupScenario(true)
+            if pre then pre(env) end
+            fake.queueInputs(table.unpack(script))
+            local src = assert(readFile(PLUGIN_DIR .. "/" .. file), file .. " missing")
+            local chunk = assert(load(src, "@" .. file, "t", env))
+            debug.sethook(function() error("__LAUNCHER_BUDGET__", 0) end, "", LAUNCHER_BUDGET)
+            local ok, err = pcall(chunk)
+            debug.sethook()
+            fake.hasRestart = false
+            return ok, tostring(err), env
+        end
+        local ok, err, env = runEntry("main.lua", { "down", "confirm" })
+        check("(r) launcher confirm -> app.restart('run.lua')", not ok and err == "__app_restart__:run.lua", err)
+        local picked = env.fs.read("data:spell.txt")
+        check("(r) launcher stored the chosen spell + selection for the next VM",
+              picked == "ble_keyboard_test.lua" and env.fs.read("data:sel.txt") == "2", tostring(picked))
+        ok, err, env = runEntry("run.lua", { "confirm" }, function(e) e.fs.write("data:spell.txt", "example_spell.lua") end)
+        check("(r) run.lua runs the spell in its own VM then restarts main.lua", not ok and err == "__app_restart__:main.lua", err)
+        check("(r) the spell actually drew", logTextMessages(fake.gfx.log):find("Hello from a spell!", 1, true) ~= nil)
+        check("(r) data:spell.txt consumed", env.fs.read("data:spell.txt") == nil)
+        ok, err, env = runEntry("run.lua", {}, function(e) e.fs.write("data:spell.txt", "ble_client_test.lua") end)
+        local stored = env.fs.read("data:error.txt") or ""
+        check("(r) a failing spell stores name + message for the launcher",
+              err == "__app_restart__:main.lua" and stored:find("^ble_client_test.lua\n") ~= nil
+              and stored:find("not supported on CrossLua", 1, true) ~= nil, stored:sub(1, 100))
+        ok, err, env = runEntry("run.lua", {}, function(e) e.fs.write("data:spell.txt", "../etc.lua") end)
+        check("(r) a hostile spell name in data: is ignored (back to the launcher, nothing read or run)",
+              err == "__app_restart__:main.lua" and env.fs.read("data:error.txt") == nil and logTextMessages(fake.gfx.log) == "", err)
+        ok, err, env = runEntry("main.lua", { "back", "back" }, function(e) e.fs.write("data:error.txt", "foo.lua\nboom message here") end)
+        local shown = logTextMessages(fake.gfx.log)
+        check("(r) launcher shows the stored error once and clears it",
+              ok and shown:find("Spell error: foo.lua", 1, true) ~= nil and shown:find("boom message here", 1, true) ~= nil
+              and env.fs.read("data:error.txt") == nil, tostring(err) .. " | " .. shown:sub(1, 120))
+    end
+
     -- (d) gallery / ble_* / wifi_server fail GRACEFULLY with the readable
     -- message (never 'attempt to call a nil value')
     for _, sp in ipairs({

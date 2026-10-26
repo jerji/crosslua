@@ -9,7 +9,10 @@
 -- Quit the launcher with Back (or hold Back ~1s, which the firmware handles
 -- and never delivers to us).
 
-local shim = require("shim")
+-- Memory: the launcher itself stays small. When the firmware has app.restart, a chosen spell runs in a FRESH VM
+-- (run.lua: shim + spell only), so the launcher's code and tables are not resident while a spell needs RAM (the PNG
+-- decoder needs a 46 KB block). Without app.restart (or under the test harness) the spell runs in this VM.
+local HAS_RESTART = type(app.restart) == "function"
 
 local FONT_HDR = "sans16"
 local FONT_ROW = "ui"
@@ -89,6 +92,7 @@ local function runSpell(name)
     gfx.clear()
     gfx.present()
 
+    local shim = require("shim")
     local src, rerr = fs.read("sd:spells/" .. name)
     if not src then
         local msg = "can't read sd:spells/" .. name .. ": " .. tostring(rerr)
@@ -123,6 +127,13 @@ end
 
 local function main()
     local spells = listSpells()
+    -- A spell that failed in its own VM left its error behind: show it once, then forget it.
+    local errTxt = fs.read("data:error.txt")
+    if errTxt then
+        fs.remove("data:error.txt")
+        local ename, emsg = errTxt:match("^([^\n]*)\n(.*)$")
+        showError(ename or "?", emsg or errTxt)
+    end
     if #spells == 0 then
         gfx.clear()
         gfx.text(12, 20, "No spells found in sd:spells/", FONT_ROW, "b")
@@ -135,6 +146,8 @@ local function main()
     end
 
     local sel = 1
+    local savedSel = tonumber(fs.read("data:sel.txt") or "")
+    if savedSel and savedSel >= 1 and savedSel <= #spells then sel = math.floor(savedSel) end
     while true do
         local w, h = gfx.size()
         local rowH = gfx.line_height(FONT_ROW) + 6
@@ -166,7 +179,14 @@ local function main()
             sel = sel + 1
             if sel > #spells then sel = 1 end
         elseif ev == "confirm" then
-            runSpell(spells[sel])
+            if HAS_RESTART then
+                fs.write("data:sel.txt", tostring(sel))
+                fs.write("data:spell.txt", spells[sel])
+                local ok, why = app.restart("run.lua")   -- never returns on success
+                showError(spells[sel], "cannot start the spell VM: " .. tostring(why))
+            else
+                runSpell(spells[sel])
+            end
         elseif ev == "back" then
             return
         end

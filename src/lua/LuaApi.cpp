@@ -215,6 +215,39 @@ int app_open_book(lua_State* L) {
   lua_pushboolean(L, 0);
   return lua_yield(L, 2);
 }
+// app.restart([entry="main.lua"]) -> false, err | (never returns). The app quits and is started again from `entry`
+// (a plain .lua file name in the app's own folder) in a FRESH VM: a fresh heap budget, no leftover globals, WiFi
+// radio switched off. Pass state across with data: files. Use it to give a heavy sub-app a lean start.
+int app_restart(lua_State* L) {
+  const char* entry = luaL_optstring(L, 1, "main.lua");
+  const size_t n = strlen(entry);
+  bool ok = n >= 5 && n <= 48 && strcmp(entry + n - 4, ".lua") == 0 && entry[0] != '.';
+  for (size_t i = 0; ok && i < n; i++) {
+    const char c = entry[i];
+    ok = (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '_' || c == '-' || c == '.';
+  }
+  if (!ok || strstr(entry, "..")) {
+    lua_pushboolean(L, 0);
+    lua_pushstring(L, "entry must be a plain .lua file name in the app folder");
+    return 2;
+  }
+  char spec[64], path[MAX_PATH_LEN + 80];
+  snprintf(spec, sizeof(spec), "app:%s", entry);
+  Scope sc;
+  const char* err = nullptr;
+  if (!resolvePath(be(L), spec, path, sizeof(path), &sc, &err) || be(L).fsSize(path) < 0 || !be(L).requestRestart(entry)) {
+    lua_pushboolean(L, 0);
+    lua_pushstring(L, err ? err : "no such entry script");
+    return 2;
+  }
+  lua_pushinteger(L, -1);  // park forever: the host swaps in the fresh VM
+  lua_pushboolean(L, 0);
+  return lua_yield(L, 2);
+}
+int app_entry(lua_State* L) {
+  lua_pushstring(L, be(L).entryName());
+  return 1;
+}
 int app_name(lua_State* L) {
   lua_pushstring(L, be(L).appName());
   return 1;
@@ -411,7 +444,8 @@ void registerApi(LuaVm& vm, Backend& backend) {
                                  {"present", gfx_present}, {nullptr, nullptr}};
   static const luaL_Reg input[] = {{"poll", input_poll}, {"wait", input_wait}, {nullptr, nullptr}};
   static const luaL_Reg app[] = {{"sleep", app_sleep}, {"exit", app_exit}, {"name", app_name},
-                                 {"dir", app_dir},     {"open_book", app_open_book}, {nullptr, nullptr}};
+                                 {"dir", app_dir},     {"open_book", app_open_book},
+                                 {"restart", app_restart}, {"entry", app_entry}, {nullptr, nullptr}};
   static const luaL_Reg sys[] = {{"millis", sys_millis}, {"heap", sys_heap},       {"lua_mem", sys_lua_mem},
                                  {"battery", sys_battery}, {"mac", sys_mac}, {nullptr, nullptr}};
   regTable(L, c, "gfx", gfx);

@@ -349,6 +349,16 @@ app.exit = function() M.appExited = true; error("__app_exit__", 0) end
 app.name = function() return "grimoire_lua" end
 app.dir = function() return "/plugins/grimoire_lua" end
 app.open_book = function(path) return false, "not supported on CrossLua" end
+-- app.restart exists only when a test sets M.hasRestart (so the in-VM launcher path stays covered). Like the real one it
+-- never returns: it raises a sentinel the harness recognises.
+M.hasRestart = false
+M.entry = "main.lua"
+app.entry = function() return M.entry end
+local function restartFn(entry)
+    entry = entry or "main.lua"
+    M.calls.restart = entry
+    error("__app_restart__:" .. entry, 0)
+end
 
 -- ----------------------------------------------------------- system
 
@@ -667,6 +677,7 @@ function M.makeEnv()
     env._G = env
     env.gfx = gfx
     env.input = input
+    app.restart = M.hasRestart and restartFn or nil
     env.app = app
     env.system = system
     env.fs = fs
