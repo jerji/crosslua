@@ -216,17 +216,28 @@ int app_open_book(lua_State* L) {
   return lua_yield(L, 2);
 }
 // app.restart([entry="main.lua"]) -> false, err | (never returns). The app quits and is started again from `entry`
-// (a plain .lua file name in the app's own folder) in a FRESH VM: a fresh heap budget, no leftover globals, WiFi
-// radio switched off. Pass state across with data: files. Use it to give a heavy sub-app a lean start.
+// (a .lua file in the app's own folder, subfolders allowed: "tests/net.lua") in a FRESH VM: a fresh heap budget, no
+// leftover globals, WiFi radio switched off. Pass state across with data: files. Use it to give a heavy sub-app a lean
+// start. The path sandbox still applies: the entry is resolved as "app:<entry>" (no "..", no hidden or odd segments).
 int app_restart(lua_State* L) {
   const char* entry = luaL_optstring(L, 1, "main.lua");
   const size_t n = strlen(entry);
-  bool ok = n >= 5 && n <= 48 && strcmp(entry + n - 4, ".lua") == 0 && entry[0] != '.';
+  // A plain name or a subfolder path ("tests/net.lua"). No leading or doubled slashes, no "..", no segment that starts
+  // with '.' (hidden) or ' ' (odd); resolvePath re-checks against the app: sandbox anyway.
+  bool ok = n >= 5 && n <= 48 && strcmp(entry + n - 4, ".lua") == 0 && entry[0] != '/' && entry[0] != '.';
+  bool segStart = true;  // entry[0] was checked; this tracks whether the next character starts a new segment
   for (size_t i = 0; ok && i < n; i++) {
     const char c = entry[i];
-    ok = (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '_' || c == '-' || c == '.';
+    if (c == '/') {
+      if (segStart) ok = false;
+      segStart = true;
+      continue;
+    }
+    if (segStart && (c == '.' || c == ' ')) ok = false;
+    ok = ok && ((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '_' || c == '-' || c == '.');
+    segStart = false;
   }
-  if (!ok || strstr(entry, "..")) {
+  if (!ok || strstr(entry, "..") || strstr(entry, "//")) {
     lua_pushboolean(L, 0);
     lua_pushstring(L, "entry must be a plain .lua file name in the app folder");
     return 2;

@@ -2138,14 +2138,19 @@ int main() {
   }
   {
     TEST("app.restart: plain .lua names in the app folder only, parks the app, hands the entry to the host");
-    const char* names[] = {"run.lua", "", "../x.lua", "sub/run.lua", "x.txt", ".hidden.lua", "a..b.lua", "run.LUA", "missing.lua", "with space.lua", "run.lua\\n"};
-    const char* wantErr[] = {"", "", "entry must", "entry must", "entry must", "entry must", "entry must", "entry must", "no such entry script", "entry must", "entry must"};
-    const char* wantRestart[] = {"run.lua", "main.lua", "", "", "", "", "", "", "", "", ""};
-    for (int i = 0; i < 11; i++) {
+    const char* names[] = {"run.lua", "", "../x.lua", "sub/run.lua", "x.txt", ".hidden.lua", "a..b.lua", "run.LUA", "missing.lua",
+                           "with space.lua", "run.lua\n", "a//b.lua", "x.lua/", "/abs.lua", "sub/.hidden.lua", "tests/net.lua", "nnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnn.lua"};
+    const char* wantErr[] = {"", "", "entry must", "", "entry must", "entry must", "entry must", "entry must", "no such entry script",
+                             "entry must", "entry must", "entry must", "entry must", "entry must", "entry must", "", "entry must"};
+    const char* wantRestart[] = {"run.lua", "main.lua", "", "sub/run.lua", "", "", "", "", "", "", "", "", "", "", "", "tests/net.lua", ""};
+    const int N = sizeof(wantErr) / sizeof(wantErr[0]);
+    for (int i = 0; i < N; i++) {
       MockBackend be;
       be.files["/plugins/test/main.lua"] = "-- main";
       be.files["/plugins/test/run.lua"] = "-- run";
       be.files["/plugins/test/.hidden.lua"] = "x";
+      be.files["/plugins/test/sub/run.lua"] = "-- sub run";
+      be.files["/plugins/test/tests/net.lua"] = "-- net test";
       LuaVm vm;
       CHECK(vm.open(128 * 1024));
       registerApi(vm, be);

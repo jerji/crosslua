@@ -76,8 +76,8 @@ Event names: `back confirm left right up down`. Events are delivered on button *
 
 `app.entry()` → the script this VM was started from (`"main.lua"` unless `app.restart` chose another).
 
-`app.restart([entry="main.lua"])` → `false, err` | never returns. The app quits and starts again from `entry` (a plain
-`.lua` file name in the app's own folder: letters, digits, `_ - .`, no slashes, no leading dot) in a **fresh VM**: a new heap
+`app.restart([entry="main.lua"])` → `false, err` | never returns. The app quits and starts again from `entry` (a `.lua`
+file in the app's own folder, subfolders allowed: `"tests/net.lua"`) in a **fresh VM**: a new heap
 budget, no leftover globals or modules, WiFi radio switched off. Nothing else is carried over, so pass state through `data:`
 files. Use it to give a heavy sub-app a lean start (a launcher that holds a menu, then restarts into a worker script). Errors
 are values (`entry must be a plain .lua file name...`, `no such entry script`); on success the call never returns.
