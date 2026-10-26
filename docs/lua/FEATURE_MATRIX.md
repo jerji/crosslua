@@ -57,7 +57,9 @@ Lua heap). Verdicts in the per-fork files; here only the gaps.
 - **Plan (launcher side, native):**
   - Manifest gains an optional `"category": "Games"` (free text, case-insensitive match; missing = "Other").
   - Home -> Plugins shows categories first, each with an app count; confirm opens it, back returns. A single-category install skips the extra level.
-  - Plain sub-folders also work: `/plugins/games/chess_lua/` shows up under "games" without any manifest change. Manifest category wins if both are given.
+  - ONE mechanism only (decided with Angel): the manifest field. Sub-folders are NOT categories: the Plugin Hub and x4push install flat at
+    `/plugins/<name>`, data dirs are keyed by app name (same-named apps in two folders would collide) and `app.dir()` would change.
+    A later optional override file (`/.crosslua/categories.json`, app -> category) could let the user re-sort without editing manifests.
   - Extras: a "Recent" pseudo-category (last 5 launched, stored in the firmware-owned hidden state file) and a "Favorites" pin (long-press confirm).
   - Needs: recursive plugin discovery one level deep (bounded, so the scan stays cheap), a category-list activity, and the manifest field. Pure launcher work; no Lua API change.
   - Test: host-test the discovery/grouping logic (folder vs manifest precedence, empty categories hidden, sort order, 100+ apps).
