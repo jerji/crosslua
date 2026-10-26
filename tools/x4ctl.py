@@ -11,7 +11,7 @@ Commands
                               e.g. `btn right right confirm`, `btn back:1300` (1.3 s hold = long press),
                               `btn back:150:4000` (arm a tap 4 s from now: reaches a main loop that is blocked in a long call)
   screen [--raw]              the screen as TEXT (rows, highlighted row marked '>'): no vision model needed
-  select <regex>              move the highlight (Down) until a row matching <regex> is marked '>' (max 20 presses)
+  select <regex>              move the highlight (Down) until a row matching <regex> is marked '>' (max 40 presses)
   open <regex>                select, then press Confirm; prints the resulting screen
   expect-screen <regex> [sec] poll until the screen text matches; prints it, exit 1 on timeout
   shot [out.png] [--landscape]  grab the screen (default shot.png, portrait like CrossPoint's default orientation)
@@ -270,7 +270,7 @@ def main(argv=None):
         return 0
     if a.cmd in ("select", "open"):
         rx = re.compile(a.args[0], re.I)
-        for _ in range(21):
+        for _ in range(41):
             scr = dev.screen(3.0)
             if not scr:
                 print("no screen data")

@@ -546,7 +546,11 @@ void registerFs(lua_State* L, Ctx* c) {
                                 {"exists", fs_exists}, {"size", fs_size},   {"mkdir", fs_mkdir},
                                 {"remove", fs_remove}, {"list", fs_list},   {"rename", fs_rename}, {nullptr, nullptr}};
   regTable(L, c, "fs", fs);
-  lua_getglobal(L, "gfx");  // gfx.save_bmp lives here because it shares fs.write's path rules
+}
+
+// gfx.save_bmp shares fs.write's path rules but belongs to gfx, which is always present: registered eagerly, not with fs.
+void registerGfxSaveBmp(lua_State* L) {
+  lua_getglobal(L, "gfx");
   if (lua_istable(L, -1)) {
     lua_pushcfunction(L, gfx_save_bmp);
     lua_setfield(L, -2, "save_bmp");

@@ -218,7 +218,11 @@ void registerZip(lua_State* L, Ctx* c) {
   regTable(L, c, "zip", fns);
   static const luaL_Reg epubFns[] = {{"meta", epub_meta}, {nullptr, nullptr}};
   regTable(L, c, "epub", epubFns);
-  lua_getglobal(L, "gfx");  // gfx.image lives here because it shares the path sandbox with zip/fs
+}
+
+// gfx.image shares the path sandbox with zip/fs but belongs to gfx, which is always present: registered eagerly, not with zip.
+void registerGfxImage(lua_State* L) {
+  lua_getglobal(L, "gfx");
   if (lua_istable(L, -1)) {
     lua_pushcfunction(L, gfx_image);
     lua_setfield(L, -2, "image");

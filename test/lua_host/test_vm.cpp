@@ -1374,7 +1374,7 @@ int main() {
     be.wifiUp = true;
     be.routes["http://h/big"] = {200, std::string(50 * 1024, 'x'), ""};
     LuaVm vm;
-    CHECK(vm.open(72 * 1024));
+    CHECK(vm.open(56 * 1024));
     registerApi(vm, be);
     const char* script = "print(http.get('http://h/big', {max_body = 60000}))\nprint('alive', #string.rep('y', 100))";
     CHECK(vm.load("t", script, strlen(script)));
@@ -1788,7 +1788,7 @@ int main() {
     TEST("load: heap exhaustion while compiling and a yield inside a loaded chunk are both clean");
     MockBackend be;
     LuaVm vm;
-    CHECK(vm.open(160 * 1024));  // the 60 KB source fits (string.rep peaks ~120 KB) but compiling it cannot
+    CHECK(vm.open(150 * 1024));  // the 60 KB source fits (string.rep peaks ~120 KB) but compiling it cannot
     registerApi(vm, be);
     const char* script = R"LUA(
       local src = ("x=1\n"):rep(15000)               -- 60000 bytes, ~15000 statements
@@ -2857,6 +2857,80 @@ int main() {
     CHECK(be.socks[0].tx.empty() && !be.socks[0].used);  // closed by the script: the table is clean
     CHECK(be.txLog == "example.test:80<-pin");            // exactly one non-empty write reached the backend (cut to 3 bytes)
     CHECK(be.connectOpts.size() == 3 && be.connectOpts[1] == 250 && be.connectOpts[0] == 5000);  // timeout default and explicit
+  }
+  {
+    TEST("lazy namespaces: nothing is built until touched; every namespace resolves; gfx extras are eager; _G is protected");
+    MockBackend be;
+    LuaVm vm;
+    CHECK(vm.open(128 * 1024));
+    registerApi(vm, be);
+    const char* script = R"LUA(
+      local names = { "time", "device", "led", "fs", "json", "wifi", "http", "net", "zip", "epub", "crypto", "coroutine", "utf8" }
+      local lazy = 0
+      for _, n in ipairs(names) do if rawget(_G, n) == nil then lazy = lazy + 1 end end
+      print(lazy)
+      print(rawget(_G, "gfx") ~= nil, rawget(_G, "input") ~= nil, rawget(_G, "app") ~= nil, rawget(_G, "system") ~= nil,
+            rawget(_G, "print") ~= nil, rawget(_G, "require") ~= nil, rawget(_G, "load") ~= nil)
+      print(type(gfx.save_bmp), type(gfx.image))
+      local probes = { time = "now", device = "caps", led = "count", fs = "exists", json = "encode", wifi = "status", http = "request",
+                       net = "info", zip = "list", epub = "meta", crypto = "sha1", coroutine = "wrap", utf8 = "char" }
+      local bad = {}
+      for n, f in pairs(probes) do
+        local t = _G[n]
+        if type(t) ~= "table" or type(t[f]) ~= "function" then bad[#bad + 1] = n end
+      end
+      print(#bad)
+      print(type(http.get), type(wifi.connect), type(epub.meta), type(zip.read))
+      local built = 0
+      for _, n in ipairs(names) do if rawget(_G, n) ~= nil then built = built + 1 end end
+      print(built)
+      print(nosuchglobal)
+      print(_G[1], _G[true])
+      print(getmetatable(_G))
+      print(pcall(setmetatable, _G, {}))
+      print(rawget(_G, "nosuchglobal"))
+    )LUA";
+    CHECK(vm.load("t", script, strlen(script)));
+    CHECK(run(vm, be, 400000) == Status::Finished);
+    const char* want[] = {"13", "true\ttrue\ttrue\ttrue\ttrue\ttrue\ttrue", "function\tfunction", "0", "function\tfunction\tfunction\tfunction",
+                          "13", "nil", "nil\tnil", "protected", "false\tcannot change a protected metatable", "nil"};
+    const size_t N = sizeof(want) / sizeof(want[0]);
+    CHECK(be.logs.size() == N);
+    for (size_t i = 0; i < N && i < be.logs.size(); i++) {
+      CHECK(be.logs[i] == want[i]);
+      if (be.logs[i] != want[i]) printf("    lazy #%zu got '%s' want '%s'\n", i + 1, be.logs[i].c_str(), want[i]);
+    }
+  }
+  {
+    TEST("lazy namespaces: the first touch costs heap, the second costs nothing; an out-of-memory first touch can be retried");
+    MockBackend be;
+    LuaVm vm;
+    CHECK(vm.open(24 * 1024));
+    registerApi(vm, be);
+    const char* script = R"LUA(
+      collectgarbage()
+      local before = collectgarbage("count")
+      local _ = json                                         -- first touch builds the namespace
+      collectgarbage()
+      local mid = collectgarbage("count")
+      local _ = json                                         -- second touch is a plain table read
+      collectgarbage()
+      print(mid - before > 0.2, math.abs(collectgarbage("count") - mid) < 0.05)
+      local junk = {}
+      while collectgarbage("count") * 1024 < 24 * 1024 - 450 do junk[#junk + 1] = ("j"):rep(300) .. #junk end
+      print(pcall(function() return crypto end))           -- no room to build it: a catchable error
+      junk = nil; collectgarbage()
+      print(type(crypto), type(crypto.sha1))                -- memory is back: the same access now works
+    )LUA";
+    CHECK(vm.load("t", script, strlen(script)));
+    CHECK(run(vm, be, 400000) == Status::Finished);
+    CHECK(be.logs.size() == 3);
+    if (be.logs.size() == 3) {
+      CHECK(be.logs[0] == "true\ttrue");
+      CHECK(be.logs[1] == "false\tnot enough memory");
+      CHECK(be.logs[2] == "table\tfunction");
+      if (be.logs[1] != "false\tnot enough memory") printf("    lazy oom got [%s] [%s] [%s]\n", be.logs[0].c_str(), be.logs[1].c_str(), be.logs[2].c_str());
+    }
   }
   {
     TEST("API calls from inside coroutines (nested, wrapped, after a yield) find the context through the inherited extra space");

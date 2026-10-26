@@ -46,8 +46,7 @@ static void openSandbox(lua_State* L) {
   // Deliberately NOT luaL_openlibs: no io/os/package/debug. Files go through fs.*.
   static const luaL_Reg libs[] = {{LUA_GNAME, luaopen_base},     {LUA_TABLIBNAME, luaopen_table},
                                   {LUA_STRLIBNAME, luaopen_string}, {LUA_MATHLIBNAME, luaopen_math},
-                                  {LUA_UTF8LIBNAME, luaopen_utf8},  {LUA_COLIBNAME, luaopen_coroutine},
-                                  {nullptr, nullptr}};
+                                  {nullptr, nullptr}};  // coroutine and utf8 are lazy (see installLazy in LuaApi.cpp)
   for (const luaL_Reg* l = libs; l->func; l++) {
     luaL_requiref(L, l->name, l->func, 1);
     lua_pop(L, 1);

@@ -703,6 +703,75 @@ void regTable(lua_State* L, Ctx* c, const char* name, const luaL_Reg* funcs) {
   lua_setglobal(L, name);
 }
 
+namespace {
+// ---- Lazy namespaces -----------------------------------------------------------------------------------------------------
+// Measured on the X4: registering every namespace at start costs ~8 KB of Lua heap. Only gfx/input/app/system/print/require/load
+// are always present; the rest are built the first time a script reads the global. The globals table gets a protected metatable
+// whose __index does that. Consequences: pairs(_G) does not list namespaces nobody has touched yet, and a script cannot install
+// its own metatable on _G ("cannot change a protected metatable").
+void loadTime(lua_State* L, Ctx* c) {
+  static const luaL_Reg timeFns[] = {{"now", time_now}, {"date", time_date}, {"sync", time_sync}, {"set", time_set},
+                                     {nullptr, nullptr}};
+  regTable(L, c, "time", timeFns);
+}
+void loadDevice(lua_State* L, Ctx* c) {
+  static const luaL_Reg devFns[] = {{"frontlight", dev_frontlight}, {"caps", dev_caps}, {"haptic", dev_haptic},
+                                    {"motion", dev_motion}, {"environment", dev_environment}, {"tone", dev_tone}, {nullptr, nullptr}};
+  regTable(L, c, "device", devFns);
+}
+void loadLed(lua_State* L, Ctx* c) {
+  static const luaL_Reg ledFns[] = {{"count", led_count}, {"set", led_set},   {"all", led_all},
+                                    {"off", led_off},     {"brightness", led_brightness}, {nullptr, nullptr}};
+  regTable(L, c, "led", ledFns);
+}
+void loadCoroutine(lua_State* L, Ctx*) {
+  luaL_requiref(L, LUA_COLIBNAME, luaopen_coroutine, 1);
+  lua_pop(L, 1);
+}
+void loadUtf8(lua_State* L, Ctx*) {
+  luaL_requiref(L, LUA_UTF8LIBNAME, luaopen_utf8, 1);
+  lua_pop(L, 1);
+}
+
+struct LazyNs {
+  const char* name;
+  void (*load)(lua_State*, Ctx*);
+};
+// Several names share a loader (wifi+http, zip+epub): the loader defines all of its globals at once.
+const LazyNs LAZY[] = {{"time", loadTime},   {"device", loadDevice}, {"led", loadLed},         {"fs", registerFs},
+                       {"json", registerJson}, {"wifi", registerNet},  {"http", registerNet},    {"net", registerSock},
+                       {"zip", registerZip},   {"epub", registerZip},  {"crypto", registerCrypto},
+                       {"coroutine", loadCoroutine}, {"utf8", loadUtf8}};
+
+// _G.__index(G, key): runs only for globals that do not exist yet.
+int lazy_index(lua_State* L) {
+  if (lua_type(L, 2) == LUA_TSTRING) {
+    const char* k = lua_tostring(L, 2);
+    for (const LazyNs& ns : LAZY) {
+      if (strcmp(ns.name, k) != 0) continue;
+      ns.load(L, ctx(L));
+      lua_pushvalue(L, 2);
+      lua_rawget(L, 1);  // the loader defined it (raw: no metamethod loop if it somehow did not)
+      return 1;
+    }
+  }
+  lua_pushnil(L);
+  return 1;
+}
+
+void installLazy(lua_State* L) {
+  lua_pushglobaltable(L);
+  lua_createtable(L, 0, 2);
+  lua_pushcfunction(L, lazy_index);
+  lua_setfield(L, -2, "__index");
+  lua_pushliteral(L, "protected");
+  lua_setfield(L, -2, "__metatable");
+  lua_setmetatable(L, -2);
+  lua_pop(L, 1);
+}
+
+}  // namespace
+
 void registerApi(LuaVm& vm, Backend& backend) {
   lua_State* L = vm.state();
   // Ctx must outlive the VM; it's a tiny allocation owned by the Lua state as a userdata.
@@ -732,22 +801,10 @@ void registerApi(LuaVm& vm, Backend& backend) {
     vm.setStripDebug(backend.fsSize(flag) < 0);
   }
   regTable(L, c, "system", sys);
-  static const luaL_Reg timeFns[] = {{"now", time_now}, {"date", time_date}, {"sync", time_sync}, {"set", time_set},
-                                    {nullptr, nullptr}};
-  static const luaL_Reg devFns[] = {{"frontlight", dev_frontlight}, {"caps", dev_caps}, {"haptic", dev_haptic},
-                                  {"motion", dev_motion}, {"environment", dev_environment}, {"tone", dev_tone}, {nullptr, nullptr}};
-  regTable(L, c, "time", timeFns);
-  regTable(L, c, "device", devFns);
-  static const luaL_Reg ledFns[] = {{"count", led_count}, {"set", led_set},   {"all", led_all},
-                                    {"off", led_off},     {"brightness", led_brightness}, {nullptr, nullptr}};
-  regTable(L, c, "led", ledFns);
-  registerFs(L, c);
-  registerJson(L, c);
-  registerNet(L, c);
-  registerSock(L, c);
-  registerZip(L, c);
-  registerCrypto(L, c);
+  registerGfxSaveBmp(L);
+  registerGfxImage(L);
   registerRequire(L, c);
+  installLazy(L);
 
   lua_pushcfunction(L, api_print);
   lua_setglobal(L, "print");
