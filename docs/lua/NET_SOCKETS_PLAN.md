@@ -77,3 +77,19 @@ What the device told us (WiFi up, memprobe_lua / socktest_lua against `echo_serv
 - Timings: connect to a LAN host 16-26 ms; DNS 30-52 ms; refused port 18-19 ms; a blackhole host with `timeout_ms=1500` failed after 1504-1505 ms.
 
 Still open: UDP, `net.mdns_query`, TLS sockets (`SecureClient`, needs ~60 KB: that does not fit next to a socket-using Lua heap on the X4 without measurement), `listen/accept`, and a way for Back to interrupt a blocking `connect`.
+
+## 6. WiFi driver buffer tuning: measured, no gain (dropped)
+
+Idea: shrink the radio's ~58 KB by initialising the driver with fewer buffers (esp_wifi_init intercepted with a linker wrap, five candidate configs, one boot per candidate so each started from the same 115,044 B free). Result on the X4, radio cost and a 64 KB transfer:
+
+| config | cost | transfer |
+|---|---|---|
+| Arduino default (4 static + 32 dynamic RX, 32 TX, AMPDU on) | 58,024 B | 277 KB/s |
+| dynamic RX 16 / TX 16 | 58,024 B | 250 KB/s |
+| dynamic RX 8 / TX 8 | 58,028 B | 273 KB/s |
+| + AMPDU off | 57,872 B | 267 KB/s |
+| + mgmt buffers | 57,932 B | 251 KB/s |
+
+The best saving is 152 bytes: the dynamic counts are allocated on demand and the fixed cost is driver internals, task stacks and lwIP, which these knobs do not touch. Anything further would need a rebuilt SDK (the firmware already has `custom_sdkconfig`), which is firmware-wide and out of scope for the Lua runtime. The experiment code was removed.
+
+Side finding (a real bug, fixed): the exit-time defrag reboot checked `WiFi.getMode() != WIFI_MODE_NULL`, but `wifi.off()` sets exactly that mode, so an app that turned WiFi off before exiting skipped the reboot although the radio had already fragmented the heap (~20 KB did not come back; an EPUB test right after a WiFi test failed 12 bytes short of a 32 KB block). The activity now remembers that the radio was used this session (it survives `app.restart`).

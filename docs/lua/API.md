@@ -166,7 +166,7 @@ An app must declare it in `manifest.json`, or every call below fails with a clea
 |---|---|
 | `wifi.connect([{tls=false}])` → true \| false, reason | Parks your script and hands the screen to the system's WiFi flow, which auto-joins the last saved network (usually no UI at all; otherwise the normal network picker/keyboard). **The screen is the system's afterwards: redraw.** Returns immediately with `true` if already connected. Input events do not wake it. **Refuses up front** (`false, "not enough free RAM for WiFi + TLS (free 86K, need 96K)…"`) when less than 96 KB is free: WiFi costs ~57 KB and TLS wants 40 KB on top. **`wifi.connect{tls=false}`** is for apps that only use plain TCP (`net.*`): it needs 80 KB free instead (radio ~57 KB + the 16 KB the socket layer refuses to go below + ~7 KB margin), and `https` then fails at request time with its own "not enough free RAM for TLS" message instead of crashing (verified on the X4 at ~90 KB free). `tls` must be a boolean; the default is `true`. Always show `reason`. |
 | `wifi.status()` → `{connected, ssid, ip, rssi}` | |
-| `wifi.off()` | radio off now (frees RAM). Leaving the app always tears WiFi down anyway. |
+| `wifi.off()` | radio off now (frees part of the RAM; the radio leaves the heap fragmented, so ~20 KB only comes back after a reboot). Leaving an app that ever called `wifi.connect()` tears WiFi down and reboots to Home to defragment the heap, even if you called `wifi.off()` first (this survives `app.restart`). |
 | `http.request{url, method, headers, body, save_to, max_body}` → `{status, ok, bytes, body}` \| nil, err | see below |
 | `http.get(url [, opts])` | `http.request` with `url` filled in |
 

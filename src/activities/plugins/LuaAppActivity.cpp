@@ -1,5 +1,6 @@
 #include "LuaAppActivity.h"
 
+
 #include <BoardConfig.h>
 #include <Buzzer.h>
 #include <EnvironmentSensor.h>
@@ -74,6 +75,10 @@ constexpr size_t LUA_HEAP_FLOOR = 40 * 1024;
 constexpr size_t LUA_HEAP_FLOOR_ONLINE = 12 * 1024;
 // net.read may go this low for the single allocation that copies data OUT of the network stack (which relieves the pressure).
 constexpr size_t LUA_HEAP_FLOOR_DRAIN = 6 * 1024;
+// True once any app in this activity session asked for WiFi. wifi.off() sets the WiFi mode back to NULL, but the radio has
+// already fragmented the heap (measured: ~20 KB never comes back until a reboot), so the exit-time defrag restart must not
+// depend on the CURRENT mode. Cleared when the activity is entered; survives app.restart on purpose (same heap).
+bool g_radioUsedThisSession = false;
 constexpr size_t MAX_SCRIPT_BYTES = 64 * 1024;
 
 constexpr uint32_t SLICE_MS = 25;          // max time one loop() pass spends inside Lua
@@ -235,7 +240,10 @@ class LuaAppActivity::Backend final : public crosslua::Backend {
   // An app may only use the network if its manifest.json says so: {"permissions": ["network"]}.
   bool netAllowed() override { return net_; }
   bool wifiConnected() override { return WiFi.status() == WL_CONNECTED; }
-  void wifiRequestConnect() override { wifiConnectRequested = true; }
+  void wifiRequestConnect() override {
+    g_radioUsedThisSession = true;
+    wifiConnectRequested = true;
+  }
 
   // --- device capabilities (CrossPoint runs on many boards; the FREEINK_CAP_* flags say what this build has) -----------
   void deviceCaps(DeviceCaps* c) override {
@@ -1041,6 +1049,7 @@ void LuaAppActivity::logMemory(const char* when) const {
 
 void LuaAppActivity::onEnter() {
   Activity::onEnter();
+  g_radioUsedThisSession = false;
   startApp();
 }
 
@@ -1126,7 +1135,7 @@ void LuaAppActivity::onExit() {
   Activity::onExit();
   // Same rule as every other WiFi screen: after the radio (and possibly TLS) ran, the heap is fragmented, so drop the
   // connection and reboot silently into Home on a pristine heap. Apps that never touched WiFi are unaffected.
-  if (WiFi.getMode() != WIFI_MODE_NULL) {
+  if (g_radioUsedThisSession || WiFi.getMode() != WIFI_MODE_NULL) {
     LOG_INF(TAG, "wifi was used: silent restart to defragment the heap");
     WiFi.disconnect(false);
     delay(30);
