@@ -1,0 +1,5 @@
+{
+  "title": "Grimoire spells",
+  "description": "Run Grimoire spells",
+  "permissions": ["library", "network"]
+}

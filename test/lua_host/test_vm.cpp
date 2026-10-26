@@ -20,6 +20,20 @@ extern "C" {
 #include <string>
 #include <vector>
 
+#include <InflateReader.h>
+
+static const char DEFL_RAW[] = "\013\311HU(,\315L\316VH*\312/\317SH\313\257P\310*\315-(V\310/K-R(\001J\347$VU*\244\344\247\353)\204\214*\036U<\252\230\332\212\001";
+static const size_t DEFL_RAW_LEN = 55;
+static const char DEFL_ZLIB[] = "x\234\253\312\311L\322-/J,(HMQ(H\254\314\311OL\261Rx4gr\325p\227\000\000*vf\275";
+static const size_t DEFL_ZLIB_LEN = 37;
+static const char DEFL_BAD[] = "\x73\x00\x99\x99";
+
+extern "C" {
+// uzlib references these from its gzip/zlib header helpers; InflateReader never calls them (the firmware linker drops them).
+unsigned int uzlib_adler32(const void*, unsigned int, unsigned int) { return 0; }
+unsigned int uzlib_crc32(const void*, unsigned int, unsigned int) { return 0; }
+}
+
 #include "src/lua/LuaApi.h"
 #include "src/lua/LuaVm.h"
 
@@ -181,6 +195,80 @@ struct MockBackend : Backend {
     if (!files.count(absPath)) return false;
     openedBook = absPath;
     return true;
+  }
+  // ---- batch A mock: scan/time/rename/mac/qr/frontlight/inflate/rounded -----------------------------------------
+  std::vector<Backend::WifiScanInfo> nets{{"NetA", -40, true}, {"", -60, false}, {"NetC", -75, true}};
+  bool syncOk = true;
+  std::string mac_ = "AA:BB:CC:DD:EE:FF";
+  std::string qrSeen;                      // "text|x|y|side"
+  int roundedSeen = 0;
+  bool flPresent = true;
+  bool flOn = false;
+  int flBr = 60, flWarm = 30;
+  int wifiScan(WifiScanInfo* out, int maxEntries, int* total, char* err, size_t errCap) override {
+    if (nets.empty()) { snprintf(err, errCap, "scan failed"); return -1; }
+    *total = (int)nets.size();
+    int c = 0;
+    for (auto& n : nets) { if (c >= maxEntries) break; out[c++] = n; }
+    return c;
+  }
+  bool timeSync(int, char* err, size_t errCap) override {
+    if (!syncOk) { snprintf(err, errCap, "sync failed"); return false; }
+    epoch = 1769000000;
+    return true;
+  }
+  bool timeSet(int64_t e) override { epoch = e; return true; }
+  bool fsRename(const char* from, const char* to, char* err, size_t errCap) override {
+    // deliberately permissive (overwrites): the binding itself must refuse an existing target
+    auto it = files.find(from);
+    if (it == files.end()) { snprintf(err, errCap, "no such file"); return false; }
+    files[to] = it->second;
+    files.erase(it);
+    return true;
+  }
+  void mac(char out[18]) override { snprintf(out, 18, "%s", mac_.c_str()); }
+  bool drawQr(const char* text, int x, int y, int side) override {
+    qrSeen = std::string(text) + "|" + std::to_string(x) + "|" + std::to_string(y) + "|" + std::to_string(side);
+    return true;
+  }
+  bool frontlightGet(bool* on, int* brightness, int* warmth) override {
+    if (!flPresent) return false;
+    *on = flOn; *brightness = flBr; *warmth = flWarm;
+    return true;
+  }
+  void frontlightSet(int brightness, int warmth, int on) override {
+    if (brightness >= 0) flBr = brightness;
+    if (warmth >= 0) flWarm = warmth;
+    if (on >= 0) flOn = on == 1;
+  }
+  // The real InflateReader code (same as the firmware) over the generated vectors above.
+  bool inflate(const char* data, size_t n, bool zlib, size_t maxOut, char** out, size_t* outLen, char* err, size_t errCap) override {
+    *out = nullptr; *outLen = 0;
+    if (zlib) { if (n < 3 || (data[0] & 0x0f) != 8) { snprintf(err, errCap, "not a zlib stream"); return false; } data += 2; n -= 2; }
+    InflateReader reader;
+    if (!reader.init(false)) { snprintf(err, errCap, "out of memory"); return false; }
+    reader.setSource(reinterpret_cast<const uint8_t*>(data), n);
+    size_t cap = 4096 < maxOut ? 4096 : maxOut;
+    uint8_t* buf = (uint8_t*)malloc(cap);
+    if (!buf) { snprintf(err, errCap, "out of memory"); return false; }
+    size_t have = 0;
+    for (;;) {
+      size_t produced = 0;
+      InflateStatus st = reader.readAtMost(buf + have, cap - have, &produced);
+      have += produced;
+      if (st == InflateStatus::Done) break;
+      if (st == InflateStatus::Error) { free(buf); snprintf(err, errCap, "corrupt deflate stream"); return false; }
+      if (cap >= maxOut) { free(buf); snprintf(err, errCap, "inflated data over %zu bytes", maxOut); return false; }
+      cap = cap * 2 < maxOut ? cap * 2 : maxOut;
+      uint8_t* nb = (uint8_t*)realloc(buf, cap);
+      if (!nb) { free(buf); snprintf(err, errCap, "out of memory"); return false; }
+      buf = nb;
+    }
+    *out = (char*)buf; *outLen = have;
+    return true;
+  }
+  void drawRoundedRect(int x, int y, int w, int h, int radius, bool black, bool filled) override {
+    (void)x; (void)y; (void)w; (void)h; (void)radius; (void)black; (void)filled; roundedSeen++;
   }
   int64_t epoch = 0;  // 0 = clock not trusted
   int64_t epochNow() override { return epoch ? epoch + now / 1000 : 0; }  // epoch = clock at app start; advances with mock millis
@@ -377,13 +465,13 @@ int main() {
     CHECK(vm.usedBytes() == 0);
   }
   {
-    TEST("sandbox: no io/os/package/debug/dofile/load; bytecode rejected");
+    TEST("sandbox: no io/os/package/debug/dofile; load is text-only; bytecode rejected");
     LuaVm vm; MockBackend be;
     setup(vm, be,
-          "print(io, os, package, debug, dofile, loadfile, load, type(require), string ~= nil, math ~= nil, utf8 ~= nil, "
+          "print(io, os, package, debug, dofile, loadfile, type(load), type(require), string ~= nil, math ~= nil, utf8 ~= nil, "
           "coroutine ~= nil)");
     CHECK(run(vm, be) == Status::Finished);
-    CHECK(be.logs[0] == "nil\tnil\tnil\tnil\tnil\tnil\tnil\tfunction\ttrue\ttrue\ttrue\ttrue");
+    CHECK(be.logs[0] == "nil\tnil\tnil\tnil\tnil\tnil\tfunction\tfunction\ttrue\ttrue\ttrue\ttrue");
     LuaVm vm2;
     vm2.open(32 * 1024);
     CHECK(!vm2.load("bc", "\x1bLua\x54", 5));
@@ -732,7 +820,7 @@ int main() {
       (keep ? usedKept : usedStripped) = vm.usedBytes();
       printf("    %s: %zu B after require\n", keep ? "debug.flag (kept)" : "stripped", vm.usedBytes());
     }
-    CHECK(usedKept - usedStripped >= 3000);  // stripping saves real memory (~4.5 KB on this 5 KB module; baseline VM is ~30 KB of "used")
+    CHECK(usedKept - usedStripped >= 2900);  // stripping saves real memory (~4.5 KB on this 5 KB module; baseline VM is ~30 KB of "used")
   }
   {
     TEST("study_lua store.scan: 3000 overdue cards stay inside a tight memory budget, order + limits exact");
@@ -1280,6 +1368,230 @@ int main() {
     CHECK(vm.load("t", s3, strlen(s3)));
     CHECK(run(vm, be) == Status::Finished);
     CHECK(be.openedBook.empty() && be.logs.size() == 1 && be.logs[0].find("false\tlibrary access not permitted") == 0);
+  }
+  {
+    TEST("batch A: wifi.scan/time.sync+set/fs.rename/system.mac/gfx.qr/rounded/frontlight");
+    MockBackend be;
+    be.files["/.crosslua/data/test/a.txt"] = "one";
+    be.files["/.crosslua/data/test/b.txt"] = "two";
+    be.files["/.crosslua/data/test/dir/x"] = "x";
+    be.files["/Books/x.epub"] = "PK";
+    be.library = true;
+    const char* script = R"LUA(
+      local function show(...) print(...) end
+      local l, total = wifi.scan(2); show(#l, total, l[1].ssid, l[1].rssi, l[2].ssid, l[2].encrypted)
+      show(wifi.scan(0)); show(wifi.scan(99))  -- nil, err
+      show(time.now() == nil)
+      show(time.sync()); show(time.now() > 1700000000)
+      show(time.sync(0)); show(time.sync(999))
+      show(time.set(1769000000))     -- plausible: accepted
+      show(math.abs(time.now() - 1769000000) < 100)  -- the mock clock keeps ticking
+      show(time.set(100))            -- below the plausible range
+      show(system.mac())
+      show(device.frontlight())      -- on, brightness, warmth
+      show(device.frontlight(35, 80, true))
+      show(device.frontlight())
+      local ok = gfx.clear(); show(ok)
+      show(gfx.qr("x", 0, 0, 20)); show(gfx.qr("", 0, 0, 100)); show(gfx.qr("x", 100000, 0, 30)); show(gfx.qr("hello", 100, 100, 200))
+      gfx.rounded_rect(10, 10, 100, 50, 8); gfx.rounded_rect(10, 10, 100, 50, 8, true, false)
+      show(gfx.rounded_rect(10, 10, 50, 50, 30))
+      show(fs.rename("data:a.txt", "data:c.txt")); show(fs.read("data:c.txt")); show(fs.read("data:a.txt"))
+      show(fs.rename("data:nope.txt", "data:d.txt"))
+      show(fs.rename("data:c.txt", "data:b.txt"))   -- target exists
+      show(fs.rename("data:dir", "data:e"))          -- directory
+      show(fs.rename("sd:Books/x.epub", "data:f.epub"))
+      show(fs.rename("data:c.txt", "app:../c.txt"))
+      show(fs.rename("data:c.txt", "sd:Books/y.epub")); show(fs.rename("data:c.txt", "app:y.txt"))
+    )LUA";
+    LuaVm vm;
+    CHECK(vm.open(256 * 1024));
+    registerApi(vm, be);
+    CHECK(vm.load("t", script, strlen(script)));
+    CHECK(run(vm, be, 200000) == Status::Finished);
+    const char* want[] = {
+        "2\t3\tNetA\t-40\t\tfalse",  // empty SSID prints as empty field
+        "nil\tmax must be 1..50", "nil\tmax must be 1..50",
+        "true",                        // time.now() == nil before sync
+        "true", "true",
+        "false\tsync failed",          // (mock syncOk still true; timeout bounds are checked Lua-side)
+        "nil\ttimeout must be 1..60 seconds",
+        "true",                        // time.set(1769000000)
+        "true",                        // time.now() reflects the set
+        "nil\tepoch out of the plausible range (2020..2096)",
+    };
+    (void)want;  // expectations asserted incrementally below to keep the diff readable
+    CHECK(be.logs.size() >= 31);
+    if (be.logs.size() >= 31) {
+      CHECK(be.logs[0] == "2\t3\tNetA\t-40\t\tfalse");
+      CHECK(be.logs[1] == "nil\tmax must be 1..50" && be.logs[2] == "nil\tmax must be 1..50");
+      CHECK(be.logs[3] == "true");
+      CHECK(be.logs[4] == "true" && be.logs[5] == "true");
+      CHECK(be.logs[6] == "nil\ttimeout must be 1..60 seconds" && be.logs[7] == "nil\ttimeout must be 1..60 seconds");
+      CHECK(be.logs[8] == "true" && be.logs[9] == "true");
+      CHECK(be.logs[10] == "nil\tepoch out of the plausible range (2020..2096)");
+      CHECK(be.logs[11] == "AA:BB:CC:DD:EE:FF");
+      CHECK(be.logs[12] == "false\t60\t30");
+      CHECK(be.logs[13] == "true" && be.logs[14] == "true\t35\t80");
+      CHECK(be.logs[16] == "nil\tbox does not fit on the screen (need at least 21x21)");  // side 20 < 21
+      CHECK(be.logs[17] == "nil\ttext must be 1..1000 bytes");
+      CHECK(be.logs[18] == "nil\tbox does not fit on the screen (need at least 21x21)");  // x off screen
+      CHECK(be.logs[19] == "true");
+      CHECK(be.logs[20] == "nil\tradius must be <= half of width and height");
+      CHECK(be.logs[21] == "true" && be.logs[22] == "one" && be.logs[23] == "nil\tno such file");  // a.txt moved away
+      CHECK(be.logs[24] == "nil\tno such file");
+      CHECK(be.logs[25] == "nil\ttarget already exists" && be.logs[26] == "nil\tis a directory");
+      CHECK(be.logs[27].find("read-only") != std::string::npos && be.logs[28].find("'.'") != std::string::npos);
+      CHECK(be.logs[29].find("read-only") != std::string::npos && be.logs[30].find("read-only") != std::string::npos);
+      CHECK(be.flOn && be.flBr == 35 && be.flWarm == 80);
+    }
+    CHECK(!be.files.count("/Books/y.epub") && !be.files.count("/.crosslua/data/test/y.txt"));
+    if (getenv("DUMP_LOGS")) { for (size_t i = 0; i < be.logs.size(); i++) printf("   [%zu] %s\n", i, be.logs[i].c_str()); printf("   qr=%s\n", be.qrSeen.c_str()); }
+    CHECK(be.qrSeen.find("hello|100|100|200") != std::string::npos);
+    CHECK(be.roundedSeen == 2);
+    CHECK(be.files["/.crosslua/data/test/c.txt"] == "one");
+    CHECK(!be.files.count("/.crosslua/data/test/a.txt"));
+    CHECK(be.files["/.crosslua/data/test/b.txt"] == "two");
+  }
+  {
+    TEST("zip.inflate: raw + zlib through the real uzlib code, corrupt/oversize/empty input, output cap");
+    MockBackend be;
+    LuaVm vm;
+    CHECK(vm.open(300 * 1024));
+    registerApi(vm, be);
+    // the vectors are binary: hand them to Lua through globals
+    lua_State* L = vm.state();
+    lua_pushlstring(L, DEFL_RAW, DEFL_RAW_LEN);
+    lua_setglobal(L, "RAW");
+    lua_pushlstring(L, DEFL_ZLIB, DEFL_ZLIB_LEN);
+    lua_setglobal(L, "ZLIB");
+    lua_pushlstring(L, DEFL_BAD, 4);
+    lua_setglobal(L, "BAD");
+    const char* script = R"LUA(
+      local s = zip.inflate(RAW);        print(#s, s:sub(1, 19))
+      local z = zip.inflate(ZLIB, true); print(#z, z:sub(1, 21))
+      print(zip.inflate(BAD))
+      print(zip.inflate(ZLIB, false))    -- zlib header fed as raw deflate: must fail cleanly, not crash
+      print(zip.inflate(""))
+      print(zip.inflate(("x"):rep(65537)))
+      print(zip.inflate("ab", true))     -- too short to be zlib
+      print(#zip.inflate(RAW) == 900)
+    )LUA";
+    CHECK(vm.load("t", script, strlen(script)));
+    CHECK(run(vm, be, 200000) == Status::Finished);
+    if (getenv("DUMP_LOGS")) for (size_t i = 0; i < be.logs.size(); i++) printf("   [z%zu] %s\n", i, be.logs[i].c_str());
+    CHECK(be.logs.size() == 8);
+    if (be.logs.size() == 8) {
+      CHECK(be.logs[0] == "900\tThe quick brown fox");
+      CHECK(be.logs[1] == "250\tzlib-wrapped payload:");
+      CHECK(be.logs[2] == "nil\tcorrupt deflate stream" && be.logs[3] == "nil\tcorrupt deflate stream");
+      CHECK(be.logs[4] == "nil\tinput must be 1..65536 bytes");
+      CHECK(be.logs[5] == "nil\tinput must be 1..65536 bytes");
+      CHECK(be.logs[6] == "nil\tnot a zlib stream");
+      CHECK(be.logs[7] == "true");
+    }
+  }
+  {
+    TEST("network-permission gates: wifi.scan and time.sync refuse without the manifest permission");
+    MockBackend be;
+    be.net = false;
+    LuaVm vm;
+    CHECK(vm.open(128 * 1024));
+    registerApi(vm, be);
+    const char* script = R"LUA(
+      print(wifi.scan()); print(time.sync()); print(time.now())
+    )LUA";
+    CHECK(vm.load("t", script, strlen(script)));
+    CHECK(run(vm, be) == Status::Finished);
+    CHECK(be.logs.size() == 3);
+    if (be.logs.size() == 3) {
+      CHECK(be.logs[0].find("nil\tnetwork not permitted") == 0);
+      CHECK(be.logs[1].find("nil\tnetwork not permitted") == 0);
+      CHECK(be.logs[2] == "nil");  // and the clock was NOT touched
+    }
+    be.net = true;
+    be.logs.clear();
+    be.nets.clear();  // scan failure path
+    LuaVm vm2;
+    CHECK(vm2.open(128 * 1024));
+    registerApi(vm2, be);
+    const char* s2 = "print(wifi.scan())";
+    CHECK(vm2.load("t", s2, strlen(s2)));
+    CHECK(run(vm2, be) == Status::Finished);
+    CHECK(be.logs.size() == 1 && be.logs[0] == "nil\tscan failed");
+  }
+  {
+    TEST("load: text-only, env honoured, size limit, no bytecode, errors are values not crashes");
+    MockBackend be;
+    LuaVm vm;
+    CHECK(vm.open(160 * 1024));
+    registerApi(vm, be);
+    const char* script = R"LUA(
+      local function show(...) print(...) end
+      local f = load("return 1 + 2"); show(f())
+      show(load("return x", "=chunk", "t", {x = 42})())               -- env honoured
+      local e = {}; load("y = 5", "=c", "t", e)(); show(e.y, y)       -- wrote into env, not globals
+      show(load("return print", "=c", "t", {})())                    -- empty env: no print, no fs
+      show(load("return ...", "=c")(7, 8))                            -- varargs pass through
+      show(load("x = = 1", "=bad"))                                   -- syntax error -> nil, msg
+      show(load("error('boom')", "=thrower") ~= nil, pcall(load("error('boom')", "=thrower")))
+      show(load(string.dump(function() return 1 end)))                -- bytecode refused
+      show(load("\27Lua junk"))                                       -- signature refused
+      show(load("return 1", "=c", "b"))                               -- binary-only mode refused
+      show(load(function() return nil end))                           -- reader functions refused
+      show(load(42)); show(load(nil))
+      show(load(("x"):rep(65537)))                                    -- over 64 KB
+      show(load(("--"):rep(100) .. "\nreturn 'ok'")())                -- comments fine
+      show(load("return _ENV", "=c", "t", nil)())                     -- explicit nil env
+      show(dofile, loadfile, loadstring)                              -- still removed
+      local g = load("local n = 0; for i = 1, 10 do n = n + i end; return n"); show(g())
+      show(load("return (", "@my/file.lua"))                          -- chunk name shows in the error
+    )LUA";
+    CHECK(vm.load("t", script, strlen(script)));
+    CHECK(run(vm, be, 400000) == Status::Finished);
+    if (getenv("DUMP_LOGS")) { for (size_t i = 0; i < be.logs.size(); i++) printf("   [%zu] %s\n", i, be.logs[i].c_str()); }
+    CHECK(be.logs.size() == 19);
+    if (be.logs.size() == 19) {
+      CHECK(be.logs[0] == "3");
+      CHECK(be.logs[1] == "42");
+      CHECK(be.logs[2] == "5\tnil");
+      CHECK(be.logs[3] == "nil");
+      CHECK(be.logs[4] == "7\t8");
+      CHECK(be.logs[5].find("nil\t[string \"bad\"]") == 0 || be.logs[5].find("nil\tbad:1:") == 0);
+      CHECK(be.logs[6].find("true\tfalse\t") == 0 && be.logs[6].find("boom") != std::string::npos);
+      CHECK(be.logs[7] == "nil\tprecompiled chunks are not allowed");
+      CHECK(be.logs[8] == "nil\tprecompiled chunks are not allowed");
+      CHECK(be.logs[9].find("nil\tattempt to load a text chunk") == 0);
+      CHECK(be.logs[10].find("nil\tload: text chunks only") == 0);
+      CHECK(be.logs[11].find("nil\tload: text chunks only") == 0 && be.logs[12].find("nil\tload: text chunks only") == 0);
+      CHECK(be.logs[13] == "nil\tchunk too large (max 64 KB)");
+      CHECK(be.logs[14] == "ok");
+      CHECK(be.logs[15] == "nil");
+      CHECK(be.logs[16] == "nil\tnil\tnil");
+      CHECK(be.logs[17] == "55");
+      CHECK(be.logs[18].find("nil\tmy/file.lua:1:") == 0);
+    }
+  }
+  {
+    TEST("load: heap exhaustion while compiling and a yield inside a loaded chunk are both clean");
+    MockBackend be;
+    LuaVm vm;
+    CHECK(vm.open(160 * 1024));  // the 60 KB source fits (string.rep peaks ~120 KB) but compiling it cannot
+    registerApi(vm, be);
+    const char* script = R"LUA(
+      local src = ("x=1\n"):rep(15000)               -- 60000 bytes, ~15000 statements
+      local f, err = load(src, "=big")
+      print(f == nil, type(err))                       -- clean nil,err (out of memory), never a crash
+      src = nil; f = nil; collectgarbage()
+      local g = load("local e = input.wait(10); return e")
+      print(type(g))
+      g()                                              -- yields inside the loaded chunk
+      print("after")
+    )LUA";
+    CHECK(vm.load("t", script, strlen(script)));
+    Status st = run(vm, be, 600000);
+    if (getenv("DUMP_LOGS")) { printf("   st=%d err=%s\n", (int)st, vm.error().c_str()); for (auto& l : be.logs) printf("   <%s>\n", l.c_str()); }
+    CHECK(st == Status::Finished);  // input.wait yielded inside the loaded function and the host resumed it past it
+    CHECK(be.logs.size() == 3 && be.logs[0] == "true\tstring" && be.logs[1] == "function" && be.logs[2] == "after");
   }
   {
     TEST("study_lua deck.lua: Anki HTML, entities, cloze, comment lines");

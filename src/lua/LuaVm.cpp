@@ -52,8 +52,8 @@ static void openSandbox(lua_State* L) {
     luaL_requiref(L, l->name, l->func, 1);
     lua_pop(L, 1);
   }
-  // Base functions that read the filesystem via fopen() or can load binary chunks.
-  static const char* const removed[] = {"dofile", "loadfile", "load", "loadstring", nullptr};
+  // Base functions that read the filesystem via fopen(). (`load` is re-added by registerRequire as a text-only version.)
+  static const char* const removed[] = {"dofile", "loadfile", "loadstring", nullptr};
   for (const char* const* n = removed; *n; n++) {
     lua_pushnil(L);
     lua_setglobal(L, *n);

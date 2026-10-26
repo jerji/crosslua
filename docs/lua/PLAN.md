@@ -44,7 +44,7 @@ recon), **Ruby** (passive RF logger).
 4. **Apps are plugin folders.** A folder containing `main.lua` under `/plugins`, `/.plugins` or `/.crosspoint/plugins`
    shows up in Home -> Plugins (needs Settings -> Connectivity -> Plugins enabled). Optional `manifest.json` gives the title.
 5. **Apps draw through `GfxRenderer`** (CrossPoint fonts/themes, 7 named fonts) and push with `gfx.present()`.
-6. **Sandbox.** Libraries: base, string, table, math, utf8, coroutine. No io/os/package/debug/load; bytecode is
+6. **Sandbox.** Libraries: base, string, table, math, utf8, coroutine. No io/os/package/debug; `load` is text-only (64 KB, env honoured); bytecode is
    rejected. Files only via `fs` with scopes: `app:` (read-only), `data:` (`/.crosslua/data/<app>/`, read/write,
    atomic), `lib:` (`/.crosslua/lib/`, read-only). Paths with `..`, absolute paths etc. are rejected.
 7. **Memory safety is two layers:** a per-app budget (free RAM − 40 KB, 24–160 KB) **and** a device guard that

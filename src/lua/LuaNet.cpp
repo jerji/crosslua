@@ -89,6 +89,31 @@ int wifi_status(lua_State* L) {
   return 1;
 }
 
+// wifi.scan([max]) -> { {ssid, rssi, encrypted} ... } | nil, err. Blocking, a few seconds (network permission).
+int wifi_scan(lua_State* L) {
+  if (!allowed(L)) return pushFail(L, DENIED);
+  int max = lua_isnoneornil(L, 1) ? 20 : static_cast<int>(luaL_checknumber(L, 1));
+  if (max < 1 || max > 50) return pushFail(L, "max must be 1..50");
+  char err[96] = {0};
+  int total = 0;
+  static Backend::WifiScanInfo out[50];
+  const int n = be(L).wifiScan(out, max, &total, err, sizeof(err));
+  if (n < 0) return pushFail(L, err);
+  lua_createtable(L, n, 0);
+  for (int i = 0; i < n; i++) {
+    lua_createtable(L, 0, 3);
+    lua_pushstring(L, out[i].ssid);
+    lua_setfield(L, -2, "ssid");
+    lua_pushinteger(L, out[i].rssi);
+    lua_setfield(L, -2, "rssi");
+    lua_pushboolean(L, out[i].encrypted);
+    lua_setfield(L, -2, "encrypted");
+    lua_rawseti(L, -2, i + 1);
+  }
+  lua_pushinteger(L, total);
+  return 2;
+}
+
 int wifi_off(lua_State* L) {
   be(L).wifiOff();
   return 0;
@@ -235,7 +260,8 @@ int http_get(lua_State* L) {
 }  // namespace
 
 void registerNet(lua_State* L, Ctx* c) {
-  static const luaL_Reg wifiFns[] = {{"connect", wifi_connect}, {"status", wifi_status}, {"off", wifi_off}, {nullptr, nullptr}};
+  static const luaL_Reg wifiFns[] = {{"connect", wifi_connect}, {"status", wifi_status}, {"off", wifi_off},
+                                   {"scan", wifi_scan}, {nullptr, nullptr}};
   regTable(L, c, "wifi", wifiFns);
   static const luaL_Reg httpFns[] = {{"request", http_request}, {nullptr, nullptr}};
   regTable(L, c, "http", httpFns);

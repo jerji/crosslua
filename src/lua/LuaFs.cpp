@@ -370,10 +370,56 @@ return require
 
 }  // namespace
 
+// ---- load(text [, chunkname [, mode [, env]]]) -> function | nil, err -------------------------------------------------
+// Text chunks ONLY: precompiled bytecode is a classic VM-escape/crash vector, so it is always refused (whatever `mode`
+// says). No reader functions (they could yield/allocate mid-parse), no files (fs scopes stay the only way to read).
+// `env`, when given (even nil), becomes the chunk's _ENV exactly like standard Lua. Failure is a plain nil,err (a
+// parse error, a chunk over 64 KB, or the VM heap budget running out while compiling) and never aborts the app.
+static constexpr size_t MAX_LOAD_BYTES = 64 * 1024;
+static int lua_load_text(lua_State* L) {
+  if (lua_type(L, 1) != LUA_TSTRING) return pushFail(L, "load: text chunks only (a string is required)");
+  size_t len = 0;
+  const char* src = lua_tolstring(L, 1, &len);
+  const char* name = luaL_optstring(L, 2, nullptr);
+  const char* mode = luaL_optstring(L, 3, "t");
+  if (!strchr(mode, 't')) return pushFail(L, "attempt to load a text chunk (mode is not 't')");
+  if (len > MAX_LOAD_BYTES) return pushFail(L, "chunk too large (max 64 KB)");
+  if (len > 0 && src[0] == LUA_SIGNATURE[0]) return pushFail(L, "precompiled chunks are not allowed");
+  char chunk[64];
+  if (name) snprintf(chunk, sizeof(chunk), "%s", name);
+  else snprintf(chunk, sizeof(chunk), "=(load)");
+  if (luaL_loadbufferx(L, src, len, chunk, "t") != LUA_OK) {  // [.., err]
+    lua_pushnil(L);
+    lua_insert(L, -2);
+    return 2;
+  }
+  if (!lua_isnone(L, 4)) {  // env argument present: first upvalue of a main chunk is _ENV
+    lua_pushvalue(L, 4);
+    if (!lua_setupvalue(L, -2, 1)) lua_pop(L, 1);
+  }
+  return 1;
+}
+
+// fs.rename(from, to) -> true | nil, err. Both paths must be in data:. No overwrite: `to` must not exist.
+int fs_rename(lua_State* L) {
+  char from[MAX_PATH_LEN + 80], to[MAX_PATH_LEN + 80];
+  Scope sf, st;
+  if (!pathArg(L, 1, true, from, sizeof(from), &sf)) return 2;
+  if (!pathArg(L, 2, true, to, sizeof(to), &st)) return 2;
+  const int64_t size = be(L).fsSize(from);
+  if (size == -1) return pushFail(L, "no such file");
+  if (size == -2) return pushFail(L, "is a directory");
+  if (be(L).fsSize(to) != -1) return pushFail(L, "target already exists");
+  char err[96] = {0};
+  if (!be(L).fsRename(from, to, err, sizeof(err))) return pushFail(L, err[0] ? err : "rename failed");
+  lua_pushboolean(L, 1);
+  return 1;
+}
+
 void registerFs(lua_State* L, Ctx* c) {
   static const luaL_Reg fs[] = {{"read", fs_read},     {"write", fs_write}, {"write_at", fs_write_at}, {"append", fs_append},
                                 {"exists", fs_exists}, {"size", fs_size},   {"mkdir", fs_mkdir},
-                                {"remove", fs_remove}, {"list", fs_list},   {nullptr, nullptr}};
+                                {"remove", fs_remove}, {"list", fs_list},   {"rename", fs_rename}, {nullptr, nullptr}};
   regTable(L, c, "fs", fs);
 }
 
@@ -390,6 +436,8 @@ void registerRequire(lua_State* L, Ctx* c) {
     return;
   }
   lua_setglobal(L, "require");
+  lua_pushcfunction(L, lua_load_text);
+  lua_setglobal(L, "load");
 }
 
 }  // namespace crosslua

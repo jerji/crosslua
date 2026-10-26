@@ -18,7 +18,15 @@ even if the app is stuck in a loop). A runtime error shows an on-screen error + 
 ## Language / sandbox
 Lua 5.4.7, **32-bit** build: integers are `int32`, floats are single precision. Use `//` for integer division.
 Libraries: base, `string`, `table`, `math`, `utf8`, `coroutine`. **No** `io`, `os`, `package`,
-`debug`, `dofile`, `loadfile`, `load` (and precompiled chunks are rejected). Files go through `fs`, code through `require`.
+`debug`, `dofile`, `loadfile` (and precompiled chunks are rejected). Files go through `fs`, code through `require`.
+
+### `load(text [, chunkname [, mode [, env]]])` -> function | nil, err
+Compiles a string of Lua source at runtime. Text chunks only: precompiled bytecode is always refused (whatever `mode` says),
+reader functions are not accepted, and the chunk must be 64 KB or less. If `env` is given (even `nil`) it becomes the
+chunk's `_ENV`, so `load(src, "=x", "t", {})` runs `src` with no access to `print`, `fs` and the rest. Every failure (syntax
+error, too large, heap budget exhausted while compiling) is a plain `nil, err`; it never aborts the app. Unlike
+`require`d modules, loaded chunks keep their debug info, so error messages carry line numbers. Remember the compile
+needs transient RAM: check `system.heap()` before loading anything near the limit.
 `print(...)` goes to the serial/SD log (tag `LUA`).
 
 Memory: each app gets a hard heap cap computed at launch (free RAM − 40 KB, clamped 24–160 KB; ≈96 KB on a freshly booted X4; the collector starts a cycle at 130 % of live data),

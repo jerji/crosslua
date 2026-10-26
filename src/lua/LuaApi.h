@@ -121,6 +121,33 @@ class Backend {
                        size_t errCap) = 0;
   // Ask the host to open `absPath` in the reader (replaces the app). false = no such file.
   virtual bool openBook(const char* absPath) = 0;
+
+  // --- small device/network/time extensions (docs/lua/API.md v0.6) ----------------------------------------------
+  struct WifiScanInfo {
+    char ssid[33];
+    int rssi;
+    bool encrypted;
+  };
+  // Blocking scan (a few seconds). Fills up to max entries, *total = networks found. -1 with err on failure.
+  virtual int wifiScan(WifiScanInfo* out, int maxEntries, int* total, char* err, size_t errCap) = 0;
+  // Blocking SNTP over the current WiFi connection. false + err when it fails or no network is up.
+  virtual bool timeSync(int timeoutMs, char* err, size_t errCap) = 0;
+  // Force the device wall clock to a UTC epoch (a manual fallback when SNTP is not an option).
+  virtual bool timeSet(int64_t epoch) = 0;
+  // Rename/move within the app's data: scope (LuaFs resolves and scopes; paths arrive absolute).
+  virtual bool fsRename(const char* from, const char* to, char* err, size_t errCap) = 0;
+  virtual void mac(char out[18]) = 0;  // "AA:BB:CC:DD:EE:FF"
+  // Draws a QR code for `text` into the current frame, fitted into a side x side box. false when it cannot fit.
+  virtual bool drawQr(const char* text, int x, int y, int side) = 0;
+  // Frontlight. get() false when the board has none. On set, -1 means "leave unchanged".
+  virtual bool frontlightGet(bool* on, int* brightness, int* warmth) = 0;
+  virtual void frontlightSet(int brightness, int warmth, int on) = 0;
+  // Raw DEFLATE (zlib=false) or zlib-wrapped (zlib=true) inflate into a malloc'd buffer the caller free()s.
+  // Input up to 64 KB, output capped at maxOut bytes; refuses anything bigger.
+  virtual bool inflate(const char* data, size_t n, bool zlib, size_t maxOut, char** out, size_t* outLen, char* err,
+                       size_t errCap) = 0;
+  // Outline (filled=false) or filled rounded rectangle.
+  virtual void drawRoundedRect(int x, int y, int w, int h, int radius, bool black, bool filled) = 0;
 };
 
 // Registers print + gfx/input/app/system tables into vm.state(). Call after open(), before load().

@@ -6,6 +6,9 @@
 #include <HalStorage.h>
 #include <Logging.h>
 #include <TrustedTime.h>
+#include <esp_mac.h>
+#include <sys/time.h>
+#include <InflateReader.h>
 #include <ArduinoJson.h>
 #include <WiFi.h>
 #include <ZipFile.h>
@@ -22,6 +25,9 @@
 #include "fontIds.h"
 #include "network/HttpDownloader.h"
 #include "network/WifiPowerSaveGuard.h"
+#include "util/QrUtils.h"
+#include "components/themes/BaseTheme.h"
+#include <HalFrontlight.h>
 #include "lua/LuaApi.h"
 #include "lua/LuaVm.h"
 
@@ -412,6 +418,135 @@ class LuaAppActivity::Backend final : public crosslua::Backend {
     }
   }
   void fsListEnd() override { listDir_.close(); }
+
+  // --- batch A additions: scan / clock / rename / mac / qr / frontlight / inflate / rounded rect -----------------
+  int wifiScan(WifiScanInfo* out, int maxEntries, int* total, char* err, size_t errCap) override {
+    if (WiFi.getMode() == WIFI_MODE_NULL) WiFi.mode(WIFI_STA);  // scanning needs the radio up
+    const int n = WiFi.scanNetworks();
+    *total = n > 0 ? n : 0;
+    if (n < 0) {
+      snprintf(err, errCap, "scan failed");
+      return -1;
+    }
+    int c = 0;
+    for (int i = 0; i < n && c < maxEntries; i++) {
+      const String s = WiFi.SSID(i);
+      strncpy(out[c].ssid, s.c_str(), sizeof(out[c].ssid) - 1);
+      out[c].ssid[sizeof(out[c].ssid) - 1] = '\0';
+      out[c].rssi = WiFi.RSSI(i);
+      out[c].encrypted = WiFi.encryptionType(i) != WIFI_AUTH_OPEN;
+      c++;
+    }
+    WiFi.scanDelete();
+    return c;
+  }
+  bool timeSync(int timeoutMs, char* err, size_t errCap) override {
+    if (WiFi.status() != WL_CONNECTED) {
+      snprintf(err, errCap, "not connected to WiFi");
+      return false;
+    }
+    if (!trustedtime::syncNow(static_cast<uint32_t>(timeoutMs))) {
+      snprintf(err, errCap, "sync failed");
+      return false;
+    }
+    trustedtime::note();
+    return true;
+  }
+  bool timeSet(int64_t epoch) override {
+    const struct timeval tv = {epoch, 0};
+    if (settimeofday(&tv, nullptr) != 0) return false;
+    trustedtime::note();
+    return true;
+  }
+  bool fsRename(const char* from, const char* to, char* err, size_t errCap) override {
+    if (Storage.exists(to)) {
+      snprintf(err, errCap, "target already exists");
+      return false;
+    }
+    if (!Storage.rename(from, to)) {
+      snprintf(err, errCap, "rename failed");
+      return false;
+    }
+    return true;
+  }
+  void mac(char out[18]) override {
+    uint8_t m[6];
+    esp_read_mac(m, ESP_MAC_WIFI_STA);
+    snprintf(out, 18, "%02X:%02X:%02X:%02X:%02X:%02X", m[0], m[1], m[2], m[3], m[4], m[5]);
+  }
+  bool drawQr(const char* text, int x, int y, int side) override {
+    QrUtils::drawQrCode(r_, Rect(x, y, side, side), text);
+    return true;
+  }
+  bool frontlightGet(bool* on, int* brightness, int* warmth) override {
+    if (!Frontlight.present()) return false;
+    *on = Frontlight.isOn();
+    *brightness = Frontlight.brightness();
+    *warmth = Frontlight.warmth();
+    return true;
+  }
+  void frontlightSet(int brightness, int warmth, int on) override {
+    if (brightness >= 0) Frontlight.setBrightness(static_cast<uint8_t>(brightness));
+    if (warmth >= 0 && Frontlight.hasColorTemperature()) Frontlight.setWarmth(static_cast<uint8_t>(warmth));
+    if (on >= 0) Frontlight.setOn(on == 1);
+  }
+  bool inflate(const char* data, size_t n, bool zlib, size_t maxOut, char** out, size_t* outLen, char* err,
+               size_t errCap) override {
+    *out = nullptr;
+    *outLen = 0;
+    if (zlib) {
+      if (n < 3 || (data[0] & 0x0f) != 8) {
+        snprintf(err, errCap, "not a zlib stream");
+        return false;
+      }
+      data += 2;
+      n -= 2;
+    }
+    InflateReader reader;
+    if (!reader.init(false)) {
+      snprintf(err, errCap, "out of memory");
+      return false;
+    }
+    reader.setSource(reinterpret_cast<const uint8_t*>(data), n);
+    size_t cap = 4096 < maxOut ? 4096 : maxOut;
+    uint8_t* buf = static_cast<uint8_t*>(malloc(cap));
+    if (!buf) {
+      snprintf(err, errCap, "out of memory");
+      return false;
+    }
+    size_t have = 0;
+    for (;;) {
+      size_t produced = 0;
+      const InflateStatus st = reader.readAtMost(buf + have, cap - have, &produced);
+      have += produced;
+      if (st == InflateStatus::Done) break;
+      if (st == InflateStatus::Error) {
+        free(buf);
+        snprintf(err, errCap, "corrupt deflate stream");
+        return false;
+      }
+      if (cap >= maxOut) {
+        free(buf);
+        snprintf(err, errCap, "inflated data over %u bytes", (unsigned)maxOut);
+        return false;
+      }
+      cap = cap * 2 < maxOut ? cap * 2 : maxOut;
+      uint8_t* nb = static_cast<uint8_t*>(realloc(buf, cap));
+      if (!nb) {
+        free(buf);
+        snprintf(err, errCap, "out of memory");
+        return false;
+      }
+      buf = nb;
+    }
+    *out = reinterpret_cast<char*>(buf);
+    *outLen = have;
+    return true;
+  }
+  void drawRoundedRect(int x, int y, int w, int h, int radius, bool black, bool filled) override {
+    r_.drawRoundedRect(x, y, w, h, 1, radius, black);
+    if (filled) r_.fillRect(x + radius, y + 1, w - 2 * radius, h - 2, black);  // inside the rounded ends
+  }
 
  private:
   static EpdFontFamily::Style toStyle(int s) {

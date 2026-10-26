@@ -247,6 +247,72 @@ int sys_battery(lua_State* L) {
   return 1;
 }
 
+// Pushes nil, err (the "errors are returned, not thrown" convention).
+static int pushErr2(lua_State* L, const char* msg) {
+  lua_pushnil(L);
+  lua_pushstring(L, msg);
+  return 2;
+}
+
+// gfx.qr(text, x, y, side) -> true | false. Draws a QR code fitted into a side x side box in the CURRENT frame.
+int gfx_qr(lua_State* L) {
+  size_t len = 0;
+  const char* text = luaL_checklstring(L, 1, &len);
+  if (len == 0 || len > 1000) return pushErr2(L, "text must be 1..1000 bytes");
+  const int x = static_cast<int>(luaL_checknumber(L, 2));
+  const int y = static_cast<int>(luaL_checknumber(L, 3));
+  int side = static_cast<int>(luaL_optnumber(L, 4, 0));
+  int w, h;
+  w = be(L).width();
+  h = be(L).height();
+  if (side == 0) side = std::min(w - x, h - y);
+  if (side < 21 || x < 0 || y < 0 || x + side > w || y + side > h)
+    return pushErr2(L, "box does not fit on the screen (need at least 21x21)");
+  if (!be(L).drawQr(text, x, y, side)) return pushErr2(L, "QR does not fit the box");
+  lua_pushboolean(L, 1);
+  return 1;
+}
+// gfx.rounded_rect(x, y, w, h, radius [, filled=false [, black=true]])
+int gfx_rounded_rect(lua_State* L) {
+  const int x = static_cast<int>(luaL_checknumber(L, 1)), y = static_cast<int>(luaL_checknumber(L, 2));
+  const int w = static_cast<int>(luaL_checknumber(L, 3)), h = static_cast<int>(luaL_checknumber(L, 4));
+  const int r = static_cast<int>(luaL_checknumber(L, 5));
+  const bool filled = lua_toboolean(L, 6);
+  const bool black = lua_isnoneornil(L, 7) ? true : lua_toboolean(L, 7);
+  if (w < 0 || h < 0 || r < 0 || r * 2 > w || r * 2 > h) return pushErr2(L, "radius must be <= half of width and height");
+  be(L).drawRoundedRect(x, y, w, h, r, black, filled);
+  return 0;
+}
+
+// ---- device ---------------------------------------------------------------
+// device.frontlight() -> on, brightness, warmth | nil (board without a frontlight)
+// device.frontlight(brightness [, warmth [, on]]) -> true | nil, err
+int dev_frontlight(lua_State* L) {
+  if (lua_gettop(L) == 0) {
+    bool on = false;
+    int br = 0, warm = 0;
+    if (!be(L).frontlightGet(&on, &br, &warm)) {
+      lua_pushnil(L);
+      return 1;
+    }
+    lua_pushboolean(L, on);
+    lua_pushinteger(L, br);
+    lua_pushinteger(L, warm);
+    return 3;
+  }
+  const int br = static_cast<int>(luaL_checknumber(L, 1));
+  const int warm = lua_isnoneornil(L, 2) ? -1 : static_cast<int>(luaL_checknumber(L, 2));
+  const int on = lua_isnoneornil(L, 3) ? -1 : (lua_toboolean(L, 3) ? 1 : 0);
+  if (br < 0 || br > 100) return luaL_error(L, "brightness must be 0..100");
+  if (warm != -1 && (warm < 0 || warm > 100)) return luaL_error(L, "warmth must be 0..100");
+  bool dummy = false;
+  int b2 = 0, w2 = 0;
+  if (!be(L).frontlightGet(&dummy, &b2, &w2)) return luaL_error(L, "no frontlight on this device");
+  be(L).frontlightSet(br, warm, on);
+  lua_pushboolean(L, 1);
+  return 1;
+}
+
 // ---- time -----------------------------------------------------------------
 // time.now() -> epoch seconds (UTC) | nil when the device clock is not trustworthy (never synced, no RTC).
 // Epoch seconds fit a 32-bit Lua integer until 2038.
@@ -270,6 +336,34 @@ int time_date(lua_State* L) {
     lua_pushinteger(L, f[i]);
     lua_setfield(L, -2, names[i]);
   }
+  return 1;
+}
+
+// time.sync([timeout_s]) -> true | false, err. SNTP over the current WiFi connection (network permission).
+int time_sync(lua_State* L) {
+  if (!be(L).netAllowed()) return pushErr2(L, "network not permitted: add \"permissions\": [\"network\"] to this app's manifest.json");
+  const int secs = lua_isnoneornil(L, 1) ? 5 : static_cast<int>(luaL_checknumber(L, 1));
+  if (secs < 1 || secs > 60) return pushErr2(L, "timeout must be 1..60 seconds");
+  char err[96] = {0};
+  if (!be(L).timeSync(secs * 1000, err, sizeof(err))) return pushErr2(L, err);
+  lua_pushboolean(L, 1);
+  return 1;
+}
+// time.set(epoch) -> true. Manual wall-clock set (UTC epoch seconds); use only when SNTP is not an option.
+int time_set(lua_State* L) {
+  const lua_Number e = luaL_checknumber(L, 1);
+  if (e < 1600000000 || e > 4000000000) return pushErr2(L, "epoch out of the plausible range (2020..2096)");
+  if (!be(L).timeSet(static_cast<int64_t>(e))) return pushErr2(L, "clock set failed");
+  lua_pushboolean(L, 1);
+  return 1;
+}
+
+// ---- system additions ------------------------------------------------------
+// system.mac() -> "AA:BB:CC:DD:EE:FF" (the device's own WiFi MAC; fine to show, it is not a secret)
+int sys_mac(lua_State* L) {
+  char m[18];
+  be(L).mac(m);
+  lua_pushstring(L, m);
   return 1;
 }
 
@@ -312,13 +406,14 @@ void registerApi(LuaVm& vm, Backend& backend) {
 
   static const luaL_Reg gfx[] = {{"size", gfx_size},     {"clear", gfx_clear},   {"pixel", gfx_pixel},
                                  {"line", gfx_line},     {"rect", gfx_rect},     {"text", gfx_text},
+                                 {"qr", gfx_qr}, {"rounded_rect", gfx_rounded_rect},
                                  {"text_width", gfx_text_width}, {"line_height", gfx_line_height},
                                  {"present", gfx_present}, {nullptr, nullptr}};
   static const luaL_Reg input[] = {{"poll", input_poll}, {"wait", input_wait}, {nullptr, nullptr}};
   static const luaL_Reg app[] = {{"sleep", app_sleep}, {"exit", app_exit}, {"name", app_name},
                                  {"dir", app_dir},     {"open_book", app_open_book}, {nullptr, nullptr}};
   static const luaL_Reg sys[] = {{"millis", sys_millis}, {"heap", sys_heap},       {"lua_mem", sys_lua_mem},
-                                 {"battery", sys_battery}, {nullptr, nullptr}};
+                                 {"battery", sys_battery}, {"mac", sys_mac}, {nullptr, nullptr}};
   regTable(L, c, "gfx", gfx);
   regTable(L, c, "input", input);
   regTable(L, c, "app", app);
@@ -328,8 +423,11 @@ void registerApi(LuaVm& vm, Backend& backend) {
     vm.setStripDebug(backend.fsSize(flag) < 0);
   }
   regTable(L, c, "system", sys);
-  static const luaL_Reg timeFns[] = {{"now", time_now}, {"date", time_date}, {nullptr, nullptr}};
+  static const luaL_Reg timeFns[] = {{"now", time_now}, {"date", time_date}, {"sync", time_sync}, {"set", time_set},
+                                    {nullptr, nullptr}};
+  static const luaL_Reg devFns[] = {{"frontlight", dev_frontlight}, {nullptr, nullptr}};
   regTable(L, c, "time", timeFns);
+  regTable(L, c, "device", devFns);
   registerFs(L, c);
   registerJson(L, c);
   registerNet(L, c);

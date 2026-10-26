@@ -121,8 +121,24 @@ int zip_read(lua_State* L) {
 
 }  // namespace
 
+// zip.inflate(bytes [, zlib]) -> string | nil, err. Decompress a raw DEFLATE stream (gzip member bodies,
+// .dict.dz) or a zlib-wrapped one. Input <= 64 KB, output <= 96 KB; one entry at a time, like zip.read.
+int zip_inflate(lua_State* L) {
+  size_t n = 0;
+  const char* data = luaL_checklstring(L, 1, &n);
+  const bool zlib = lua_toboolean(L, 2);
+  if (n < 1 || n > 64 * 1024) return pushFail(L, "input must be 1..65536 bytes");
+  char err[96] = {0};
+  char* out = nullptr;
+  size_t outLen = 0;
+  if (!be(L).inflate(data, n, zlib, 96 * 1024, &out, &outLen, err, sizeof(err))) return pushFail(L, err);
+  lua_pushlstring(L, out, outLen);
+  free(out);
+  return 1;
+}
+
 void registerZip(lua_State* L, Ctx* c) {
-  static const luaL_Reg fns[] = {{"list", zip_list}, {"read", zip_read}, {nullptr, nullptr}};
+  static const luaL_Reg fns[] = {{"list", zip_list}, {"read", zip_read}, {"inflate", zip_inflate}, {nullptr, nullptr}};
   regTable(L, c, "zip", fns);
 }
 
