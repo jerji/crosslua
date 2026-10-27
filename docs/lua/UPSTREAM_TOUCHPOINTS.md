@@ -1,5 +1,8 @@
 # Upstream touchpoints
 
+**Rule (Angel): touch upstream-owned files as little as possible.** Prefer new code in CrossLua-owned files that calls existing APIs
+read-only; `#ifdef CROSSLUA_DEV` anything that only exists for testing; log every remaining edit below.
+
 Everything CrossLua adds lives in new files (`lib/lua/`, `src/lua/`, `src/activities/plugins/LuaAppActivity.*`,
 `docs/lua/`, `test/lua_host/`, `sd_card_contents/`). These are the *only* edits to upstream-owned files;
 re-check them first when merging `upstream/master`.

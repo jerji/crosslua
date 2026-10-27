@@ -7,7 +7,7 @@ roadmap, ordered by how many features each primitive unblocks and how cheap/safe
 Lua heap). Verdicts in the per-fork files; here only the gaps.
 
 ## Tier 1 — trivial native bindings, unlock the most (one build)
-**Status: every Tier 1 and Tier 2 row below is implemented** (checked against the registered functions in `src/lua/`: wifi.scan, time.sync/set, fs.rename, system.mac/usb, gfx.qr, device.haptic/frontlight, zip.inflate, gfx.image, crypto, input.text, save_bmp, epub.meta, net). Open work is Tier 3, the parked hardware rows (BLE, COLOR gfx model, `device.wake_in`), app categories, and a real FAT clock (see below).
+**Status: every Tier 1 and Tier 2 row below is implemented** (checked against the registered functions in `src/lua/`: wifi.scan, time.sync/set, fs.rename, system.mac/usb, gfx.qr, device.haptic/frontlight, zip.inflate, gfx.image, crypto, input.text, save_bmp, epub.meta, net). Open work is Tier 3, the parked hardware rows (BLE, COLOR gfx model, `device.wake_in`), and app categories.
 
 | primitive | unlocks | notes / where it comes from |
 |---|---|---|
@@ -31,6 +31,11 @@ Lua heap). Verdicts in the per-fork files; here only the gaps.
 | `input.text()` modal keyboard (sub-activity, like the WiFi picker) | search/forms in apps: biscuit password manager, Grimoire settings UI | `KeyboardEntryActivity` exists; same parked-VM pattern as `wifi.connect`. |
 | `gfx.save_bmp(path)` (screenshot from inside an app) | tests, bug reports, sharing | **done**: binds `ScreenshotUtil::saveFramebufferAsBmp` (streams, no heap). 240 ms, pixel-identical round trip on the X4, 7 mutants caught. |
 | `epub.meta(path)` → `{title, author}` (no layout) | AvesO3 library, "about this book" apps | **done**: binds the firmware's `Epub::loadMetadata` (metadata-only OPF parse, no cache). Language is not exposed (that parse path does not return it). Measured on the X4: ~17 ms, ~55 KB heap peak, no leak; 10 mutants caught. |
+
+## Principle: touch upstream as little as possible (decided with Angel)
+New features live in CrossLua-owned files (`src/lua/`, `src/activities/plugins/LuaAppActivity.*`, `lib/lua/`) and call existing SDK/firmware APIs
+read-only. An edit to an upstream-owned file needs a reason that cannot be met inside our files, is `#ifdef`-gated when it is dev-only, and is
+logged in `UPSTREAM_TOUCHPOINTS.md`. Rejected on this basis: setting the FAT clock (`HalStorage`) just to make `fs.stat().mtime` real.
 
 ## Principle: CrossPoint is not only the X4 (decided with Angel)
 Build the feature for every board the firmware supports, even when the X4 (our only test device) lacks the hardware.
@@ -106,7 +111,7 @@ with a `Bearer` token). Audit of what `http.request` could do before this work: 
   confirmation listing the grants in plain words; approval stored in a hidden firmware-owned file (re-prompt when an
   update widens the grants). Hidden/dot paths and firmware images are NEVER grantable; `/plugins` (other apps' code) needs a
   separate louder warning. Enables `sd:` writes + `http save_to sd:Books/..`, `fs.rename/remove` inside grants, `app.open(path)`
-  (reader today; text/image viewers later). File-browser apps additionally needed `fs.stat` / detailed `fs.list` (size, type, mtime): **done** (`fs.stat`, `fs.list{detail,offset,limit}`; host-tested, 26 mutants; verified on the X4). Open: the firmware sets no FAT clock, so device-created files all carry one default stamp.
+  (reader today; text/image viewers later). File-browser apps additionally needed `fs.stat` / detailed `fs.list` (size, type, mtime): **done** (`fs.stat`, `fs.list{detail,offset,limit}`; host-tested, 26 mutants; verified on the X4). Not planned (decided with Angel): a FAT clock, so device-created files keep one default stamp.
 
 ## Also requested by Angel, scheduled for later
 - **`app.restart(entry)` (implemented, host-tested, 6 mutants; verified on the X4 via the Grimoire launcher -> run.lua -> launcher round trip)** — the app quits itself and is relaunched immediately with a different entry script (`main.lua` by
