@@ -7,6 +7,7 @@
 #include <Buzzer.h>
 #include <Microphone.h>
 #include <SecureClient.h>
+#include <SecureHttpClient.h>
 #include <EnvironmentSensor.h>
 #include <Epub.h>
 #include <functional>
@@ -809,18 +810,86 @@ class LuaAppActivity::Backend final : public crosslua::Backend {
 
     WifiPowerSaveGuard psGuard;
     const std::string url(rq.url);
-    if (!strcmp(rq.method, "POST")) {
-      std::string out;
-      int st = 0;
-      const bool ok = HttpDownloader::postForm(url, std::string(rq.body ? rq.body : "", rq.bodyLen), out, &st);
-      (void)ok;
-      rs.status = st;
-      if (st == 0) return fail("request failed (no response)");
-      rs.bodyLen = std::min(out.size(), rq.maxBody);
-      rs.bytes = rs.bodyLen;
-      rs.body = static_cast<char*>(malloc(rs.bodyLen ? rs.bodyLen : 1));
-      if (!rs.body) return fail("out of memory");
-      memcpy(rs.body, out.data(), rs.bodyLen);
+    // Everything but a plain GET goes through SecureHttpClient: it sends ANY method with the caller's headers (the old
+    // form-POST helper dropped them, so no Authorization header could ever reach a service), can pin a certificate, and
+    // keeps the response headers. A plain GET (and every save_to download) keeps the long-verified HttpDownloader path.
+    if (strcmp(rq.method, "GET") != 0 || rq.caPem || rq.wantHeaders) {
+      freeink::SecureHttpClient http;
+      http.setUserAgent("CrossPoint");
+      std::string ca;  // SecureHttpClient keeps the pointer: it must outlive the request
+      if (rq.caPem) {
+        ca = rq.caPem;
+        http.setCACert(ca.c_str());
+      } else {
+        http.setInsecure();  // the documented default: encrypted, server not authenticated
+      }
+      http.setTimeout(30000);
+      if (!http.begin(url)) return fail("cannot parse the url");
+      for (int i = 0; i < rq.headerCount; i++) http.addHeader(rq.headers[i].name, rq.headers[i].value);
+      if (rq.contentType) http.addHeader("Content-Type", rq.contentType);
+      if (!strcmp(rq.method, "GET")) http.setFollowRedirects(3);  // like the plain GET path; other methods return the 3xx as is
+      char* buf = nullptr;
+      size_t n = 0, cap = 0;
+      bool tooBig = false, oom = false;
+      const int st = http.sendRequest(
+          rq.method, reinterpret_cast<const uint8_t*>(rq.body ? rq.body : ""), rq.bodyLen,
+          [&](const uint8_t* d, size_t len) {
+            if (pollCancel()) return false;
+            if (n + len > rq.maxBody) {
+              tooBig = true;
+              return false;
+            }
+            if (n + len > cap) {
+              size_t nc = cap ? cap * 2 : 2048;
+              while (nc < n + len) nc *= 2;
+              if (nc > rq.maxBody) nc = rq.maxBody;
+              char* nb = static_cast<char*>(realloc(buf, nc));
+              if (!nb) {
+                oom = true;
+                return false;
+              }
+              buf = nb;
+              cap = nc;
+            }
+            memcpy(buf + n, d, len);
+            n += len;
+            return true;
+          },
+          [&]() { return pollCancel(); });
+      rs.status = st > 0 ? st : 0;
+      if (cancelled) {
+        free(buf);
+        return finishCancel();
+      }
+      if (tooBig) {
+        free(buf);
+        return fail("response larger than max_body (%u bytes): use save_to", (unsigned)rq.maxBody);
+      }
+      if (oom) {
+        free(buf);
+        return fail("out of memory while reading the response");
+      }
+      if (st <= 0 || !http.responseComplete()) {
+        free(buf);
+        return fail(rq.caPem ? "request failed (no response, or the server certificate does not match ca)"
+                             : "request failed (no response)");
+      }
+      rs.body = buf;
+      rs.bodyLen = rs.bytes = n;
+      if (rq.wantHeaders) {  // "Name: value\n" lines, capped at 4 KB (the binding parses and lower-cases them)
+        std::string block;
+        for (const auto& h : http.getHeaders()) {
+          if (block.size() + h.first.size() + h.second.size() + 3 > 4096) break;
+          block += h.first;
+          block += ": ";
+          block += h.second;
+          block += '\n';
+        }
+        rs.headers = static_cast<char*>(malloc(block.size() ? block.size() : 1));
+        if (!rs.headers) return fail("out of memory while reading the response headers");
+        memcpy(rs.headers, block.data(), block.size());
+        rs.headersLen = block.size();
+      }
       return true;
     }
     if (rq.savePath) {

@@ -193,16 +193,7 @@ int net_connect(lua_State* L) {
     }
     char* pem = nullptr;  // Lua-heap userdata: budget-accounted, freed with the VM even if a later step raises
     if (caSpec) {
-      char path[MAX_PATH_LEN + 80];
-      Scope sc;
-      const char* perr = nullptr;
-      if (!resolvePath(be(L), caSpec, path, sizeof(path), &sc, &perr)) return pushFail(L, perr);
-      const int64_t sz = be(L).fsSize(path);
-      if (sz == -1) return pushFail(L, "ca file not found");
-      if (sz < CA_MIN_BYTES || sz > CA_MAX_BYTES) return pushFail(L, "ca file must be a PEM of 32..8192 bytes");
-      pem = static_cast<char*>(lua_newuserdata(L, static_cast<size_t>(sz) + 1));
-      if (!be(L).fsReadInto(path, pem, static_cast<size_t>(sz), 0)) return pushFail(L, "cannot read the ca file");
-      pem[sz] = '\0';
+      if (int r = loadCa(L, caSpec, &pem)) return r;
     }
     slot = be(L).netConnectTls(host, static_cast<int>(port), static_cast<int>(timeout), pem, err, sizeof(err));
   }
@@ -494,6 +485,20 @@ void registerSock(lua_State* L, Ctx* c) {
                                  {"mdns_query", net_mdns_query},
                                  {nullptr, nullptr}};
   regTable(L, c, "net", fns);
+}
+
+int loadCa(lua_State* L, const char* spec, char** pem) {
+  char path[MAX_PATH_LEN + 80];
+  Scope sc;
+  const char* perr = nullptr;
+  if (!resolvePath(be(L), spec, path, sizeof(path), &sc, &perr)) return pushFail(L, perr);
+  const int64_t sz = be(L).fsSize(path);
+  if (sz == -1) return pushFail(L, "ca file not found");
+  if (sz < CA_MIN_BYTES || sz > CA_MAX_BYTES) return pushFail(L, "ca file must be a PEM of 32..8192 bytes");
+  *pem = static_cast<char*>(lua_newuserdata(L, static_cast<size_t>(sz) + 1));
+  if (!be(L).fsReadInto(path, *pem, static_cast<size_t>(sz), 0)) return pushFail(L, "cannot read the ca file");
+  (*pem)[sz] = '\0';
+  return 0;
 }
 
 }  // namespace crosslua

@@ -148,11 +148,11 @@ struct MockBackend : Backend {
     return true;
   }
   // ---- network mock: scripted responses, records what reached the backend --------------------------------------
-  struct FakeResp { int status = 200; std::string body; std::string error; };
+  struct FakeResp { int status = 200; std::string body; std::string error; std::string headers; /* raw "Name: value\n" lines */ };
   std::map<std::string, FakeResp> routes;  // by full url
   bool net = true, wifiUp = false, wifiAsked = false;
   size_t largest = 100000;
-  struct SeenReq { std::string method, url, body, savePath; std::vector<std::pair<std::string, std::string>> headers; size_t maxBody = 0; };
+  struct SeenReq { std::string method, url, body, savePath, contentType, ca; bool hasContentType = false, hasCa = false, wantHeaders = false; std::vector<std::pair<std::string, std::string>> headers; size_t maxBody = 0; };
   std::vector<SeenReq> seen;
   bool netAllowed() override { return net; }
 
@@ -412,6 +412,8 @@ struct MockBackend : Backend {
     SeenReq r;
     r.method = rq.method; r.url = rq.url; r.body = std::string(rq.body ? rq.body : "", rq.bodyLen);
     r.savePath = rq.savePath ? rq.savePath : ""; r.maxBody = rq.maxBody;
+    r.hasContentType = rq.contentType != nullptr; r.contentType = rq.contentType ? rq.contentType : "";
+    r.hasCa = rq.caPem != nullptr; r.ca = rq.caPem ? rq.caPem : ""; r.wantHeaders = rq.wantHeaders;
     for (int i = 0; i < rq.headerCount; i++) r.headers.emplace_back(rq.headers[i].name, rq.headers[i].value);
     seen.push_back(r);
     if (!wifiUp) { snprintf(res.error, sizeof(res.error), "wifi is not connected (call wifi.connect() first)"); return false; }
@@ -428,6 +430,11 @@ struct MockBackend : Backend {
     res.body = (char*)malloc(f.body.size() ? f.body.size() : 1);  // like the firmware: malloc'd, the caller frees
     memcpy(res.body, f.body.data(), f.body.size());
     res.bodyLen = res.bytes = f.body.size();
+    if (rq.wantHeaders) {
+      res.headers = (char*)malloc(f.headers.size() ? f.headers.size() : 1);
+      memcpy(res.headers, f.headers.data(), f.headers.size());
+      res.headersLen = f.headers.size();
+    }
     return true;
   }
   // ---- library mock: fake zips (path -> entries), sd: permission, open_book ------------------------------------
@@ -1519,7 +1526,7 @@ int main() {
       print(http.get("http://h/missing"))
       print(http.get("http://h/a", {max_body = 3}))
       print(http.get("ftp://h/a")); print(http.get("file:///etc/passwd")); print(http.get("http://" .. ("a"):rep(700)))
-      print(http.request{url = "http://h/a", method = "PUT"})
+      print(http.request{url = "http://h/a", method = "TRACE"})
       print(http.request{url = "http://h/a", body = "x"})
       print(http.request{url = "http://h/a", headers = {["X"] = "a\r\nInjected: 1"}})
       print(http.request{url = "http://h/a", headers = {["Bad:Name"] = "v"}})
@@ -1538,7 +1545,7 @@ int main() {
         "200\ttrue\t5\thello", "{\"x\":1}", "404\tfalse\tnope", "nil\tconnection reset", "200",
         "nil\trequest failed (no response)", "nil\tresponse larger than max_body (3 bytes): use save_to",
         "nil\tonly http:// and https:// urls are allowed", "nil\tonly http:// and https:// urls are allowed", "nil\turl too long",
-        "nil\tmethod must be GET or POST", "nil\ta GET request cannot have a body", "nil\tillegal header", "nil\tillegal header",
+        "nil\tmethod must be GET, POST, PUT, PATCH or DELETE", "nil\ta GET request cannot have a body", "nil\tillegal header", "nil\tillegal header",
         "nil\theaders must be a table of string = string",
         "nil\tmax_body must be 1..65536 (use save_to for bigger responses)", "nil\tmax_body must be 1..65536 (use save_to for bigger responses)",
         "nil\t'.' and '..' are not allowed", "nil\tsave_to must be a data: path", "nil\tabsolute paths are not allowed",
@@ -4701,6 +4708,166 @@ int main() {
         if (be.logs[i] != want[i]) printf("    opt #%zu got '%s' want '%s'\n", i + 1, be.logs[i].c_str(), want[i]);
       }
       CHECK(be.statCalls == 1);  // only the valid detail call at the end asked about its one entry
+    }
+  }
+  {
+    TEST("http: REST/JSON: methods, content_type (form default), headers on POST, ca pinning, response headers, strict validation");
+    const char* PEM = "-----BEGIN CERTIFICATE-----\nMIIBFAKEFAKEFAKEFAKEFAKEFAKEFAKEFAKEFAKE\n-----END CERTIFICATE-----\n";
+    {
+      MockBackend be;
+      be.wifiUp = true;
+      be.files["/plugins/test/ca.pem"] = PEM;
+      be.files["/plugins/test/tiny.pem"] = "x";
+      be.routes["https://ha/api/services/light/turn_on"] = {200, "[]", "", "Content-Type: application/json\r\nX-Rate: 5\r\nset-cookie: a=1\r\nSet-Cookie:   b=2  \r\nNoColonLine\r\n:empty\r\nX-Spaces:\t v \r\n"};
+      be.routes["https://ha/api/states/light.x"] = {200, "{}", ""};
+      be.routes["http://h/plain"] = {200, "ok", ""};
+      LuaVm vm;
+      CHECK(vm.open(256 * 1024));
+      registerApi(vm, be);
+      const char* script = R"LUA(
+        local H = {Authorization = "Bearer abc"}
+        local r = http.request{url = "https://ha/api/services/light/turn_on", method = "POST", headers = H,
+                               body = '{"entity_id":"light.x"}', content_type = "application/json", ca = "app:ca.pem", response_headers = true}
+        print(r.status, r.ok, r.body)
+        local h = r.headers
+        print(h["content-type"], h["x-rate"], h["set-cookie"], h["x-spaces"], h["nocolonline"], h[""], h["authorization"])
+        for _, m in ipairs{"PUT", "PATCH"} do print(http.request{url = "http://h/plain", method = m, body = "a=1"}.status) end
+        print(http.request{url = "http://h/plain", method = "DELETE"}.status)
+        print(http.request{url = "http://h/plain", method = "DELETE", body = "x"})
+        print(http.request{url = "http://h/plain", method = "POST"}.status)
+        r = http.request{url = "https://ha/api/states/light.x"}
+        print(r.status, r.headers)
+        r = http.request{url = "https://ha/api/states/light.x", response_headers = false}
+        print(r.headers)
+      )LUA";
+      CHECK(vm.load("t", script, strlen(script)));
+      CHECK(run(vm, be, 400000) == Status::Finished);
+      const char* want[] = {"200\ttrue\t[]",
+                            "application/json\t5\ta=1, b=2\tv\tnil\tnil\tnil",
+                            "200", "200", "200",
+                            "nil\ta DELETE request cannot have a body",
+                            "200",
+                            "200\tnil", "nil"};
+      const size_t N = sizeof(want) / sizeof(want[0]);
+      if (be.logs.size() != N || getenv("DUMP_LOGS")) for (size_t i = 0; i < be.logs.size(); i++) printf("    rest log[%zu] '%s'\n", i, be.logs[i].c_str());
+      CHECK(be.logs.size() == N);
+      for (size_t i = 0; i < N && i < be.logs.size(); i++) {
+        CHECK(be.logs[i] == want[i]);
+        if (be.logs[i] != want[i]) printf("    rest #%zu got '%s' want '%s'\n", i + 1, be.logs[i].c_str(), want[i]);
+      }
+      // what the backend was handed: the POST carries its Authorization header, the JSON content type and the pinned PEM
+      CHECK(be.seen.size() == 7);
+      if (be.seen.size() == 7) {
+        const auto& p = be.seen[0];
+        CHECK(p.method == "POST" && p.body == "{\"entity_id\":\"light.x\"}" && p.hasContentType && p.contentType == "application/json");
+        CHECK(p.hasCa && p.ca == PEM && p.wantHeaders && p.headers.size() == 1 && p.headers[0].first == "Authorization");
+        CHECK(be.seen[1].method == "PUT" && be.seen[1].contentType == "application/x-www-form-urlencoded" && !be.seen[1].hasCa && !be.seen[1].wantHeaders);
+        CHECK(be.seen[2].method == "PATCH" && be.seen[2].hasContentType);
+        CHECK(be.seen[3].method == "DELETE" && !be.seen[3].hasContentType);  // no body, no content type
+        CHECK(be.seen[4].method == "POST" && be.seen[4].body.empty() && !be.seen[4].hasContentType);  // no body, no content type
+        CHECK(!be.seen[5].hasCa && !be.seen[5].wantHeaders && !be.seen[5].hasContentType);
+        CHECK(!be.seen[6].wantHeaders);
+      }
+    }
+    {
+      MockBackend be;  // response header caps: 48 distinct names kept, a name up to 400 bytes is kept, 401 is dropped
+      be.wifiUp = true;
+      std::string hs;
+      for (int i = 0; i < 60; i++) { char l[32]; snprintf(l, sizeof(l), "H%02d: v\n", i); hs += l; }
+      be.routes["http://h/many"] = {200, "x", "", hs};
+      be.routes["http://h/names"] = {200, "x", "", std::string(400, 'B') + ": ok\n" + std::string(401, 'C') + ": no\n"};
+      LuaVm vm;
+      CHECK(vm.open(256 * 1024));
+      registerApi(vm, be);
+      const char* script = R"LUA(
+        local n = 0
+        for _ in pairs(http.request{url = "http://h/many", response_headers = true}.headers) do n = n + 1 end
+        print(n)
+        local h = http.request{url = "http://h/names", response_headers = true}.headers
+        print(h[("b"):rep(400)], h[("c"):rep(401)])
+      )LUA";
+      CHECK(vm.load("t", script, strlen(script)));
+      CHECK(run(vm, be, 400000) == Status::Finished);
+      CHECK(be.logs.size() == 2 && be.logs[0] == "48" && be.logs[1] == "ok\tnil");
+    }
+    {
+      MockBackend be;  // the response-header buffer is freed on every call (300 requests so LeakSanitizer cannot miss a leak)
+      be.wifiUp = true;
+      be.routes["http://h/leak"] = {200, "body", "", "X-A: 1\nX-B: 2\nX-C: 3\nX-D: 4\nX-E: 5\nX-F: 6\n"};
+      LuaVm vm;
+      CHECK(vm.open(256 * 1024));
+      registerApi(vm, be);
+      const char* script = R"LUA(
+        local r = http.request{url = "http://h/leak", response_headers = true}  -- warm up: lazy registration, interned strings
+        collectgarbage()
+        for i = 1, 300 do r = http.request{url = "http://h/leak", response_headers = true} end
+        r = nil
+        collectgarbage()
+        print("done")
+      )LUA";
+      CHECK(vm.load("t", script, strlen(script)));
+      CHECK(run(vm, be, 4000000) == Status::Finished);
+      CHECK(be.logs.size() == 1 && be.logs[0] == "done");
+      // No byte counter here: ASAN replaces malloc, so mallinfo is blind. 300 requests make a missing free() a wall of
+      // LeakSanitizer reports (304 leaked allocations when the free is removed), which the run script turns into exit code 1.
+    }
+    {
+      MockBackend be;  // validation: nothing invalid reaches the backend
+      be.wifiUp = true;
+      be.files["/plugins/test/ca.pem"] = PEM;
+      be.files["/plugins/test/tiny.pem"] = "x";
+      be.routes["https://h/a"] = {200, "x", ""};
+      be.routes["http://h/a"] = {200, "x", ""};
+      LuaVm vm;
+      CHECK(vm.open(256 * 1024));
+      registerApi(vm, be);
+      const char* script = R"LUA(
+        local function try(t) local ok, a, b = pcall(http.request, t) print(ok, a, b) end
+        try{url = "http://h/a", method = "POST", body = "x", content_type = 5}
+        try{url = "http://h/a", method = "POST", body = "x", content_type = ""}
+        try{url = "http://h/a", method = "POST", body = "x", content_type = ("a"):rep(101)}
+        try{url = "http://h/a", method = "POST", body = "x", content_type = "a\r\nB: c"}
+        try{url = "http://h/a", content_type = "application/json"}
+        try{url = "http://h/a", method = "POST", body = "x", headers = {["content-TYPE"] = "text/plain"}}
+        try{url = "http://h/a", headers = {["Content-Type"] = "text/plain"}}
+        try{url = "http://h/a", response_headers = "yes"}
+        try{url = "https://h/a", ca = 5}
+        try{url = "http://h/a", ca = "app:ca.pem"}
+        try{url = "https://h/a", ca = "app:missing.pem"}
+        try{url = "https://h/a", ca = "app:tiny.pem"}
+        try{url = "https://h/a", ca = "app:ca.pem", save_to = "data:x"}
+        try{url = "http://h/a", response_headers = true, save_to = "data:x"}
+        try{url = "http://h/a", method = "PUT", body = "x", save_to = "data:x"}
+        try{url = "http://h/a", method = "put"}
+      )LUA";
+      CHECK(vm.load("t", script, strlen(script)));
+      CHECK(run(vm, be, 400000) == Status::Finished);
+      const char* want[] = {
+          "false\tbad argument #1 to '?' (content_type must be a string)\tnil",
+          "true\tnil\tillegal content_type", "true\tnil\tillegal content_type", "true\tnil\tillegal content_type",
+          "true\tnil\tcontent_type needs a body",
+          "true\tnil\tset content_type instead of a Content-Type header",
+          "true\ttable: ADDR\tnil",  // a Content-Type header on a bodiless GET is allowed
+          "false\tbad argument #1 to '?' (response_headers must be a boolean)\tnil",
+          "false\tbad argument #1 to '?' (ca must be a path string)\tnil",
+          "true\tnil\tca only applies to https:// urls",
+          "true\tnil\tca file not found",
+          "true\tnil\tca file must be a PEM of 32..8192 bytes",
+          "true\tnil\tsave_to cannot be combined with ca or response_headers yet",
+          "true\tnil\tsave_to cannot be combined with ca or response_headers yet",
+          "true\tnil\tsave_to is only supported for GET",
+          "true\tnil\tmethod must be GET, POST, PUT, PATCH or DELETE"};
+      const size_t N = sizeof(want) / sizeof(want[0]);
+      if (be.logs.size() != N || getenv("DUMP_LOGS")) for (size_t i = 0; i < be.logs.size(); i++) printf("    resterr log[%zu] '%s'\n", i, be.logs[i].c_str());
+      CHECK(be.logs.size() == N);
+      for (size_t i = 0; i < N && i < be.logs.size(); i++) {
+        std::string got = be.logs[i];
+        const size_t a = got.find("table: 0x");
+        if (a != std::string::npos) got = got.substr(0, a) + "table: ADDR" + got.substr(got.find('\t', a));
+        CHECK(got == want[i]);
+        if (got != want[i]) printf("    resterr #%zu got '%s' want '%s'\n", i + 1, got.c_str(), want[i]);
+      }
+      CHECK(be.seen.size() == 1);  // only the bodiless GET with a Content-Type header got through
     }
   }
   printf(g_fail ? "\n%d FAILED\n" : "\nALL PASSED\n", g_fail);

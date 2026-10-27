@@ -21,7 +21,7 @@ M = [
  ('TL10 missing ca file not reported', 'if (sz == -1) return pushFail(L, "ca file not found");', ''),
  ('TL11 ca max grows by one', 'CA_MAX_BYTES = 8192', 'CA_MAX_BYTES = 8193'),
  ('TL12 ca min shrinks', 'CA_MIN_BYTES = 32', 'CA_MIN_BYTES = 1'),
- ('TL13 ca not NUL terminated', "pem[sz] = '\\0';", ''),
+ ('TL13 ca not NUL terminated', "(*pem)[sz] = '\\0';", ''),
  ('TL14 kind 4 not accepted as TCP', '(kind == 1 && k == 4)', '(false)'),
  ('TL15 ca type check removed', 'if (lua_type(L, -1) != LUA_TSTRING) return luaL_argerror(L, 3, "ca must be a path string");', ''),
  ('TL16 ca not passed to the backend', 'be(L).netConnectTls(host, static_cast<int>(port), static_cast<int>(timeout), pem,', 'be(L).netConnectTls(host, static_cast<int>(port), static_cast<int>(timeout), nullptr,'),

@@ -62,6 +62,9 @@ void registerMic(lua_State* L, Ctx* c);
 // On failure pushes nil,msg and returns false. ensureParentDir creates the parent folder (recursive) when missing.
 bool writePathArg(lua_State* L, int i, char* out, size_t cap);
 bool ensureParentDir(Backend& b, const char* path);
+// Loads a PEM trust anchor (`ca=` option of net.connect{tls=true} and http.request) through the read sandbox into a Lua-heap
+// userdata that stays on the stack. 0 = ok (*pem is NUL-terminated); otherwise pushes nil,msg and returns 2.
+int loadCa(lua_State* L, const char* spec, char** pem);
 void registerGfxSaveBmp(lua_State* L);  // adds gfx.save_bmp / gfx.image to the eager gfx table (they must not wait for fs/zip)
 void registerGfxImage(lua_State* L);
 

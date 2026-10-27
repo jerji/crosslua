@@ -75,14 +75,15 @@ with a `Bearer` token). Audit of what `http.request` could do before this work: 
 
 | need | status | notes |
 |---|---|---|
-| POST with a JSON body | to do | `http.request` POST is hard-wired to `application/x-www-form-urlencoded`. Add `content_type`; a `Content-Type` header together with a body is refused (use the option) |
-| custom headers on POST | to do (**bug**) | the POST path (`HttpDownloader::postForm`) silently DROPS the caller's headers, so no `Authorization` header can reach a service call. Route POST through `SecureHttpClient`, which sends them |
-| methods PUT / PATCH / DELETE | to do | HA and most REST APIs use them; `SecureHttpClient::sendRequest` takes any method |
-| certificate pinning for `http.request` (`ca=`) | to do | same `ca=` PEM rule as `net.connect{tls=true}`. An HA token is effectively admin, so the default "encrypted but unauthenticated" is a real risk. Default stays unverified for compatibility; documented |
-| response headers (`response_headers=true`) | to do | opt-in table (lower-case names; duplicates joined with `, `): rate limits, `Location`, `ETag`, `Retry-After` |
+| POST with a JSON body | **done** (host-tested; verified on the X4) | `http.request` POST is hard-wired to `application/x-www-form-urlencoded`. Add `content_type`; a `Content-Type` header together with a body is refused (use the option) |
+| custom headers on POST | **done** (was a bug; verified on the X4: the server saw `Authorization` on a POST) | the POST path (`HttpDownloader::postForm`) silently DROPS the caller's headers, so no `Authorization` header can reach a service call. Route POST through `SecureHttpClient`, which sends them |
+| methods PUT / PATCH / DELETE | **done** (verified on the X4) | HA and most REST APIs use them; `SecureHttpClient::sendRequest` takes any method |
+| certificate pinning for `http.request` (`ca=`) | **done** (verified on the X4: pinned CA accepted, wrong CA refused) | same `ca=` PEM rule as `net.connect{tls=true}`. An HA token is effectively admin, so the default "encrypted but unauthenticated" is a real risk. Default stays unverified for compatibility; documented |
+| response headers (`response_headers=true`) | **done** (verified on the X4) | opt-in table (lower-case names; duplicates joined with `, `): rate limits, `Location`, `ETag`, `Retry-After` |
 | `save_to` with POST / `ca=` / response headers | parked | the file path keeps the existing GET-only downloader; combining is refused with a clear message |
 | secret store for tokens | parked | `data:` is already private per app; an encrypted-at-rest store needs a device key and a native approval flow: later |
 | WebSocket client (HA push events), MQTT client | parked (library, not native) | doable in Lua over `net.connect{tls=true}` (handshake needs SHA-1 + base64: check `crypto`/`json` first). Plain polling covers a control panel |
+| RAM headroom while a TLS request runs | **constraint measured on the X4** | ~46 KB free after `wifi.connect()` vs the 40 KB a TLS session needs: the app can hold ~5 KB of Lua data per request (the handshake dips to ~4-5 KB free). Apps must drop tables + `collectgarbage()` first. Possible later work: `wifi.connect` variants that reserve less, or a lighter handshake (ECDSA-only pinning); not started |
 | long-lived polling / background tasks | not planned | a request blocks the device and a TLS handshake peaks near 39 KB of RAM: a control panel is tap-driven, not a dashboard that refreshes every few seconds |
 
 ## Tier 3 — later / niche / heavy

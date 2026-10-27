@@ -1,4 +1,4 @@
-# CrossLua app API (v0.21)
+# CrossLua app API (v0.22)
 
 An app is a plugin folder containing `main.lua`, in any plugin root
 (`/plugins`, `/.plugins`, `/.crosspoint/plugins`):
@@ -171,8 +171,18 @@ An app must declare it in `manifest.json`, or every call below fails with a clea
 | `http.request{url, method, headers, body, save_to, max_body}` → `{status, ok, bytes, body}` \| nil, err | see below |
 | `http.get(url [, opts])` | `http.request` with `url` filled in |
 
-`http.request` fields: `url` (`http://` or `https://`, ≤ 600 chars); `method` `"GET"` (default) or `"POST"` (body is sent as
-`application/x-www-form-urlencoded`, ≤ 8 KB, response ≤ a few KB); `headers` = `{Name = "value"}` (≤ 12; CR/LF/`:` rejected);
+`http.request` fields: `url` (`http://` or `https://`, ≤ 600 chars); `method` `"GET"` (default), `"POST"`, `"PUT"`, `"PATCH"` or
+`"DELETE"`; `body` (≤ 8 KB, POST/PUT/PATCH only: a GET or DELETE with a body is refused) is sent as **`content_type`** (≤ 100 chars,
+needs a body; default `application/x-www-form-urlencoded`), so a JSON service call is
+`http.request{url = u, method = "POST", headers = {Authorization = "Bearer " .. token}, body = json.encode(t), content_type = "application/json"}`;
+a `Content-Type` header together with a body is refused (use `content_type`). `headers` = `{Name = "value"}` (≤ 12; CR/LF/`:` rejected;
+**sent on every method**: POST used to drop them, so no `Authorization` header could reach a service);
+**`ca = "app:ca.pem"`** pins the server: the https certificate must chain to that PEM (32..8192 bytes, readable scope), otherwise
+`nil, "request failed (no response, or the server certificate does not match ca)"`; `ca` on a plain `http://` url is refused;
+**`response_headers = true`** adds `result.headers`, a table with lower-case names (a repeated header such as `Set-Cookie` is joined
+with `, `; at most 48 headers, names up to 400 bytes, 4 KB in total). The method/`ca`/`response_headers` options run on the SDK
+`SecureHttpClient` (a plain GET and every `save_to` download keep the original downloader; `save_to` only works for GET and cannot be
+combined with `ca` or `response_headers`). A response over `max_body` is an error for every method (the old form POST silently cut it).
 `max_body` (1…65536, default 16384) caps an **in-memory** response; `save_to = "data:path"` streams the response to a file instead
 (no size limit but the card; the result has no `body`; read it back with `fs.read(path, offset, len)`).
 A non-2xx status is a result (`ok = false`), not an error. Errors (`nil, msg`): not connected, DNS/connect/TLS failure, response
@@ -183,9 +193,12 @@ larger than `max_body`, not enough RAM for TLS, user pressed **Back** (`"cancell
 * **HTTPS is encrypted but the server certificate is NOT verified.** CrossPoint's HTTP stack calls `setInsecure()` everywhere
   (the wolfSSL transport has no CA bundle wired up), so a machine on your network path can impersonate the server. Never send
   secrets you would not send over plain HTTP on that network; treat responses as untrusted input. (Planned: optional
-  certificate pinning via a PEM shipped with the app, using `SecureHttpClient::setCACert`.) TLS needs ≥ 40 KB free RAM **and** a ≥ 20 KB contiguous block; otherwise the
-  call fails with `not enough free RAM for TLS (free N, largest M)`. `system.heap()` returns `free, min_free, largest_block`;
-  keep your Lua heap small in network apps (`collectgarbage()` first).
+  certificate pinning: pass `ca=` (above).) **Without `ca` an https request is encrypted but unauthenticated: never put a token you care
+  about (a Home Assistant long-lived token is admin) in a request without `ca`.** TLS needs ≥ 40 KB free RAM **and** a ≥ 20 KB contiguous
+  block; otherwise the call fails with `not enough free RAM for TLS (free N, largest M)`. Measured on the X4: right after
+  `wifi.connect()` only ~46 KB is free, so **an app can hold only ~5 KB of Lua data when it makes a TLS request**; the handshake
+  itself dips to ~4-5 KB free (low-water mark) with a pinned certificate. Drop your tables, `collectgarbage()`, then request (repeating
+  requests do not leak: 0 bytes of drift over 5 on the device). `system.heap()` returns `free, min_free, largest_block`.
 * After WiFi was used, leaving the app does a **silent reboot** to Home (the same defragmentation every WiFi screen does).
 * Redirects, `Content-Length` checks and `.part` staging for downloads are done by CrossPoint's `HttpDownloader`.
 

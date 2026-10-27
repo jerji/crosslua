@@ -89,7 +89,7 @@ class Backend {
     const char* value;
   };
   struct HttpRequest {
-    const char* method;  // "GET" or "POST" (POST = application/x-www-form-urlencoded body)
+    const char* method;  // "GET", "POST", "PUT", "PATCH" or "DELETE"
     const char* url;
     const HttpHeader* headers;
     int headerCount;
@@ -97,6 +97,9 @@ class Backend {
     size_t bodyLen;
     const char* savePath;  // absolute SD path to stream the response to, or nullptr = return it in memory
     size_t maxBody;        // in-memory response cap (bytes)
+    const char* contentType = nullptr;  // Content-Type of the body (set whenever a body is sent), else nullptr
+    const char* caPem = nullptr;        // verify the https server against this PEM; nullptr = unverified (the default)
+    bool wantHeaders = false;           // return the response headers in HttpResult::headers
   };
   struct HttpResult {
     int status = 0;            // final HTTP status, 0 when no response arrived
@@ -104,6 +107,8 @@ class Backend {
     size_t bodyLen = 0;
     size_t bytes = 0;          // bytes received (save mode: bytes written)
     char error[96] = {0};      // set when the call failed (no/aborted response)
+    char* headers = nullptr;   // malloc'd "Name: value\n" lines (<= 4 KB), freed by the caller; only when wantHeaders
+    size_t headersLen = 0;
   };
   virtual bool netAllowed() = 0;  // the app's manifest declares "network"
 

@@ -21,6 +21,8 @@ constexpr size_t NET_MIN_FREE_BYTES_PLAIN = 80 * 1024;
 constexpr size_t MAX_URL = 600;
 constexpr int MAX_HEADERS = 12;
 constexpr size_t MAX_HEADER_LEN = 400;
+constexpr size_t MAX_CONTENT_TYPE_LEN = 100;
+constexpr int MAX_RESPONSE_HEADERS = 48;  // distinct headers kept from a response (the backend already caps the block at 4 KB)
 constexpr size_t MAX_POST_BODY = 8 * 1024;
 constexpr size_t DEFAULT_MAX_BODY = 16 * 1024;
 constexpr size_t HARD_MAX_BODY = 64 * 1024;
@@ -153,13 +155,56 @@ int push_response(lua_State* L) {
   }
   lua_pushboolean(L, p->res->status >= 200 && p->res->status < 300);
   lua_setfield(L, -2, "ok");
+  if (p->res->headers) {  // response_headers=true: lower-case names, duplicates joined with ", " (RFC 9110 5.3)
+    lua_createtable(L, 0, 8);
+    const int ht = lua_gettop(L);
+    const char* line = p->res->headers;
+    const char* end = p->res->headers + p->res->headersLen;
+    int count = 0;
+    while (line < end && count < MAX_RESPONSE_HEADERS) {
+      const char* nl = static_cast<const char*>(memchr(line, '\n', static_cast<size_t>(end - line)));
+      const char* lineEnd = nl ? nl : end;
+      const char* colon = static_cast<const char*>(memchr(line, ':', static_cast<size_t>(lineEnd - line)));
+      if (colon && colon > line && static_cast<size_t>(colon - line) <= MAX_HEADER_LEN) {
+        char name[MAX_HEADER_LEN + 1];
+        const size_t nlen = static_cast<size_t>(colon - line);
+        for (size_t i = 0; i < nlen; i++) name[i] = static_cast<char>(tolower(static_cast<unsigned char>(line[i])));
+        name[nlen] = '\0';
+        const char* v = colon + 1;
+        while (v < lineEnd && (*v == ' ' || *v == '\t')) v++;
+        const char* ve = lineEnd;
+        while (ve > v && (ve[-1] == '\r' || ve[-1] == ' ' || ve[-1] == '\t')) ve--;
+        lua_getfield(L, ht, name);
+        if (lua_isstring(L, -1)) {  // a repeated header: join (old, ", ", new)
+          lua_pushstring(L, ", ");
+          lua_pushlstring(L, v, static_cast<size_t>(ve - v));
+          lua_concat(L, 3);
+        } else {
+          lua_pop(L, 1);
+          lua_pushlstring(L, v, static_cast<size_t>(ve - v));
+        }
+        lua_setfield(L, ht, name);
+        count++;
+      }
+      line = nl ? nl + 1 : end;
+    }
+    lua_setfield(L, -2, "headers");
+  }
   return 1;
 }
 
 bool startsWithHttp(const char* u) { return !strncasecmp(u, "http://", 7) || !strncasecmp(u, "https://", 8); }
 
-// http.request{ url=, method="GET"|"POST", headers={name=value,...}, body=, save_to="data:path", max_body=N }
-//   -> { status=, ok=, bytes=, body= } | nil, err      (body is absent in save_to mode)
+bool methodOk(const char* m) {
+  return !strcmp(m, "GET") || !strcmp(m, "POST") || !strcmp(m, "PUT") || !strcmp(m, "PATCH") || !strcmp(m, "DELETE");
+}
+bool methodTakesBody(const char* m) { return !strcmp(m, "POST") || !strcmp(m, "PUT") || !strcmp(m, "PATCH"); }
+
+// http.request{ url=, method="GET"|"POST"|"PUT"|"PATCH"|"DELETE", headers={name=value,...}, body=, content_type=, ca=,
+//               response_headers=bool, save_to="data:path", max_body=N }
+//   -> { status=, ok=, bytes=, body=, headers= } | nil, err      (body is absent in save_to mode; headers only on request)
+// body is allowed for POST/PUT/PATCH and is sent as content_type (default application/x-www-form-urlencoded).
+// ca = "<PEM file>" verifies the https server against that certificate; without it the server is NOT authenticated.
 // A non-2xx status is NOT an error (you get status + body); transport failures, aborts (Back) and size-cap hits are.
 int http_request(lua_State* L) {
   if (!allowed(L)) return pushFail(L, DENIED);
@@ -172,13 +217,40 @@ int http_request(lua_State* L) {
 
   lua_getfield(L, 1, "method");
   const char* method = lua_isnil(L, -1) ? "GET" : luaL_checkstring(L, -1);
-  if (strcmp(method, "GET") && strcmp(method, "POST")) return pushFail(L, "method must be GET or POST");
+  if (!methodOk(method)) return pushFail(L, "method must be GET, POST, PUT, PATCH or DELETE");
 
   lua_getfield(L, 1, "body");
   size_t bodyLen = 0;
   const char* body = lua_isnil(L, -1) ? nullptr : luaL_checklstring(L, -1, &bodyLen);
   if (bodyLen > MAX_POST_BODY) return pushFail(L, "body too large");
-  if (body && !strcmp(method, "GET")) return pushFail(L, "a GET request cannot have a body");
+  if (body && !methodTakesBody(method)) {
+    char msg[48];
+    snprintf(msg, sizeof(msg), "a %s request cannot have a body", method);
+    return pushFail(L, msg);
+  }
+
+  lua_getfield(L, 1, "content_type");
+  const char* contentType = nullptr;
+  if (!lua_isnil(L, -1)) {
+    if (lua_type(L, -1) != LUA_TSTRING) return luaL_argerror(L, 1, "content_type must be a string");
+    contentType = lua_tostring(L, -1);
+    if (!body) return pushFail(L, "content_type needs a body");
+    const size_t cl = strlen(contentType);
+    if (cl == 0 || cl > MAX_CONTENT_TYPE_LEN || strpbrk(contentType, "\r\n")) return pushFail(L, "illegal content_type");
+  }
+  if (body && !contentType) contentType = "application/x-www-form-urlencoded";
+
+  lua_getfield(L, 1, "response_headers");
+  if (!lua_isnil(L, -1) && lua_type(L, -1) != LUA_TBOOLEAN) return luaL_argerror(L, 1, "response_headers must be a boolean");
+  const bool wantHeaders = lua_toboolean(L, -1) != 0;
+
+  lua_getfield(L, 1, "ca");
+  char* caPem = nullptr;
+  if (!lua_isnil(L, -1)) {
+    if (lua_type(L, -1) != LUA_TSTRING) return luaL_argerror(L, 1, "ca must be a path string");
+    if (strncasecmp(url, "https://", 8)) return pushFail(L, "ca only applies to https:// urls");
+    if (int r = loadCa(L, lua_tostring(L, -1), &caPem)) return r;
+  }
 
   lua_getfield(L, 1, "max_body");
   const lua_Number mb = lua_isnil(L, -1) ? static_cast<lua_Number>(DEFAULT_MAX_BODY) : luaL_checknumber(L, -1);
@@ -195,7 +267,8 @@ int http_request(lua_State* L) {
     if (!writeAllowed(be(L), sc, savePath))
       return pushFail(L, be(L).grantCount() > 0 ? "save_to must be a data: path or an sd: folder this app has a write grant for"
                                                  : "save_to must be a data: path");
-    if (!strcmp(method, "POST")) return pushFail(L, "save_to is only supported for GET");
+    if (strcmp(method, "GET")) return pushFail(L, "save_to is only supported for GET");
+    if (wantHeaders || caPem) return pushFail(L, "save_to cannot be combined with ca or response_headers yet");
     savePtr = savePath;
   }
 
@@ -214,6 +287,7 @@ int http_request(lua_State* L) {
       const char* v = lua_tostring(L, -1);
       if (strlen(k) > MAX_HEADER_LEN || strlen(v) > MAX_HEADER_LEN || strpbrk(k, "\r\n:") || strpbrk(v, "\r\n"))
         return pushFail(L, "illegal header");
+      if (body && !strcasecmp(k, "content-type")) return pushFail(L, "set content_type instead of a Content-Type header");
       headers[nh].name = k;
       headers[nh].value = v;
       nh++;
@@ -230,6 +304,9 @@ int http_request(lua_State* L) {
   rq.bodyLen = bodyLen;
   rq.savePath = savePtr;
   rq.maxBody = static_cast<size_t>(mb);
+  rq.contentType = contentType;
+  rq.caPem = caPem;
+  rq.wantHeaders = wantHeaders;
 
   Backend::HttpResult res;
   const bool got = be(L).httpRequest(rq, res);  // POD in/out: nothing here can be skipped by a longjmp
@@ -237,6 +314,7 @@ int http_request(lua_State* L) {
     char msg[sizeof(res.error)];
     snprintf(msg, sizeof(msg), "%s", res.error[0] ? res.error : "request failed");
     free(res.body);
+    free(res.headers);
     return pushFail(L, msg);
   }
 
@@ -245,6 +323,7 @@ int http_request(lua_State* L) {
   lua_pushlightuserdata(L, &p);
   const int rc = lua_pcall(L, 1, 1, 0);  // an out-of-memory error here is caught, so res.body is always freed below
   free(res.body);
+  free(res.headers);
   if (rc != LUA_OK) {
     lua_pop(L, 1);
     return pushFail(L, "not enough memory for the response (use save_to for big downloads)");
