@@ -64,6 +64,7 @@ int monitor_start(lua_State* L) {
   if (int r = gateMonitor(L)) return r;
   if (channel < 1 || channel > MON_CHANNELS || channel != static_cast<int>(channel)) return pushFail(L, "channel must be an integer 1..13");
   if (be(L).monitorRunning()) return pushFail(L, "monitor is already running (wifi.monitor_stop() first)");
+  if (be(L).bleRunning()) return pushFail(L, "bluetooth is running: call ble.stop() first");
   if (be(L).espnowRunning()) return pushFail(L, "espnow is running: call espnow.stop() first");
   if (be(L).netReady()) return pushFail(L, "the radio is in use by WiFi or the hotspot: call wifi.off() first");
   if (be(L).txRunning()) {

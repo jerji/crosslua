@@ -71,6 +71,7 @@ int wifi_connect(lua_State* L) {
     lua_pushboolean(L, 1);
     return 1;
   }
+  if (be(L).bleRunning()) return pushNo(L, "bluetooth is running: call ble.stop() before joining WiFi");
   if (be(L).espnowRunning()) return pushNo(L, "espnow is running: call espnow.stop() before joining WiFi");
   if (be(L).monitorRunning()) return pushNo(L, "the WiFi sniffer is running: call wifi.monitor_stop() first");
   if (be(L).txRunning()) return pushNo(L, "the injector is running: call wifi.tx_stop() first");
@@ -114,6 +115,7 @@ int wifi_scan(lua_State* L) {
   if (!allowed(L)) return pushFail(L, DENIED);
   int max = lua_isnoneornil(L, 1) ? 20 : static_cast<int>(luaL_checknumber(L, 1));
   if (max < 1 || max > 50) return pushFail(L, "max must be 1..50");
+  if (be(L).bleRunning()) return pushFail(L, "bluetooth is running: call ble.stop() first");
   char err[96] = {0};
   int total = 0;
   static Backend::WifiScanInfo out[50];
@@ -189,6 +191,7 @@ int wifi_softap(lua_State* L) {
   int clients = 0;
   if (be(L).softApInfo(cur, sizeof(cur), curIp, sizeof(curIp), &clients)) return pushNo(L, "a hotspot is already running (wifi.off() stops it)");
   if (be(L).wifiConnected()) return pushNo(L, "WiFi is joined as a client: call wifi.off() before starting a hotspot");
+  if (be(L).bleRunning()) return pushNo(L, "bluetooth is running: call ble.stop() before starting a hotspot");
   if (be(L).espnowRunning()) return pushNo(L, "espnow is running: call espnow.stop() before starting a hotspot");
   if (be(L).monitorRunning()) return pushNo(L, "the WiFi sniffer is running: call wifi.monitor_stop() first");
   if (be(L).txRunning()) return pushNo(L, "the injector is running: call wifi.tx_stop() first");

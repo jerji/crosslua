@@ -16,6 +16,9 @@ The headline features, all verified on hardware:
   UDP, mDNS queries, `wifi.connect`/`wifi.off`, and **`wifi.softap`** hotspots (HTTP server + captive DNS are plain Lua on top).
 - **Raw radio**: `espnow` (connectionless frames between nearby devices), `wifi.monitor` (promiscuous capture with a native
   PCAP writer and **live channel hopping**), and `wifi.tx` (raw frame injection, coexists with the sniffer on one channel).
+- **Bluetooth**: `ble.*` pairs a BLE keyboard and delivers its keys as `input.key()` events (type notes without the on-screen
+  keyboard), with scanning and bonding. Scan, pair and connect-cancel are verified on the X4; typing is verified once a keyboard
+  has been tried (see the API notes).
 - **Files**: sandboxed `fs` with SD-card storage grants (per-folder, user-approved), `fs.stat`/detailed listing, ZIP reading.
 - **Device**: microphone recording, WAV playback, haptics, frontlight, IMU, environment sensors, LED, buzzer, battery, clock.
 - **Safety**: every sensitive API sits behind a manifest permission and a native approval dialog that always shows the full list
@@ -29,7 +32,7 @@ The headline features, all verified on hardware:
 
 The device has ~107 KB of free heap and a 32-bit Lua with a per-app budget (~85 KB). RAM is the main constraint, by design:
 
-- **Radio modes cost ~55 KB each** (ESP-NOW, monitor). The hotspot costs ~60 KB. `espnow.start` / `wifi.monitor_start` /
+- **Radio modes cost ~55 KB each** (ESP-NOW, monitor); **Bluetooth costs ~52 KB** and is exclusive with every WiFi mode. The hotspot costs ~60 KB. `espnow.start` / `wifi.monitor_start` /
   `wifi.tx_start` / `wifi.softap` refuse below an **80 KB free-heap floor** (48 KB once the radio has already been used in the
   same app — the radio's RAM never fully comes back without a reboot).
 - **TLS** needs its own ~32 KB and refuses below a 96 KB floor; plain TCP needs 80 KB.

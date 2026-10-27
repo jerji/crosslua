@@ -68,8 +68,9 @@ Nothing reaches the panel until `gfx.present()`. Coordinates may be floats (trun
 |---|---|
 | `input.wait([timeout_ms])` → name \| nil | yields to the firmware until a button is released or the timeout passes (`nil`). No timeout = wait forever. **Prefer this over polling** — the device idles/sleeps normally. |
 | `input.poll()` → name \| nil | non-blocking |
+| `input.key()` → `{char, key, code, ctrl, shift, alt, gui}` \| nil | details of the `"key"` event `poll`/`wait` returned last (a Bluetooth keyboard press, see `ble`); `nil` after any other event. A printable key has `char` (one ASCII character); a special key has `key` = `enter backspace tab escape delete left right up down home end pageup pagedown`; `code` is the raw HID usage id; the modifier flags are true for either hand's key |
 
-Event names: `back confirm left right up down`. Events are delivered on button *release*. Holding Back ≥ 1 s quits the app and is never delivered.
+Event names: `back confirm left right up down` (plus `key` while a Bluetooth keyboard is connected, and `press long tap release` on touch boards). Events are delivered on button *release*. Holding Back ≥ 1 s quits the app and is never delivered.
 
 ## app
 `app.sleep(ms)` (timer only — buttons stay queued) · `app.exit()` · `app.name()` · `app.dir()` (e.g. `/plugins/hello_lua`)
@@ -364,6 +365,38 @@ other mode's channel, and an explicit different one is refused. Frames sent are 
 
 Verified on the X4 with a monitor-mode adapter: frames injected from Lua were captured on the air byte for byte (15/15 accepted
 by the radio, 13/15 seen by the host's sniffer in range).
+
+## ble — Bluetooth LE keyboard (needs `bluetooth` AND the user's approval; verified lifecycle on the X4, typing needs a keyboard)
+```json
+{"title": "Notes", "permissions": ["bluetooth"]}
+```
+Pairs with a BLE HID keyboard (the SDK's `BleKeyboardHost`: the same NimBLE central, Just-Works bonding and key decoding the page
+turner uses). Key presses arrive as `"key"` events from `input.wait`/`input.poll`, with `input.key()` giving the character, special
+key and modifiers. The approval screen labels the permission `BLE`. BLE only: the chip has no Bluetooth Classic radio.
+
+| call | notes |
+|---|---|
+| `ble.start([mode])` → true \| nil, err | brings the stack up. `mode` is `"keyboard"` (the default and the only one so far). **~52 KB of RAM** (measured 51,996 B on the X4); needs the radio floor (80 KB free, 48 KB after a radio was used) and **refuses while WiFi, the hotspot, espnow, the sniffer or the injector holds the radio** (and each of those refuses while Bluetooth is up). Also refuses while the Bluetooth page turner has the stack up |
+| `ble.stop()` → true | gives the stack back; always allowed. Leaving the app reboots into a clean heap, like every radio app |
+| `ble.scan([ms])` → true \| nil, err | starts a scan that ends by itself after `ms` (500..60000, default 5000); read with `ble.devices()` |
+| `ble.scan_stop()` → true | |
+| `ble.devices()` → `{ {addr, name, rssi, connectable, hid}, ... }` | what the scan has seen (at most 24; the SDK lists HID devices and named devices, sort by `rssi` yourself) |
+| `ble.connect(addr)` → true \| nil, err | starts pairing/connecting (`addr` like `AA:BB:CC:DD:EE:FF`, either case; a bonded keyboard also reconnects on its own after `ble.start()`). Async: poll `ble.state()` |
+| `ble.disconnect()` → true | drops the link, or **cancels an attempt in flight** (the stack is cycled for that: the SDK has no other way) |
+| `ble.state()` → `{running, mode, link, scanning, addr, name, passkey, reason}` | `link` is `idle`, `connecting`, `connected` or `failed`. `passkey` appears only while pairing waits for you to type that number **on the keyboard** (then Enter); `reason` only after a failure |
+| `ble.paired()` → `{ {addr, name}, ... }` / `ble.forget(addr)` | the bonded keyboards (kept in NVS) |
+
+```lua
+ble.start(); ble.scan(6000); app.sleep(6500)
+for _, d in ipairs(ble.devices()) do if d.hid then print(d.addr, d.name, d.rssi) end end
+ble.connect(addr)                         -- then wait for ble.state().link == "connected"
+while true do
+  local e = input.wait()
+  if e == "key" then local k = input.key(); text = text .. (k.char or "") elseif e == "back" then break end
+end
+```
+Not yet: advertising/beacons and acting as a keyboard (they need the peripheral role, which upstream's NimBLE config compiles out),
+and a generic GATT client.
 
 ## epub — book metadata without opening the book
 | call | notes |

@@ -75,10 +75,16 @@ struct MockBackend : Backend {
   void present(int m) override { calls.push_back("present:" + std::to_string(m)); }
   const char* popEvent() override {
     havePos = false;  // an empty poll or a button event has no position
+    haveKey = false;  // ...and no key details either
     if (events.empty()) return nullptr;
     static std::string hold;
     hold = events.front();
     events.pop_front();
+    if (hold == "key" && !keyQ.empty()) {
+      lastKey = keyQ.front();
+      keyQ.pop_front();
+      haveKey = true;
+    }
     if (!evPos.empty()) {
       const auto p = evPos.front();
       evPos.pop_front();
@@ -455,6 +461,80 @@ struct MockBackend : Backend {
   std::vector<MonIn> monInbox;
   // --- wifi.tx mock ---
   bool txPermitted = false, txApproved = true, txUp = false, txFail = false;
+  // --- ble mock (keyboard mode) ---
+  bool blePermitted = false, bleApproved = true, bleSupportedVal = true, bleUp = false, bleStartFail = false, bleScanFail = false, bleConnFail = false;
+  bool bleScanned = false, bleScanningNow = false;
+  std::vector<BleDevice> bleSeen, bleBonds;
+  BleState bleStateVal = {};
+  int bleStartCalls = 0, bleStopCalls = 0, bleScanStops = 0, bleDisconnects = 0;
+  std::string bleModeStarted, bleConnectedTo;
+  std::vector<int> bleScanMsLog;
+  std::vector<std::string> bleConnectLog;
+  std::deque<KeyInfo> keyQ;
+  bool haveKey = false;
+  KeyInfo lastKey = {};
+  void pushKey(char ch, uint8_t special, uint8_t mods, uint8_t code) {
+    events.push_back("key");
+    keyQ.push_back({ch, special, mods, code});
+  }
+  static BleDevice mkDev(const char* addr, const char* name, int rssi, bool connectable, bool hid) {
+    BleDevice d = {};
+    snprintf(d.addr, sizeof(d.addr), "%s", addr);
+    snprintf(d.name, sizeof(d.name), "%s", name);
+    d.rssi = rssi;
+    d.connectable = connectable;
+    d.hid = hid;
+    return d;
+  }
+  bool bleSupported() override { return bleSupportedVal; }
+  bool bleAllowed() override { return blePermitted && bleApproved; }
+  bool bleRunning() override { return bleUp; }
+  bool bleStart(const char* mode, char* err, size_t errCap) override {
+    bleStartCalls++;
+    if (bleStartFail) { snprintf(err, errCap, "nimble init failed (mock)"); return false; }
+    bleUp = true;
+    radioEverStarted = true;
+    bleModeStarted = mode;
+    bleScanned = false;
+    return true;
+  }
+  void bleStop() override { bleStopCalls++; bleUp = false; bleScanningNow = false; }
+  bool bleScan(int ms, char* err, size_t errCap) override {
+    if (bleScanFail) { snprintf(err, errCap, "scan refused (mock)"); return false; }
+    bleScanMsLog.push_back(ms);
+    bleScanned = true;
+    bleScanningNow = true;
+    return true;
+  }
+  void bleScanStop() override { bleScanStops++; bleScanningNow = false; }
+  int bleDevices(BleDevice* out, int cap) override {
+    if (!bleScanned) return 0;
+    int n = 0;
+    for (const BleDevice& d : bleSeen) { if (n >= cap) break; out[n++] = d; }
+    return n;
+  }
+  bool bleConnect(const char* addr, char* err, size_t errCap) override {
+    bleConnectLog.push_back(addr);
+    if (bleConnFail) { snprintf(err, errCap, "pairing refused (mock)"); return false; }
+    return true;
+  }
+  void bleDisconnect() override { bleDisconnects++; }
+  void bleState(BleState* s) override { *s = bleStateVal; s->scanning = bleScanningNow || bleStateVal.scanning; }
+  int blePaired(BleDevice* out, int cap) override {
+    int n = 0;
+    for (const BleDevice& d : bleBonds) { if (n >= cap) break; out[n++] = d; }
+    return n;
+  }
+  bool bleForget(const char* addr) override {
+    for (size_t i = 0; i < bleBonds.size(); i++)
+      if (!strcmp(bleBonds[i].addr, addr)) { bleBonds.erase(bleBonds.begin() + i); return true; }
+    return false;
+  }
+  bool eventKey(KeyInfo* k) override {
+    if (!haveKey) return false;
+    *k = lastKey;
+    return true;
+  }
   // --- deep sleep mock ---
   std::string wakeCauseVal = "power-on";
   int sleepSeconds = -1;
@@ -6006,6 +6086,377 @@ int main() {
       CHECK(run(vm2, be, 100000) == Status::Finished);
       CHECK(be.logs.size() == 2 && be.logs[0] == "button" && be.logs[1] == "nil\tcould not arm the timer wake (mock)" && be.sleepSeconds == -1);
     }
+  }
+  {
+    TEST("ble: permission/support gates, start validation + radio exclusivity + RAM floor");
+    const std::string DENIED = "nil\tbluetooth not permitted: add \"permissions\": [\"bluetooth\"] to this app's manifest.json (and approve it)";
+    auto go = [&](MockBackend& be, const char* script) {
+      LuaVm vm;
+      CHECK(vm.open(128 * 1024));
+      registerApi(vm, be);
+      CHECK(vm.load("t", script, strlen(script)));
+      CHECK(run(vm, be, 100000) == Status::Finished);
+    };
+    auto expect = [&](MockBackend& be, std::vector<std::string> want, const char* tag) {
+      if (be.logs.size() != want.size()) { printf("    ble %s: %zu logs, want %zu\n", tag, be.logs.size(), want.size()); for (auto& l : be.logs) printf("      '%s'\n", l.c_str()); }
+      CHECK(be.logs.size() == want.size());
+      for (size_t i = 0; i < want.size() && i < be.logs.size(); i++) {
+        CHECK(be.logs[i] == want[i]);
+        if (be.logs[i] != want[i]) printf("    ble %s #%zu got '%s' want '%s'\n", tag, i + 1, be.logs[i].c_str(), want[i].c_str());
+      }
+    };
+    {
+      MockBackend be;  // not permitted: every function says so; stop still lets go
+      const char* script = R"LUA(
+        print(ble.start())
+        print(ble.scan())
+        print(ble.scan_stop())
+        print(ble.devices())
+        print(ble.connect("11:22:33:44:55:66"))
+        print(ble.disconnect())
+        print(ble.state())
+        print(ble.paired())
+        print(ble.forget("11:22:33:44:55:66"))
+        print(ble.stop())
+      )LUA";
+      go(be, script);
+      expect(be, {DENIED, DENIED, DENIED, DENIED, DENIED, DENIED, DENIED, DENIED, DENIED, "true"}, "denied");
+      CHECK(be.bleStartCalls == 0 && be.bleStopCalls == 1 && be.bleScanMsLog.empty() && be.bleConnectLog.empty());
+    }
+    {
+      MockBackend be;  // declared but not approved by the user: the same
+      be.blePermitted = true;
+      be.bleApproved = false;
+      go(be, "print(ble.start())");
+      expect(be, {DENIED}, "not approved");
+    }
+    {
+      MockBackend be;  // approved without the manifest asking: the same
+      be.bleApproved = true;
+      go(be, "print(ble.start())");
+      expect(be, {DENIED}, "not declared");
+    }
+    {
+      MockBackend be;  // a build without bluetooth: a plain answer, checked BEFORE the permission
+      be.bleSupportedVal = false;
+      go(be, "print(ble.start())\nprint(ble.state())");
+      expect(be, {"nil\tno bluetooth on this device", "nil\tno bluetooth on this device"}, "unsupported");
+      CHECK(be.bleStartCalls == 0);
+    }
+    {
+      MockBackend be;  // start: mode validation, the happy path, a second start
+      be.blePermitted = true;
+      const char* script = R"LUA(
+        print(ble.start(5))
+        print(ble.start("gatt"))
+        print(ble.start("keyboard"))
+        print(ble.start())
+        print(ble.stop())
+        print(ble.start())
+      )LUA";
+      go(be, script);
+      const std::string M = "nil\tmode must be \"keyboard\"";
+      expect(be, {M, M, "true", "nil\tbluetooth is already running (ble.stop() first)", "true", "true"}, "start");
+      CHECK(be.bleStartCalls == 2 && be.bleModeStarted == "keyboard" && be.bleUp);
+    }
+    {
+      MockBackend be;  // the radio is exclusive: each WiFi mode refuses the start, and nothing reaches the backend
+      be.blePermitted = true;
+      MockBackend* b = &be;
+      const char* script = "print(ble.start())";
+      b->enUp = true;
+      go(be, script);
+      b->enUp = false;
+      b->monUp = true;
+      go(be, script);
+      b->monUp = false;
+      b->txUp = true;
+      go(be, script);
+      b->txUp = false;
+      b->wifiUp = true;
+      go(be, script);
+      b->wifiUp = false;
+      b->apUp = true;
+      go(be, script);
+      expect(be,
+             {"nil\tespnow is running: call espnow.stop() first", "nil\tthe WiFi sniffer is running: call wifi.monitor_stop() first",
+              "nil\tthe injector is running: call wifi.tx_stop() first", "nil\tthe radio is in use by WiFi or the hotspot: call wifi.off() first",
+              "nil\tthe radio is in use by WiFi or the hotspot: call wifi.off() first"},
+             "exclusive");
+      CHECK(be.bleStartCalls == 0 && !be.bleUp);
+    }
+    {
+      MockBackend be;  // RAM floor: 80K cold, 48K once a radio has been started, the boundary itself passes
+      be.blePermitted = true;
+      be.freeHeapVal = 80 * 1024 - 1;
+      go(be, "print(ble.start())");
+      be.freeHeapVal = 80 * 1024;
+      go(be, "print(ble.start())");
+      be.bleUp = false;
+      be.freeHeapVal = 48 * 1024 - 1;  // radioEverStarted is now true
+      go(be, "print(ble.start())");
+      be.freeHeapVal = 48 * 1024;
+      go(be, "print(ble.start())");
+      expect(be, {"nil\tnot enough free RAM for bluetooth (free 79K, need 80K)", "true", "nil\tnot enough free RAM for bluetooth (free 47K, need 48K)", "true"}, "floor");
+    }
+    {
+      MockBackend be;  // the stack refuses: its own message comes back and nothing is left running
+      be.blePermitted = true;
+      be.bleStartFail = true;
+      go(be, "print(ble.start())");
+      expect(be, {"nil\tnimble init failed (mock)"}, "start fail");
+      CHECK(!be.bleUp);
+    }
+  }
+  {
+    TEST("ble: scan validation, devices, connect/disconnect, state, paired/forget, stop");
+    auto go = [&](MockBackend& be, const char* script) {
+      LuaVm vm;
+      CHECK(vm.open(128 * 1024));
+      registerApi(vm, be);
+      CHECK(vm.load("t", script, strlen(script)));
+      CHECK(run(vm, be, 100000) == Status::Finished);
+    };
+    auto expect = [&](MockBackend& be, std::vector<std::string> want, const char* tag) {
+      if (be.logs.size() != want.size()) { printf("    ble %s: %zu logs, want %zu\n", tag, be.logs.size(), want.size()); for (auto& l : be.logs) printf("      '%s'\n", l.c_str()); }
+      CHECK(be.logs.size() == want.size());
+      for (size_t i = 0; i < want.size() && i < be.logs.size(); i++) {
+        CHECK(be.logs[i] == want[i]);
+        if (be.logs[i] != want[i]) printf("    ble %s #%zu got '%s' want '%s'\n", tag, i + 1, be.logs[i].c_str(), want[i].c_str());
+      }
+    };
+    const std::string NR = "nil\tbluetooth is not running (call ble.start() first)";
+    const std::string MS = "nil\tms must be an integer 500..60000";
+    {
+      MockBackend be;  // scan: needs the stack, validates the duration, default 5000
+      be.blePermitted = true;
+      const char* script = R"LUA(
+        print(ble.scan())
+        ble.start()
+        print(ble.scan())
+        print(ble.scan(1234))
+        print(ble.scan(499))
+        print(ble.scan(60001))
+        print(ble.scan(1000.5))
+        print(ble.scan("5000"))
+        print(ble.scan(500))
+        print(ble.scan(60000))
+      )LUA";
+      go(be, script);
+      expect(be, {NR, "true", "true", MS, MS, MS, MS, "true", "true"}, "scan");
+      CHECK(be.bleScanMsLog == (std::vector<int>{5000, 1234, 500, 60000}));
+    }
+    {
+      MockBackend be;  // the stack refuses to scan: its message; scan_stop only reaches a running stack
+      be.blePermitted = true;
+      be.bleScanFail = true;
+      go(be, "print(ble.scan_stop())\nble.start()\nprint(ble.scan())\nprint(ble.scan_stop())");
+      expect(be, {"true", "nil\tscan refused (mock)", "true"}, "scan fail");
+      CHECK(be.bleScanStops == 1);
+    }
+    {
+      MockBackend be;  // devices: empty before a scan, capped at 24, fields intact
+      be.blePermitted = true;
+      be.bleSeen.push_back(MockBackend::mkDev("11:22:33:44:55:66", "Keychron K3", -48, true, true));
+      be.bleSeen.push_back(MockBackend::mkDev("AA:BB:CC:DD:EE:FF", "Beacon", -80, true, false));
+      for (int i = 0; i < 28; i++) be.bleSeen.push_back(MockBackend::mkDev("00:00:00:00:00:01", "filler", -90, true, false));
+      const char* script = R"LUA(
+        print(ble.devices())
+        ble.start()
+        print(#ble.devices())
+        ble.scan()
+        local d = ble.devices()
+        print(#d)
+        print(d[1].addr, d[1].name, d[1].rssi, d[1].connectable, d[1].hid)
+        print(d[2].addr, d[2].name, d[2].rssi, d[2].connectable, d[2].hid)
+      )LUA";
+      go(be, script);
+      expect(be, {NR, "0", "24", "11:22:33:44:55:66\tKeychron K3\t-48\ttrue\ttrue", "AA:BB:CC:DD:EE:FF\tBeacon\t-80\ttrue\tfalse"}, "devices");
+    }
+    {
+      MockBackend be;  // connect: the address is checked in full before the stack is asked
+      be.blePermitted = true;
+      const char* script = R"LUA(
+        print(ble.connect("11:22:33:44:55:66"))
+        ble.start()
+        local A = "addr must look like AA:BB:CC:DD:EE:FF"
+        print(ble.connect("11:22:33:44:55"))
+        print(ble.connect("11-22-33-44-55-66"))
+        print(ble.connect("1122.3344.5566.77"))
+        print(ble.connect("11:22:33:44:55:6G"))
+        print(ble.connect("11:22:33:44:55:66:"))
+        print(ble.connect("11:22:33:44:55:66\0"))
+        print(ble.connect(""))
+        print(ble.connect("aa:bb:cc:dd:ee:ff"))
+        print(ble.connect("11:22:33:44:55:66"))
+        print((pcall(ble.connect)))
+        print(ble.disconnect())
+      )LUA";
+      go(be, script);
+      const std::string A = "nil\taddr must look like AA:BB:CC:DD:EE:FF";
+      expect(be, {NR, A, A, A, A, A, A, A, "true", "true", "false", "true"}, "connect");
+      CHECK(be.bleConnectLog == (std::vector<std::string>{"aa:bb:cc:dd:ee:ff", "11:22:33:44:55:66"}));
+      CHECK(be.bleDisconnects == 1);
+    }
+    {
+      MockBackend be;  // a refused connect says why; disconnect with the stack down reaches nothing
+      be.blePermitted = true;
+      be.bleConnFail = true;
+      go(be, "print(ble.disconnect())\nble.start()\nprint(ble.connect(\"11:22:33:44:55:66\"))");
+      expect(be, {"true", "nil\tpairing refused (mock)"}, "connect fail");
+      CHECK(be.bleDisconnects == 0);
+    }
+    {
+      MockBackend be;  // state: stopped / idle
+      be.blePermitted = true;
+      const char* script = R"LUA(
+        local function show(s) print(s.running, s.link, s.scanning, s.mode, s.addr, s.name, s.passkey, s.reason) end
+        show(ble.state())
+        ble.start()
+        show(ble.state())
+      )LUA";
+      go(be, script);
+      expect(be, {"false\tidle\tfalse\tnil\tnil\tnil\tnil\tnil", "true\tidle\tfalse\tkeyboard\tnil\tnil\tnil\tnil"}, "state idle");
+    }
+    {
+      MockBackend be;  // connecting with a passkey waiting, connected, failed (reason shown only then)
+      be.blePermitted = true;
+      be.bleUp = true;
+      const char* script = R"LUA(
+        local s = ble.state()
+        print(s.link, s.addr, s.name, s.passkey, s.reason, s.scanning)
+      )LUA";
+      be.bleStateVal = {};
+      be.bleStateVal.link = crosslua::Backend::BLE_CONNECTING;
+      snprintf(be.bleStateVal.addr, sizeof(be.bleStateVal.addr), "11:22:33:44:55:66");
+      snprintf(be.bleStateVal.name, sizeof(be.bleStateVal.name), "Keychron K3");
+      be.bleStateVal.hasPasskey = true;
+      be.bleStateVal.passkey = 123456;
+      snprintf(be.bleStateVal.reason, sizeof(be.bleStateVal.reason), "stale reason");
+      go(be, script);
+      be.bleStateVal.hasPasskey = false;
+      be.bleStateVal.passkey = 777;  // ignored without hasPasskey
+      be.bleStateVal.link = crosslua::Backend::BLE_CONNECTED;
+      be.bleStateVal.scanning = true;
+      go(be, script);
+      be.bleStateVal.link = crosslua::Backend::BLE_FAILED;
+      be.bleStateVal.addr[0] = 0;
+      be.bleStateVal.scanning = false;
+      snprintf(be.bleStateVal.reason, sizeof(be.bleStateVal.reason), "pairing timed out");
+      go(be, script);
+      expect(be,
+             {"connecting\t11:22:33:44:55:66\tKeychron K3\t123456\tnil\tfalse", "connected\t11:22:33:44:55:66\tKeychron K3\tnil\tnil\ttrue",
+              "failed\tnil\tnil\tnil\tpairing timed out\tfalse"},
+             "state");
+    }
+    {
+      MockBackend be;  // paired / forget
+      be.blePermitted = true;
+      be.bleBonds.push_back(MockBackend::mkDev("11:22:33:44:55:66", "Keychron K3", 0, true, true));
+      be.bleBonds.push_back(MockBackend::mkDev("22:33:44:55:66:77", "Remote", 0, true, true));
+      const char* script = R"LUA(
+        print(ble.paired())
+        print(ble.forget("11:22:33:44:55:66"))
+        ble.start()
+        local p = ble.paired()
+        print(#p, p[1].addr, p[1].name, p[2].addr, p[2].name)
+        print(ble.forget("12:34"))
+        print(ble.forget("DE:AD:BE:EF:00:01"))
+        print(ble.forget("11:22:33:44:55:66"))
+        print(#ble.paired())
+        print((pcall(ble.forget)))
+      )LUA";
+      go(be, script);
+      expect(be,
+             {NR, NR, "2\t11:22:33:44:55:66\tKeychron K3\t22:33:44:55:66:77\tRemote", "nil\taddr must look like AA:BB:CC:DD:EE:FF",
+              "nil\tthat device is not paired", "true", "1", "false"},
+             "paired");
+    }
+    {
+      MockBackend be;  // stop gives the stack back; calling it twice is harmless
+      be.blePermitted = true;
+      go(be, "ble.start()\nprint(ble.stop())\nprint(ble.stop())\nprint(ble.state().running)");
+      expect(be, {"true", "true", "false"}, "stop");
+      CHECK(!be.bleUp && be.bleStopCalls == 2);
+    }
+  }
+  {
+    TEST("input.key: key events carry the character / special key / modifiers; other events carry none");
+    MockBackend be;
+    be.pushKey('a', 0, 0x02, 0x04);        // left shift + a
+    be.events.push_back("confirm");        // a button between the keys
+    be.pushKey(0, 1, 0, 0x28);             // enter
+    be.pushKey(0, 13, 0x14, 0x4E);         // page down with right ctrl + left alt
+    be.pushKey(0, 200, 0, 0x99);           // a special index this firmware does not know: no `key` field
+    for (uint8_t m : {0x01, 0x10, 0x02, 0x20, 0x04, 0x40, 0x08, 0x80}) be.pushKey('x', 0, m, 0x1B);
+    LuaVm vm;
+    CHECK(vm.open(128 * 1024));
+    registerApi(vm, be);
+    const char* script = R"LUA(
+      print(input.key())
+      for i = 1, 5 do
+        local e = input.poll()
+        local k = input.key()
+        if k then print(e, k.char, k.key, k.code, k.ctrl, k.shift, k.alt, k.gui) else print(e, "nokey") end
+      end
+      for i = 1, 8 do
+        input.poll()
+        local k = input.key()
+        print((k.ctrl and "c" or "-") .. (k.shift and "s" or "-") .. (k.alt and "a" or "-") .. (k.gui and "g" or "-"))
+      end
+      print(input.poll(), input.key())
+    )LUA";
+    CHECK(vm.load("t", script, strlen(script)));
+    CHECK(run(vm, be, 100000) == Status::Finished);
+    const char* want[] = {"nil", "key\ta\tnil\t4\tfalse\ttrue\tfalse\tfalse", "confirm\tnokey", "key\tnil\tenter\t40\tfalse\tfalse\tfalse\tfalse",
+                          "key\tnil\tpagedown\t78\ttrue\tfalse\ttrue\tfalse", "key\tnil\tnil\t153\tfalse\tfalse\tfalse\tfalse",
+                          "c---", "c---", "-s--", "-s--", "--a-", "--a-", "---g", "---g", "nil\tnil"};
+    const size_t N = sizeof(want) / sizeof(want[0]);
+    if (be.logs.size() != N) for (auto& l : be.logs) printf("    key log '%s'\n", l.c_str());
+    CHECK(be.logs.size() == N);
+    for (size_t i = 0; i < N && i < be.logs.size(); i++) {
+      CHECK(be.logs[i] == want[i]);
+      if (be.logs[i] != want[i]) printf("    key #%zu got '%s' want '%s'\n", i + 1, be.logs[i].c_str(), want[i]);
+    }
+  }
+  {
+    TEST("ble: every WiFi mode refuses to start while bluetooth is running");
+    MockBackend be;
+    be.blePermitted = true;
+    be.hotspotPermitted = true;
+    be.enPermitted = true;
+    be.monPermitted = true;
+    be.txPermitted = true;
+    LuaVm vm;
+    CHECK(vm.open(128 * 1024));
+    registerApi(vm, be);
+    const char* script = R"LUA(
+      ble.start()
+      print(wifi.connect())
+      print(wifi.softap("host-ap"))
+      print(wifi.scan())
+      print(espnow.start())
+      print(wifi.monitor_start())
+      print(wifi.tx_start())
+      print(ble.stop())
+      print(wifi.scan() ~= nil)
+    )LUA";
+    CHECK(vm.load("t", script, strlen(script)));
+    CHECK(run(vm, be, 100000) == Status::Finished);
+    const char* want[] = {"false\tbluetooth is running: call ble.stop() before joining WiFi",
+                          "false\tbluetooth is running: call ble.stop() before starting a hotspot",
+                          "nil\tbluetooth is running: call ble.stop() first",
+                          "nil\tbluetooth is running: call ble.stop() first",
+                          "nil\tbluetooth is running: call ble.stop() first",
+                          "nil\tbluetooth is running: call ble.stop() first", "true", "true"};
+    const size_t N = sizeof(want) / sizeof(want[0]);
+    if (be.logs.size() != N) for (auto& l : be.logs) printf("    wifi-side log '%s'\n", l.c_str());
+    CHECK(be.logs.size() == N);
+    for (size_t i = 0; i < N && i < be.logs.size(); i++) {
+      CHECK(be.logs[i] == want[i]);
+      if (be.logs[i] != want[i]) printf("    wifi-side #%zu got '%s' want '%s'\n", i + 1, be.logs[i].c_str(), want[i]);
+    }
+    CHECK(!be.apUp && !be.enUp && !be.monUp && !be.txUp && !be.wifiUp);
   }
   printf(g_fail ? "\n%d FAILED\n" : "\nALL PASSED\n", g_fail);
   return g_fail ? 1 : 0;

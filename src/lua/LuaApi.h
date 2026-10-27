@@ -200,6 +200,48 @@ class Backend {
   virtual void txStop() = 0;
   virtual bool txSend(const void* frame, size_t n, char* err, size_t errCap) = 0;  // frame without the FCS
   virtual bool txInfo(int* channel, int* sent) = 0;  // false: not running
+  // --- ble: Bluetooth LE central. Mode "keyboard": scan for / pair with a BLE HID keyboard; its key presses arrive as "key" events
+  // (input.key() has the details). Needs the "bluetooth" permission and the user's approval. ONE stack at a time (~50 KB of RAM),
+  // EXCLUSIVE with every WiFi mode. Everything is polled: the stack's tasks fill small buffers and Lua reads them. ---
+  struct BleDevice {
+    char addr[18];  // "AA:BB:CC:DD:EE:FF"
+    char name[32];  // falls back to the address when none was advertised
+    int rssi;
+    bool connectable;
+    bool hid;  // advertises the HID service: a keyboard, a remote, a page turner
+  };
+  static constexpr int BLE_MAX_DEVICES = 24;
+  enum BleLink { BLE_IDLE = 0, BLE_CONNECTING = 1, BLE_CONNECTED = 2, BLE_FAILED = 3 };
+  struct BleState {
+    int link;           // BleLink
+    bool scanning;
+    char addr[18];      // the peer while connecting / connected, "" otherwise
+    char name[32];
+    bool hasPasskey;    // pairing is waiting for the passkey to be typed on the keyboard
+    uint32_t passkey;
+    char reason[64];    // why the last connect failed
+  };
+  struct KeyInfo {
+    char ch;          // printable ASCII, or 0 for a special key
+    uint8_t special;  // 0 = none, else the index into the binding's key-name table (SpecialKey order)
+    uint8_t mods;     // HID modifier bitmask (bit0 lctrl, bit1 lshift, bit2 lalt, bit3 lgui, bits 4..7 the right-hand ones)
+    uint8_t code;     // raw HID usage id
+  };
+  virtual bool bleSupported() { return false; }  // compiled into this firmware (FREEINK_CAP_BLE_HID_HOST)
+  virtual bool bleAllowed() = 0;
+  virtual bool bleRunning() { return false; }
+  virtual bool bleStart(const char* mode, char* err, size_t errCap) = 0;
+  virtual void bleStop() = 0;
+  virtual bool bleScan(int ms, char* err, size_t errCap) = 0;  // async: the stack scans on its own task
+  virtual void bleScanStop() = 0;
+  virtual int bleDevices(BleDevice* out, int cap) = 0;  // snapshot of what the scan has seen, at most `cap`
+  virtual bool bleConnect(const char* addr, char* err, size_t errCap) = 0;  // async: ble.state() reports how it went
+  virtual void bleDisconnect() = 0;
+  virtual void bleState(BleState* s) = 0;
+  virtual int blePaired(BleDevice* out, int cap) = 0;  // bonded peers (kept in NVS), at most `cap`
+  virtual bool bleForget(const char* addr) = 0;
+  // Details of the "key" event popEvent() returned last; false for any other event.
+  virtual bool eventKey(KeyInfo* k) { (void)k; return false; }
   // Ask the system to bring WiFi up (it may show its own network picker). Non-blocking: the script is parked and
   // resumed with "wifi:ok" / "wifi:fail" once the system UI has finished.
   virtual void wifiRequestConnect() = 0;

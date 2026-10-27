@@ -61,6 +61,7 @@ void registerMic(lua_State* L, Ctx* c);
 void registerEspNow(lua_State* L, Ctx* c);
 void registerWifiMonitor(lua_State* L, Ctx* c);
 void registerWifiTx(lua_State* L, Ctx* c);
+void registerBle(lua_State* L, Ctx* c);
 // Same write rules as fs.write (data: always, sd: only with a write grant, never *.bin) for bindings outside LuaFs.cpp.
 // On failure pushes nil,msg and returns false. ensureParentDir creates the parent folder (recursive) when missing.
 bool writePathArg(lua_State* L, int i, char* out, size_t cap);
@@ -86,6 +87,8 @@ inline constexpr const char* MIC_DENIED =
     "microphone not permitted: add \"permissions\": [\"microphone\"] to this app's manifest.json (and approve it)";
 inline constexpr const char* AUDIO_DENIED =
     "audio not permitted: add \"permissions\": [\"audio\"] to this app's manifest.json (and approve it)";
+inline constexpr const char* BLE_DENIED =
+    "bluetooth not permitted: add \"permissions\": [\"bluetooth\"] to this app's manifest.json (and approve it)";
 inline constexpr const char* LISTEN_DENIED = "listen not permitted: add \"permissions\": [\"listen\"] to this app's manifest.json";
 
 }  // namespace crosslua

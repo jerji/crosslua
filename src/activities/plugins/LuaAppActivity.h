@@ -22,7 +22,7 @@ class LuaAppActivity final : public Activity {
   void loop() override;
   // Apps own the screen; the framework's render task has nothing to draw.
   void render(RenderLock&&) override {}
-  bool skipLoopDelay() override { return false; }
+  bool skipLoopDelay() override;  // true while a Lua Bluetooth session is up (see the .cpp)
 
  private:
   class Backend;  // firmware implementation of crosslua::Backend (in the .cpp)

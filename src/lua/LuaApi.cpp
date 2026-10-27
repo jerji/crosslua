@@ -444,6 +444,39 @@ int input_pos(lua_State* L) {
   lua_pushinteger(L, y);
   return 2;
 }
+// input.key() -> {char = "a" | nil, key = "enter" | nil, code, ctrl, shift, alt, gui} for the "key" event input.poll()/input.wait()
+// returned last (a Bluetooth keyboard press); nil for any other event. A printable key has `char`, a special key has `key`.
+int input_key(lua_State* L) {
+  static const char* const SPECIAL[] = {nullptr,   "enter", "backspace", "tab",  "escape", "delete", "left",
+                                        "right",   "up",    "down",      "home", "end",    "pageup", "pagedown"};
+  Backend::KeyInfo k;
+  memset(&k, 0, sizeof(k));
+  if (!be(L).eventKey(&k)) {
+    lua_pushnil(L);
+    return 1;
+  }
+  lua_createtable(L, 0, 7);
+  if (k.ch) {
+    char c[2] = {k.ch, 0};
+    lua_pushstring(L, c);
+    lua_setfield(L, -2, "char");
+  }
+  if (k.special > 0 && k.special < sizeof(SPECIAL) / sizeof(SPECIAL[0])) {
+    lua_pushstring(L, SPECIAL[k.special]);
+    lua_setfield(L, -2, "key");
+  }
+  lua_pushinteger(L, k.code);
+  lua_setfield(L, -2, "code");
+  lua_pushboolean(L, (k.mods & 0x11) != 0);
+  lua_setfield(L, -2, "ctrl");
+  lua_pushboolean(L, (k.mods & 0x22) != 0);
+  lua_setfield(L, -2, "shift");
+  lua_pushboolean(L, (k.mods & 0x44) != 0);
+  lua_setfield(L, -2, "alt");
+  lua_pushboolean(L, (k.mods & 0x88) != 0);
+  lua_setfield(L, -2, "gui");
+  return 1;
+}
 // input.text(title [, initial [, max_len [, mode]]]) -> string | nil, "cancelled" | nil, err.
 // Parks the script while the system keyboard runs (like wifi.connect): the screen is then the system's, redraw after.
 constexpr size_t TEXT_MAX_TITLE = 60, TEXT_MAX_INITIAL = 256;
@@ -779,7 +812,7 @@ struct LazyNs {
 const LazyNs LAZY[] = {{"time", loadTime},   {"device", loadDevice}, {"led", loadLed},         {"fs", registerFs},
                        {"json", registerJson}, {"wifi", registerNet},  {"http", registerNet},    {"net", registerSock},
                        {"zip", registerZip},   {"epub", registerZip},  {"crypto", registerCrypto}, {"audio", registerAudio}, {"mic", registerMic}, {"espnow", registerEspNow},
-                       {"coroutine", loadCoroutine}, {"utf8", loadUtf8}};
+                       {"ble", registerBle}, {"coroutine", loadCoroutine}, {"utf8", loadUtf8}};
 
 // _G.__index(G, key): runs only for globals that do not exist yet.
 int lazy_index(lua_State* L) {
@@ -824,7 +857,7 @@ void registerApi(LuaVm& vm, Backend& backend) {
                                  {"qr", gfx_qr}, {"rounded_rect", gfx_rounded_rect},
                                  {"text_width", gfx_text_width}, {"line_height", gfx_line_height},
                                  {"present", gfx_present}, {nullptr, nullptr}};
-  static const luaL_Reg input[] = {{"poll", input_poll}, {"wait", input_wait}, {"pos", input_pos}, {"text", input_text}, {nullptr, nullptr}};
+  static const luaL_Reg input[] = {{"poll", input_poll}, {"wait", input_wait}, {"pos", input_pos}, {"key", input_key}, {"text", input_text}, {nullptr, nullptr}};
   static const luaL_Reg app[] = {{"sleep", app_sleep}, {"exit", app_exit}, {"name", app_name},
                                  {"dir", app_dir},     {"open_book", app_open_book},
                                  {"restart", app_restart}, {"entry", app_entry}, {nullptr, nullptr}};

@@ -27,6 +27,9 @@
 #include <LedManager.h>
 #include <HalMemory.h>
 #include <HalPowerManager.h>
+#include <BleKeyboardHost.h>
+
+#include "activities/plugins/LuaBluetoothHold.h"
 #include <HalStorage.h>
 #include <Logging.h>
 #include <TrustedTime.h>
@@ -98,6 +101,7 @@ constexpr size_t LUA_HEAP_FLOOR_DRAIN = 6 * 1024;
 // already fragmented the heap (measured: ~20 KB never comes back until a reboot), so the exit-time defrag restart must not
 // depend on the CURRENT mode. Cleared when the activity is entered; survives app.restart on purpose (same heap).
 bool g_radioUsedThisSession = false;
+std::atomic<bool> g_bluetoothHeld{false};  // a Lua app's Bluetooth session owns the shared stack (read through luabt::held())
 constexpr size_t MAX_SCRIPT_BYTES = 64 * 1024;
 
 constexpr uint32_t SLICE_MS = 25;          // max time one loop() pass spends inside Lua
@@ -124,13 +128,17 @@ class LuaAppActivity::Backend final : public crosslua::Backend {
   std::deque<std::pair<int, int>> evPos;  // parallel to `events`: touch position, or (-1,-1) for button events
   bool havePos = false;
   int posX = 0, posY = 0;                 // position of the event popEvent() returned last
+  std::deque<std::pair<bool, crosslua::Backend::KeyInfo>> evKey;  // parallel to `events`: (is a key event, its details)
+  bool haveKey = false;                   // the event popEvent() returned last was a Bluetooth key press
+  crosslua::Backend::KeyInfo lastKey = {};
+  bool bleUp_ = false;                    // the Bluetooth stack (the SDK's BleKeyboardHost) is up
   int touchX = 0, touchY = 0;             // last finger position seen (a release has no coordinates of its own)
   std::string openBookPath;           // set by app.open_book(); the activity hands it to the reader
   std::string restartEntry;          // set by app.restart(); the activity starts a fresh VM from this script
 
   // ---- storage grants ("storage": {"read": [...], "write": [...]} in manifest.json) ------------------------------
   // Parsed from the manifest but INVISIBLE to the API (grantCount() == 0) until the user approved exactly this request.
-  bool hasGrantRequest() const { return !requested_.empty() || listenReq_ || hotspotReq_ || espnowReq_ || monitorReq_ || txReq_ || audioReq_ || micReq_; }
+  bool hasGrantRequest() const { return !requested_.empty() || listenReq_ || hotspotReq_ || espnowReq_ || monitorReq_ || txReq_ || audioReq_ || micReq_ || bleReq_; }
   // Canonical text of the request; an approval is valid only for an identical request (any change asks again).
   std::string grantCanonical() const {
     std::vector<std::string> v;
@@ -138,6 +146,7 @@ class LuaAppActivity::Backend final : public crosslua::Backend {
     if (espnowReq_) v.push_back("p:espnow");  // raw frames to anyone in radio range
     if (monitorReq_) v.push_back("p:monitor");  // passive capture of everything in radio range
     if (txReq_) v.push_back("p:tx");  // sending arbitrary frames: can deauthenticate other people's devices
+    if (bleReq_) v.push_back("p:bluetooth");  // a keyboard is a typing channel into the app; a BLE scan sees everyone nearby
     if (hotspotReq_) v.push_back("p:hotspot");  // starting a WiFi network that others can join
     if (listenReq_) v.push_back("p:listen");  // accepting connections from the LAN is part of the approved request too
     if (micReq_) v.push_back("p:microphone");  // a recording device: consented to explicitly, never silently
@@ -184,6 +193,7 @@ class LuaAppActivity::Backend final : public crosslua::Backend {
       if (hotspotReq_) labels.push_back("AP");  // the only abbreviation that lets seven permissions fit on three lines
       if (listenReq_) labels.push_back("SERVER");
       if (audioReq_) labels.push_back("SPEAKER");
+      if (bleReq_) labels.push_back("BLE");  // fits the third line: "SERVER, SPEAKER, BLE" is 20 characters
       s += crosslua::packPermissionLabels(labels, PERMISSION_LINE_WIDTH);
     }
     if (!rd.empty()) s += "READ: " + rd + "\n";
@@ -196,7 +206,7 @@ class LuaAppActivity::Backend final : public crosslua::Backend {
   std::string grantTitle(const std::string& app) const {
     const bool files = !requested_.empty();
     const int n = (listenReq_ ? 1 : 0) + (hotspotReq_ ? 1 : 0) + (espnowReq_ ? 1 : 0) + (audioReq_ ? 1 : 0) + (micReq_ ? 1 : 0) +
-                  (files ? 1 : 0);
+                  (monitorReq_ ? 1 : 0) + (txReq_ ? 1 : 0) + (bleReq_ ? 1 : 0) + (files ? 1 : 0);
     if (n > 1) return app + " wants access to your device";
     if (micReq_) return app + " wants to use the microphone";
     if (txReq_) return app + " wants to inject WiFi frames";
@@ -205,6 +215,7 @@ class LuaAppActivity::Backend final : public crosslua::Backend {
     if (hotspotReq_) return app + " wants to start a hotspot";
     if (listenReq_) return app + " wants to accept connections";
     if (audioReq_) return app + " wants to play sounds";
+    if (bleReq_) return app + " wants to use Bluetooth";
     return app + " wants access to your files";
   }
   void randomBytes(uint8_t* out, size_t n) override { esp_fill_random(out, n); }
@@ -250,9 +261,16 @@ class LuaAppActivity::Backend final : public crosslua::Backend {
 
   const char* popEvent() override {
     havePos = false;
+    haveKey = false;
     if (events.empty()) return nullptr;
     const char* e = events.front();
     events.pop_front();
+    if (!evKey.empty()) {
+      const auto k = evKey.front();
+      evKey.pop_front();
+      haveKey = k.first;
+      lastKey = k.second;
+    }
     if (!evPos.empty()) {
       const auto p = evPos.front();
       evPos.pop_front();
@@ -718,6 +736,180 @@ class LuaAppActivity::Backend final : public crosslua::Backend {
     }
   }
 
+  // --- Bluetooth LE central: the SDK's BleKeyboardHost (the same NimBLE central, Just-Works bonding and HID decoding the page
+  // turner uses). One stack: it refuses while the page turner or any WiFi mode holds the radio, and the activity holds the CPU
+  // clock steady (skipLoopDelay) while it is up. Bonds persist in NVS and reconnect on their own through poll(). ---
+  bool bleSupported() override { return FREEINK_CAP_BLE_HID_HOST != 0; }
+  bool bleAllowed() override { return bleReq_ && approved_; }
+  bool bleRunning() override { return bleUp_; }
+  void bleClearLink() {
+    bleFailed_ = false;
+    bleHasPasskey_ = false;
+    bleReason_[0] = 0;
+    bleTarget_[0] = 0;
+  }
+  bool bleStart(const char* mode, char* err, size_t errCap) override {
+    (void)mode;  // "keyboard" is the only mode so far
+    if (BleHid.isStopping()) {
+      snprintf(err, errCap, "bluetooth is still shutting down: try again in a moment");
+      return false;
+    }
+    if (BleHid.isRunning()) {
+      snprintf(err, errCap, "the Bluetooth page turner holds the radio");
+      return false;
+    }
+    if (WiFi.getMode() != WIFI_MODE_NULL) {
+      snprintf(err, errCap, "the radio is in use by WiFi: call wifi.off() first");
+      return false;
+    }
+    g_radioUsedThisSession = true;  // leaving the app reboots into a clean heap, like every WiFi screen
+    radioEverStarted_ = true;
+    powerManager.setPowerSaving(false);  // begin() and end() must run at the normal CPU frequency; while the stack is up
+                                         // LuaAppActivity::skipLoopDelay() keeps the main loop from clocking down
+    if (!BleHid.begin("CrossLua")) {
+      snprintf(err, errCap, "the Bluetooth stack did not start");
+      return false;
+    }
+    bleUp_ = true;
+    g_bluetoothHeld.store(true);
+    bleClearLink();
+    if (setFloorFn) setFloorFn(LUA_HEAP_FLOOR_ONLINE);  // the stack owns its RAM now (same as after wifi.connect / a hotspot)
+    return true;
+  }
+  void bleStop() override {
+    if (!bleUp_) return;
+    for (int i = 0; i < 4 && !BleHid.end(1000); i++) {
+    }  // each call waits at most 1 s; a later call carries on where the last stopped
+    bleUp_ = false;
+    g_bluetoothHeld.store(false);
+    evKey.clear();
+    bleClearLink();
+  }
+  bool bleScan(int ms, char* err, size_t errCap) override {
+    if (BleHid.isConnecting()) {
+      snprintf(err, errCap, "a connection is in progress");
+      return false;
+    }
+    BleHid.startScan(static_cast<uint32_t>(ms));
+    if (!BleHid.isScanning()) {
+      snprintf(err, errCap, "the scan did not start");
+      return false;
+    }
+    return true;
+  }
+  void bleScanStop() override { BleHid.stopScan(); }
+  static void bleCopy(crosslua::Backend::BleDevice* o, const char* addr, const char* name, int rssi, bool conn, bool hid) {
+    snprintf(o->addr, sizeof(o->addr), "%s", addr);
+    snprintf(o->name, sizeof(o->name), "%s", name);
+    o->rssi = rssi;
+    o->connectable = conn;
+    o->hid = hid;
+  }
+  int bleDevices(crosslua::Backend::BleDevice* out, int cap) override {
+    int n = 0;
+    for (uint8_t i = 0; i < BleHid.deviceCount() && n < cap; i++) {
+      const freeink::DiscoveredDevice& d = BleHid.device(i);
+      bleCopy(&out[n++], d.addr, d.name, d.rssi, d.connectable, d.hid);
+    }
+    return n;
+  }
+  // The SDK compares addresses with strncmp; use ITS spelling of a known device so the case the app typed cannot matter.
+  const char* bleKnownSpelling(const char* addr) {
+    for (uint8_t i = 0; i < BleHid.deviceCount(); i++)
+      if (!strcasecmp(BleHid.device(i).addr, addr)) return BleHid.device(i).addr;
+    for (uint8_t i = 0; i < BleHid.pairedCount(); i++)
+      if (!strcasecmp(BleHid.paired(i).addr, addr)) return BleHid.paired(i).addr;
+    return addr;
+  }
+  bool bleConnect(const char* addr, char* err, size_t errCap) override {
+    BleHid.stopScan();  // a scan and a connect share the one radio task
+    bleClearLink();
+    const char* spelled = bleKnownSpelling(addr);
+    snprintf(bleTarget_, sizeof(bleTarget_), "%s", spelled);
+    if (!BleHid.connect(spelled)) {
+      bleTarget_[0] = 0;
+      snprintf(err, errCap, BleHid.isRunning() ? "a connection attempt is already running"
+                                                : "the Bluetooth stack went down (ble.stop() then ble.start())");
+      return false;
+    }
+    return true;
+  }
+  void bleDisconnect() override {
+    if (BleHid.isConnecting() && !BleHid.isConnected()) {
+      // The SDK cannot cancel an attempt in flight from outside (disconnect() only drops an established link, and a connect to a
+      // device that is not there runs for tens of seconds): end() is its supported way to abandon one, so take the stack down
+      // and bring it back, keeping the session alive. Bonds live in NVS and are untouched.
+      for (int i = 0; i < 4 && !BleHid.end(1000); i++) {
+      }
+      if (!BleHid.begin("CrossLua")) {  // could not come back: the session is over, say so honestly
+        bleUp_ = false;
+        g_bluetoothHeld.store(false);
+        evKey.clear();
+      }
+    } else {
+      BleHid.disconnect();
+    }
+    bleClearLink();
+  }
+  void bleState(crosslua::Backend::BleState* s) override {
+    s->scanning = BleHid.isScanning();
+    uint32_t pk = 0;
+    if (BleHid.takePairingPasskey(pk)) {  // the keyboard shows no number: the user types THIS one on it, then Enter
+      blePasskey_ = pk;
+      bleHasPasskey_ = true;
+    }
+    if (BleHid.isConnected()) {
+      s->link = crosslua::Backend::BLE_CONNECTED;
+      snprintf(s->addr, sizeof(s->addr), "%s", BleHid.connectedAddr());
+      snprintf(s->name, sizeof(s->name), "%s", BleHid.connectedName());
+      bleHasPasskey_ = false;
+      bleFailed_ = false;
+      return;
+    }
+    if (BleHid.isConnecting()) {
+      s->link = crosslua::Backend::BLE_CONNECTING;
+      snprintf(s->addr, sizeof(s->addr), "%s", bleTarget_);
+      for (uint8_t i = 0; i < BleHid.deviceCount(); i++)
+        if (!strcasecmp(BleHid.device(i).addr, bleTarget_)) snprintf(s->name, sizeof(s->name), "%s", BleHid.device(i).name);
+      s->hasPasskey = bleHasPasskey_;
+      s->passkey = blePasskey_;
+      return;
+    }
+    char why[64] = {0};
+    if (BleHid.takeConnectFailure(why, sizeof(why))) {
+      bleFailed_ = true;
+      snprintf(bleReason_, sizeof(bleReason_), "%s", why[0] ? why : "the connection failed");
+      bleHasPasskey_ = false;
+    }
+    s->link = bleFailed_ ? crosslua::Backend::BLE_FAILED : crosslua::Backend::BLE_IDLE;
+    if (bleFailed_) {
+      snprintf(s->reason, sizeof(s->reason), "%s", bleReason_);
+      snprintf(s->addr, sizeof(s->addr), "%s", bleTarget_);
+    }
+  }
+  int blePaired(crosslua::Backend::BleDevice* out, int cap) override {
+    int n = 0;
+    for (uint8_t i = 0; i < BleHid.pairedCount() && n < cap; i++) {
+      const freeink::PairedHidDevice& p = BleHid.paired(i);
+      bleCopy(&out[n++], p.addr, p.name, 0, true, true);
+    }
+    return n;
+  }
+  bool bleForget(const char* addr) override {
+    for (uint8_t i = 0; i < BleHid.pairedCount(); i++)
+      if (!strcasecmp(BleHid.paired(i).addr, addr)) {
+        char spelled[18];
+        snprintf(spelled, sizeof(spelled), "%s", BleHid.paired(i).addr);  // forget() edits the list this points into
+        BleHid.forget(spelled);
+        return true;
+      }
+    return false;
+  }
+  bool eventKey(crosslua::Backend::KeyInfo* k) override {
+    if (!haveKey) return false;
+    *k = lastKey;
+    return true;
+  }
   // --- sensors / outputs. Each SDK lib is begun on first use and put back to rest when the app ends (see ~Backend). ---
   freeink::Imu imu_;
   freeink::EnvironmentSensor env_;
@@ -725,6 +917,7 @@ class LuaAppActivity::Backend final : public crosslua::Backend {
   freeink::LedManager led_;
   bool imuTried_ = false, envTried_ = false, buzzerTried_ = false, ledTried_ = false;
   ~Backend() override {
+    bleStop();                         // BleKeyboardHost::end(): the stack, its task and its RAM go; bonds stay in NVS
     for (int i = 0; i < crosslua::Backend::MAX_SOCKETS; i++)
       if (sockUsed_[i]) netClose(i);  // an app that exits with sockets open must not leak them (TCP, UDP, listen server, TLS session)
     if (buzzer_.present()) {
@@ -934,6 +1127,7 @@ class LuaAppActivity::Backend final : public crosslua::Backend {
         }
         events.clear();
         evPos.clear();
+        evKey.clear();
         close(fd);
         snprintf(err, errCap, "cancelled");
         return -1;
@@ -1220,6 +1414,7 @@ class LuaAppActivity::Backend final : public crosslua::Backend {
       }
       events.clear();
       evPos.clear();
+      evKey.clear();
       return fail("cancelled");
     };
 
@@ -1695,6 +1890,7 @@ class LuaAppActivity::Backend final : public crosslua::Backend {
       else if (p.is<const char*>() && !strcmp(p.as<const char*>(), "espnow")) espnowReq_ = true;
       else if (p.is<const char*>() && !strcmp(p.as<const char*>(), "monitor")) monitorReq_ = true;
       else if (p.is<const char*>() && !strcmp(p.as<const char*>(), "tx")) txReq_ = true;
+      else if (p.is<const char*>() && !strcmp(p.as<const char*>(), "bluetooth")) bleReq_ = true;
     for (int w = 0; w < 2; w++)
       for (JsonVariantConst v : doc["storage"][w ? "write" : "read"].as<JsonArrayConst>()) {
         char rel[104];
@@ -1783,6 +1979,7 @@ class LuaAppActivity::Backend final : public crosslua::Backend {
     }
     events.clear();
     evPos.clear();
+    evKey.clear();
     return true;
   }
   static void le32(uint8_t* p, uint32_t v) { p[0] = v; p[1] = v >> 8; p[2] = v >> 16; p[3] = v >> 24; }
@@ -1881,6 +2078,12 @@ class LuaAppActivity::Backend final : public crosslua::Backend {
   bool espnowReq_ = false;  // manifest asked for "espnow" (effective only after approval)
   bool monitorReq_ = false; // manifest asked for "monitor" (effective only after approval)
   bool txReq_ = false;      // manifest asked for "tx" (effective only after approval)
+  bool bleReq_ = false;     // manifest asked for "bluetooth" (effective only after approval)
+  bool bleFailed_ = false;  // the last connect failed (reason in bleReason_)
+  bool bleHasPasskey_ = false;
+  uint32_t blePasskey_ = 0;
+  char bleReason_[64] = {0};
+  char bleTarget_[18] = {0};  // the address a connect was asked for
   struct Grant {
     std::string rel;
     bool write;
@@ -1899,6 +2102,14 @@ LuaAppActivity::LuaAppActivity(GfxRenderer& renderer, MappedInputManager& mapped
     : Activity("LuaApp", renderer, mappedInput), appName_(std::move(appName)), appDir_(std::move(appDir)) {}
 
 LuaAppActivity::~LuaAppActivity() = default;
+
+namespace luabt {
+bool held() { return g_bluetoothHeld.load(); }
+}  // namespace luabt
+
+// While the Bluetooth stack is up the controller needs a steady CPU clock: asking for "no loop delay" makes the main loop run at
+// full speed instead of clocking down after a quiet spell (the same request the web-server screens make).
+bool LuaAppActivity::skipLoopDelay() { return backend_ && backend_->bleUp_; }
 
 void LuaAppActivity::logMemory(const char* when) const {
   const auto h = HalMemory::getInternalHeap();
@@ -2104,10 +2315,11 @@ void LuaAppActivity::showError(const std::string& title, const std::string& deta
 
 void LuaAppActivity::collectInput() {
   using B = MappedInputManager::Button;
-  auto push = [&](const char* name, int x = -1, int y = -1) {
+  auto push = [&](const char* name, int x = -1, int y = -1, const crosslua::Backend::KeyInfo* key = nullptr) {
     if (backend_ && backend_->events.size() < EVENT_QUEUE_MAX) {
       backend_->events.push_back(name);
       backend_->evPos.push_back({x, y});
+      backend_->evKey.push_back({key != nullptr, key ? *key : crosslua::Backend::KeyInfo{}});
     }
   };
   // Force-quit gesture first: it suppresses the matching release so Back never reaches the app.
@@ -2115,6 +2327,14 @@ void LuaAppActivity::collectInput() {
     LOG_INF(TAG, "force quit (Back held)");
     leave();
     return;
+  }
+  if (backend_ && backend_->bleUp_) {  // Bluetooth keyboard: drive the stack's reconnect/repeat timers, then queue what was typed
+    BleHid.poll();
+    freeink::KeyEvent ev;
+    while (BleHid.popKey(ev)) {
+      const crosslua::Backend::KeyInfo k = {ev.ch, static_cast<uint8_t>(ev.special), ev.mods, ev.keycode};
+      push("key", -1, -1, &k);
+    }
   }
   if (mappedInput.wasReleased(B::Back)) push("back");
   if (mappedInput.wasReleased(B::Confirm)) push("confirm");

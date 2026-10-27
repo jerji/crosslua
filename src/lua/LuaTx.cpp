@@ -52,6 +52,7 @@ int tx_start(lua_State* L) {
   if (int r = gateTx(L)) return r;
   if (channelGiven && (channel < 1 || channel > TX_CHANNELS || channel != static_cast<int>(channel))) return pushFail(L, "channel must be an integer 1..13");
   if (be(L).txRunning()) return pushFail(L, "the injector is already running (wifi.tx_stop() first)");
+  if (be(L).bleRunning()) return pushFail(L, "bluetooth is running: call ble.stop() first");
   if (be(L).espnowRunning()) return pushFail(L, "espnow is running: call espnow.stop() first");
   if (be(L).netReady()) return pushFail(L, "the radio is in use by WiFi or the hotspot: call wifi.off() first");
   int adopted = 0;
