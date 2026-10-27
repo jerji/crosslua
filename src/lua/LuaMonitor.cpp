@@ -34,6 +34,7 @@ int pushNotRunning(lua_State* L) {
 // With `file`, a PCAP (LINKTYPE_IEEE802_11) is written natively, streamed, no heap: the same write rules as mic.record.
 int monitor_start(lua_State* L) {
   lua_Number channel = 1;
+  bool channelGiven = false;
   char path[MAX_PATH_LEN + 80] = {0};
   bool hasFile = false;
   if (!lua_isnoneornil(L, 1)) {
@@ -45,6 +46,7 @@ int monitor_start(lua_State* L) {
       if (!strcmp(k, "channel")) {
         if (lua_type(L, -1) != LUA_TNUMBER) return pushFail(L, "channel must be an integer 1..13");
         channel = lua_tonumber(L, -1);
+        channelGiven = true;
       } else if (!strcmp(k, "file")) {
         if (lua_type(L, -1) != LUA_TSTRING) return pushFail(L, "file must be a path string ending in .pcap");
         if (!writePathArg(L, -1, path, sizeof(path))) return 2;  // pathArg already pushed nil, err
@@ -64,9 +66,21 @@ int monitor_start(lua_State* L) {
   if (be(L).monitorRunning()) return pushFail(L, "monitor is already running (wifi.monitor_stop() first)");
   if (be(L).espnowRunning()) return pushFail(L, "espnow is running: call espnow.stop() first");
   if (be(L).netReady()) return pushFail(L, "the radio is in use by WiFi or the hotspot: call wifi.off() first");
+  if (be(L).txRunning()) {
+    int adopted = 0;
+    if (!be(L).txChannel(&adopted)) return pushFail(L, "cannot read the injector's channel");
+    if (channelGiven && static_cast<int>(channel) != adopted) {
+      char msg[96];
+      snprintf(msg, sizeof(msg), "the injector is on channel %d: use it, or wifi.tx_stop() first", adopted);
+      return pushFail(L, msg);
+    }
+    if (!channelGiven) channel = adopted;
+  }
   if (hasFile && be(L).fsSize(path) == -2) return pushFail(L, "is a directory");
   if (hasFile && !ensureParentDir(be(L), path)) return pushFail(L, "cannot create directory");
-  const size_t floor = be(L).radioFloorBytes();
+  // When another radio mode is already running the radio's RAM is spent either way (the rings/buffers are static), so the
+  // start floor only applies to a cold radio.
+  const size_t floor = (be(L).monitorRunning() || be(L).txRunning() || be(L).espnowRunning()) ? 0 : be(L).radioFloorBytes();
   const size_t freeNow = be(L).freeHeap();
   if (freeNow < floor) {
     char msg[96];

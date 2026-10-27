@@ -167,7 +167,7 @@ An app must declare it in `manifest.json`, or every call below fails with a clea
 |---|---|
 | `wifi.connect([{tls=false}])` → true \| false, reason | Parks your script and hands the screen to the system's WiFi flow, which auto-joins the last saved network (usually no UI at all; otherwise the normal network picker/keyboard). **The screen is the system's afterwards: redraw.** Returns immediately with `true` if already connected. Input events do not wake it. **Refuses up front** (`false, "not enough free RAM for WiFi + TLS (free 86K, need 96K)…"`) when less than 96 KB is free: WiFi costs ~57 KB and TLS wants 40 KB on top. **`wifi.connect{tls=false}`** is for apps that only use plain TCP (`net.*`): it needs 80 KB free instead (radio ~57 KB + the 16 KB the socket layer refuses to go below + ~7 KB margin), and `https` then fails at request time with its own "not enough free RAM for TLS" message instead of crashing (verified on the X4 at ~90 KB free). `tls` must be a boolean; the default is `true`. Always show `reason`. |
 | `wifi.status()` → `{connected, ssid, ip, rssi}` | |
-| `wifi.softap(ssid [, {password, channel, max_clients}])` → `true, ip` \| `false, reason` | **Starts the device's own WiFi network** (a hotspot) so phones and laptops can join and talk to your `net.listen` server. Needs `"network"` AND `"hotspot"` in the manifest, and the user must approve the request on the permission screen (the line reads `HOTSPOT`; same stored approval as storage grants and `listen`). `ssid` 1..32 printable ASCII; `password` 8..63 printable ASCII, **omit it for an OPEN network** (anyone nearby can join: use it only for things you would show a stranger); `channel` 1..11 (default 1); `max_clients` 1..4 (default 4). Refused while WiFi is joined as a client (`wifi.off()` first), while a hotspot already runs, and under 80 KB free RAM (measured on the X4: the hotspot itself costs ~60 KB, and `net.listen` needs 16 KB more). There is no internet behind it (`http.*` fails, `wifi.status().connected` stays false); `net.listen/accept/read/write/udp_*` and `net.info()` work over it. `wifi.off()` stops it, and leaving the app does the usual silent reboot. Like `wifi.connect()`, a started hotspot lowers the allocator guard to 12 KB (the radio owns ~60 KB; the usual 40 KB floor would leave Lua nothing). DNS and DHCP: the SDK hands out addresses itself; a captive-portal DNS answer can be written in Lua over `net.udp_open(53)`. Verified on the X4 with a real client (a USB WiFi adapter on the test host): WPA2 join, DHCP lease from the device, a Lua `net.listen` HTTP server answered `GET` requests, `softap_info().clients` = 1. Free heap fell to ~32 KB (low-water) while serving. |
+| `wifi.softap(ssid [, {password, channel, max_clients}])` → `true, ip` \| `false, reason` | **Starts the device's own WiFi network** (a hotspot) so phones and laptops can join and talk to your `net.listen` server. Needs `"network"` AND `"hotspot"` in the manifest, and the user must approve the request on the permission screen (the line reads `AP`; same stored approval as storage grants and `listen`). `ssid` 1..32 printable ASCII; `password` 8..63 printable ASCII, **omit it for an OPEN network** (anyone nearby can join: use it only for things you would show a stranger); `channel` 1..11 (default 1); `max_clients` 1..4 (default 4). Refused while WiFi is joined as a client (`wifi.off()` first), while a hotspot already runs, and under 80 KB free RAM (measured on the X4: the hotspot itself costs ~60 KB, and `net.listen` needs 16 KB more). There is no internet behind it (`http.*` fails, `wifi.status().connected` stays false); `net.listen/accept/read/write/udp_*` and `net.info()` work over it. `wifi.off()` stops it, and leaving the app does the usual silent reboot. Like `wifi.connect()`, a started hotspot lowers the allocator guard to 12 KB (the radio owns ~60 KB; the usual 40 KB floor would leave Lua nothing). DNS and DHCP: the SDK hands out addresses itself; a captive-portal DNS answer can be written in Lua over `net.udp_open(53)`. Verified on the X4 with a real client (a USB WiFi adapter on the test host): WPA2 join, DHCP lease from the device, a Lua `net.listen` HTTP server answered `GET` requests, `softap_info().clients` = 1. Free heap fell to ~32 KB (low-water) while serving. |
 | `wifi.softap_info()` → `{ssid, ip, clients}` \| `nil, "no hotspot running"` | `clients` = stations currently joined. Needs `"network"` only |
 | `wifi.off()` | radio off now (frees part of the RAM; the radio leaves the heap fragmented, so ~20 KB only comes back after a reboot). Leaving an app that ever called `wifi.connect()` tears WiFi down and reboots to Home to defragment the heap, even if you called `wifi.off()` first (this survives `app.restart`). |
 | `http.request{url, method, headers, body, save_to, max_body}` → `{status, ok, bytes, body}` \| nil, err | see below |
@@ -315,7 +315,7 @@ ring filled from the WiFi task and `espnow.recv()` polls it, so no Lua code ever
 | `espnow.stop()` | Always allowed. `wifi.off()` also stops it |
 
 The approval screen lists permissions as short labels packed onto as few lines as fit, most sensitive first
-(`MICROPHONE, ESP-NOW` / `SNIFFER, HOTSPOT` / `SERVER, SPEAKER`), because the native dialog clips after about three lines.
+(`MICROPHONE, ESP-NOW` / `SNIFFER, INJECT, AP` / `SERVER, SPEAKER`), because the native dialog clips after about three lines.
 
 ## wifi.monitor — passive 802.11 capture + native PCAP writer (needs `network` + `monitor` AND the user's approval)
 ```json
@@ -338,6 +338,26 @@ on another channel after `stop`).
 The PCAP is standard libpcap 2.4 (microsecond magic `0xa1b2c3d4`, LINKTYPE_IEEE802_11 = 105) that Wireshark/scapy open directly.
 Timestamps are microseconds **since boot**, not wall-clock time. Verified on the X4 against an injecting adapter: the file parsed
 with scapy, 16 records, inter-frame gaps matching the injection cadence.
+
+## wifi.tx — raw 802.11 frame injection (needs `network` + `tx` AND the user's approval)
+```json
+{"title": "Recon", "permissions": ["network", "monitor", "tx"]}
+```
+Sends raw 802.11 frames on one fixed channel (deauth, beacon, custom action frames — biscuit's offense suite). The approval screen
+labels it `INJECT`: sending arbitrary frames can disrupt other people's devices, so it is gated harder than the sniffer. The radio
+rules are the same as the monitor's (exclusive with WiFi/the hotspot/espnow, `wifi.off()` stops it, leaving the app reboots), with
+one exception: **the injector and the sniffer may run at the same time on the same channel** — a start with no channel adopts the
+other mode's channel, and an explicit different one is refused. Frames sent are not received back by the device's own sniffer.
+
+| call | notes |
+|---|---|
+| `wifi.tx_start([{channel=1..13}])` → `true` \| `nil, err` | Default: the monitor's channel when it runs, else 1. Same RAM floors as the monitor (the radio's own RAM is already spent when another radio mode runs, so no extra floor then) |
+| `wifi.tx(frame)` → `true` \| `nil, err` | The raw 802.11 frame **without the FCS** (the radio computes and appends it), 24..250 bytes, binary-safe. `true` means the radio accepted the frame: **802.11 has no delivery guarantee**, verify effects on the receiving side. Frames from your own device do not loop back into `wifi.monitor_recv()` |
+| `wifi.tx_info()` → `{channel, sent}` \| `nil, err` | `sent` counts frames the radio accepted |
+| `wifi.tx_stop()` | Always allowed |
+
+Verified on the X4 with a monitor-mode adapter: frames injected from Lua were captured on the air byte for byte (15/15 accepted
+by the radio, 13/15 seen by the host's sniffer in range).
 
 ## epub — book metadata without opening the book
 | call | notes |

@@ -73,6 +73,7 @@ int wifi_connect(lua_State* L) {
   }
   if (be(L).espnowRunning()) return pushNo(L, "espnow is running: call espnow.stop() before joining WiFi");
   if (be(L).monitorRunning()) return pushNo(L, "the WiFi sniffer is running: call wifi.monitor_stop() first");
+  if (be(L).txRunning()) return pushNo(L, "the injector is running: call wifi.tx_stop() first");
   // Measured on the X4: bringing WiFi up costs ~56 KB of RAM and a TLS session wants >= 40 KB free on top of that.
   // Fail NOW with a clear reason rather than half-way through a request.
   const size_t freeNow = be(L).freeHeap();
@@ -190,6 +191,7 @@ int wifi_softap(lua_State* L) {
   if (be(L).wifiConnected()) return pushNo(L, "WiFi is joined as a client: call wifi.off() before starting a hotspot");
   if (be(L).espnowRunning()) return pushNo(L, "espnow is running: call espnow.stop() before starting a hotspot");
   if (be(L).monitorRunning()) return pushNo(L, "the WiFi sniffer is running: call wifi.monitor_stop() first");
+  if (be(L).txRunning()) return pushNo(L, "the injector is running: call wifi.tx_stop() first");
   const size_t freeNow = be(L).freeHeap();
   if (freeNow < SOFTAP_MIN_FREE_BYTES) {
     char msg[120];
@@ -450,6 +452,7 @@ void registerNet(lua_State* L, Ctx* c) {
                                    {"scan", wifi_scan}, {"softap", wifi_softap}, {"softap_info", wifi_softap_info}, {nullptr, nullptr}};
   regTable(L, c, "wifi", wifiFns);
   registerWifiMonitor(L, c);  // wifi.monitor_* joins the same lazy table
+  registerWifiTx(L, c);       // wifi.tx_* too
   static const luaL_Reg httpFns[] = {{"request", http_request}, {nullptr, nullptr}};
   regTable(L, c, "http", httpFns);
   // http.get needs the request function as its one upvalue.

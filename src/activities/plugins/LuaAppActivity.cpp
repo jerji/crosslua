@@ -129,13 +129,14 @@ class LuaAppActivity::Backend final : public crosslua::Backend {
 
   // ---- storage grants ("storage": {"read": [...], "write": [...]} in manifest.json) ------------------------------
   // Parsed from the manifest but INVISIBLE to the API (grantCount() == 0) until the user approved exactly this request.
-  bool hasGrantRequest() const { return !requested_.empty() || listenReq_ || hotspotReq_ || espnowReq_ || monitorReq_ || audioReq_ || micReq_; }
+  bool hasGrantRequest() const { return !requested_.empty() || listenReq_ || hotspotReq_ || espnowReq_ || monitorReq_ || txReq_ || audioReq_ || micReq_; }
   // Canonical text of the request; an approval is valid only for an identical request (any change asks again).
   std::string grantCanonical() const {
     std::vector<std::string> v;
     for (const Grant& g : requested_) v.push_back(std::string(g.write ? "w:" : "r:") + g.rel);
     if (espnowReq_) v.push_back("p:espnow");  // raw frames to anyone in radio range
     if (monitorReq_) v.push_back("p:monitor");  // passive capture of everything in radio range
+    if (txReq_) v.push_back("p:tx");  // sending arbitrary frames: can deauthenticate other people's devices
     if (hotspotReq_) v.push_back("p:hotspot");  // starting a WiFi network that others can join
     if (listenReq_) v.push_back("p:listen");  // accepting connections from the LAN is part of the approved request too
     if (micReq_) v.push_back("p:microphone");  // a recording device: consented to explicitly, never silently
@@ -178,7 +179,8 @@ class LuaAppActivity::Backend final : public crosslua::Backend {
       if (micReq_) labels.push_back("MICROPHONE");
       if (espnowReq_) labels.push_back("ESP-NOW");
       if (monitorReq_) labels.push_back("SNIFFER");
-      if (hotspotReq_) labels.push_back("HOTSPOT");
+      if (txReq_) labels.push_back("INJECT");
+      if (hotspotReq_) labels.push_back("AP");  // the only abbreviation that lets seven permissions fit on three lines
       if (listenReq_) labels.push_back("SERVER");
       if (audioReq_) labels.push_back("SPEAKER");
       s += crosslua::packPermissionLabels(labels, PERMISSION_LINE_WIDTH);
@@ -196,6 +198,7 @@ class LuaAppActivity::Backend final : public crosslua::Backend {
                   (files ? 1 : 0);
     if (n > 1) return app + " wants access to your device";
     if (micReq_) return app + " wants to use the microphone";
+    if (txReq_) return app + " wants to inject WiFi frames";
     if (monitorReq_) return app + " wants to capture nearby WiFi traffic";
     if (espnowReq_) return app + " wants to use the radio directly";
     if (hotspotReq_) return app + " wants to start a hotspot";
@@ -555,7 +558,7 @@ class LuaAppActivity::Backend final : public crosslua::Backend {
       monFile_.close();
     }
     *pcapBytes = monBytes_;
-    if (!wifiConnected() && !WiFi.softAPIP()) {  // give the radio back entirely (promiscuous leaves it started)
+    if (!txUp_ && !wifiConnected() && !WiFi.softAPIP()) {  // give the radio back entirely (promiscuous leaves it started)
       WiFi.mode(WIFI_OFF);
     }
   }
@@ -577,6 +580,52 @@ class LuaAppActivity::Backend final : public crosslua::Backend {
     *dropped = monDropped_.load(std::memory_order_relaxed);
     snprintf(path, pathCap, "%s", monPath_);
     *pcapBytes = monBytes_;
+    return true;
+  }
+  // --- wifi.tx (esp_wifi_80211_tx; the radio stays a disconnected STA with promiscuous enabled, like the monitor, and the FCS is
+  // computed by the driver). Coexists with the monitor on one channel: whoever stops last turns the radio off. ---
+  bool txUp_ = false;
+  int txChannel_ = 1, txSent_ = 0;
+  bool txAllowed() override { return net_ && txReq_ && approved_; }
+  bool txRunning() override { return txUp_; }
+  bool txStart(int channel, char* err, size_t errCap) override {
+    g_radioUsedThisSession = true;
+    radioEverStarted_ = true;
+    auto fail = [&](const char* msg) {
+      snprintf(err, errCap, "%s", msg);
+      txStop();
+      return false;
+    };
+    WiFi.mode(WIFI_MODE_STA);  // same boot dance as the monitor (Arduino never boots the driver in NULL mode)
+    WiFi.disconnect(false);
+    if (esp_wifi_set_channel(static_cast<uint8_t>(channel), WIFI_SECOND_CHAN_NONE) != ESP_OK) return fail("could not set the channel");
+    if (esp_wifi_set_promiscuous(true) != ESP_OK) return fail("could not enable raw sending");
+    txUp_ = true;
+    txChannel_ = channel;
+    txSent_ = 0;
+    return true;
+  }
+  void txStop() override {
+    if (txUp_) {
+      txUp_ = false;
+      if (!monUp_) {  // the monitor needs the radio (and its promiscuous mode) too
+        esp_wifi_set_promiscuous(false);
+        if (!wifiConnected() && !WiFi.softAPIP()) WiFi.mode(WIFI_OFF);
+      }
+    }
+  }
+  bool txSend(const void* frame, size_t n, char* err, size_t errCap) override {
+    if (esp_wifi_80211_tx(WIFI_IF_STA, static_cast<const uint8_t*>(frame), static_cast<int>(n), false) != ESP_OK) {
+      snprintf(err, errCap, "the radio refused the frame");
+      return false;
+    }
+    txSent_++;
+    return true;
+  }
+  bool txInfo(int* channel, int* sent) override {
+    if (!txUp_) return false;
+    *channel = txChannel_;
+    *sent = txSent_;
     return true;
   }
   void wifiRequestConnect() override {
@@ -647,6 +696,7 @@ class LuaAppActivity::Backend final : public crosslua::Backend {
     }
     if (led_.begun()) led_.clear();
     if (imu_.present()) imu_.sleep();  // the tilt page-turner wakes it again when it needs it
+    txStop();
     {
       uint32_t monBytes = 0;
       monitorStop(&monBytes);          // the capture callback points into this object; flush and close the PCAP
@@ -743,6 +793,7 @@ class LuaAppActivity::Backend final : public crosslua::Backend {
     return true;
   }
   void wifiOff() override {
+    txStop();
     uint32_t monBytes = 0;
     monitorStop(&monBytes);
     espnowStop();
@@ -1606,6 +1657,7 @@ class LuaAppActivity::Backend final : public crosslua::Backend {
       else if (p.is<const char*>() && !strcmp(p.as<const char*>(), "hotspot")) hotspotReq_ = true;
       else if (p.is<const char*>() && !strcmp(p.as<const char*>(), "espnow")) espnowReq_ = true;
       else if (p.is<const char*>() && !strcmp(p.as<const char*>(), "monitor")) monitorReq_ = true;
+      else if (p.is<const char*>() && !strcmp(p.as<const char*>(), "tx")) txReq_ = true;
     for (int w = 0; w < 2; w++)
       for (JsonVariantConst v : doc["storage"][w ? "write" : "read"].as<JsonArrayConst>()) {
         char rel[104];
@@ -1791,6 +1843,7 @@ class LuaAppActivity::Backend final : public crosslua::Backend {
   bool hotspotReq_ = false; // manifest asked for "hotspot" (effective only after approval)
   bool espnowReq_ = false;  // manifest asked for "espnow" (effective only after approval)
   bool monitorReq_ = false; // manifest asked for "monitor" (effective only after approval)
+  bool txReq_ = false;      // manifest asked for "tx" (effective only after approval)
   struct Grant {
     std::string rel;
     bool write;

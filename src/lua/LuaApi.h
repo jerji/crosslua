@@ -180,10 +180,20 @@ class Backend {
   // radio is exclusive with WiFi/the hotspot/espnow. The callback fills a small ring from the WiFi task; Lua only polls it. ---
   virtual bool monitorAllowed() = 0;
   virtual bool monitorRunning() { return false; }
+  virtual bool monitorChannel(int* channel) { return monitorRunning() ? (*channel = 1, true) : false; }
+  virtual bool txChannel(int* channel) { return txRunning() ? (*channel = 1, true) : false; }
   virtual bool monitorStart(int channel, const char* pcapPath, char* err, size_t errCap) = 0;  // pcapPath: nullptr = no file
   virtual void monitorStop(uint32_t* pcapBytes) = 0;
   virtual int monitorRecv(void* buf, size_t cap, int* rssi, int* channel) = 0;  // bytes (> 0), or 0 when nothing is waiting
   virtual bool monitorInfo(int* channel, int* captured, int* dropped, char* path, size_t pathCap, uint32_t* pcapBytes) = 0;
+  // --- wifi.tx (raw 802.11 injection); needs "network" + "tx" and the user's approval. Exclusive with WiFi/hotspot/espnow but
+  // COEXISTS with the monitor on the same channel (a start without a channel adopts the other mode's channel). ---
+  virtual bool txAllowed() = 0;
+  virtual bool txRunning() { return false; }
+  virtual bool txStart(int channel, char* err, size_t errCap) = 0;
+  virtual void txStop() = 0;
+  virtual bool txSend(const void* frame, size_t n, char* err, size_t errCap) = 0;  // frame without the FCS
+  virtual bool txInfo(int* channel, int* sent) = 0;  // false: not running
   // Ask the system to bring WiFi up (it may show its own network picker). Non-blocking: the script is parked and
   // resumed with "wifi:ok" / "wifi:fail" once the system UI has finished.
   virtual void wifiRequestConnect() = 0;
