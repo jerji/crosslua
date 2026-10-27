@@ -8,6 +8,7 @@
 #include <Microphone.h>
 #include <atomic>
 #include <esp_now.h>
+#include <esp_sleep.h>
 #include <esp_timer.h>
 #include <esp_wifi.h>
 #include <SecureClient.h>
@@ -264,6 +265,30 @@ class LuaAppActivity::Backend final : public crosslua::Backend {
 
   uint32_t millis() override { return ::millis(); }
   size_t radioFloorBytes() override { return radioEverStarted_ ? 48 * 1024 : 80 * 1024; }
+  const char* wakeCause() override {
+    switch (wakeCause_) {
+      case ESP_SLEEP_WAKEUP_TIMER: return "timer";
+      case ESP_SLEEP_WAKEUP_EXT0:
+      case ESP_SLEEP_WAKEUP_EXT1:
+      case ESP_SLEEP_WAKEUP_GPIO: return "button";
+      case ESP_SLEEP_WAKEUP_UNDEFINED: return "power-on";
+      default: return "other";
+    }
+  }
+  bool systemSleep(int seconds, char* err, size_t errCap) override {
+    // Arm the timer wake, then hand over to upstream's own sleep flow (sleep screen, plugin events, WiFi teardown, rail
+    // power-down, power-button wake): ONE code path for every sleep, ours just also wakes on time. Read-only use of the
+    // existing main.cpp entry point; the call never returns on the device.
+    g_radioUsedThisSession = true;  // the wake reboot is the same defragmenting reboot every radio app gets
+    if (esp_sleep_enable_timer_wakeup(static_cast<uint64_t>(seconds) * 1000000ULL) != ESP_OK) {
+      snprintf(err, errCap, "could not arm the timer wake");
+      return false;
+    }
+    extern void enterDeepSleep(bool fromTimeout);
+    enterDeepSleep(false);
+    snprintf(err, errCap, "the device refused to enter deep sleep");
+    return false;
+  }
   size_t freeHeap() override { return HalMemory::getInternalHeap().freeBytes; }
   size_t freeHeapQuick() override { return ESP.getFreeHeap(); }  // O(1); getInternalHeap() also walks for the largest block
   size_t minFreeHeap() override { return HalMemory::getInternalHeap().minFreeBytes; }
@@ -1856,6 +1881,7 @@ class LuaAppActivity::Backend final : public crosslua::Backend {
   bool espnowReq_ = false;  // manifest asked for "espnow" (effective only after approval)
   bool monitorReq_ = false; // manifest asked for "monitor" (effective only after approval)
   bool txReq_ = false;      // manifest asked for "tx" (effective only after approval)
+  esp_sleep_wakeup_cause_t wakeCause_ = ESP_SLEEP_WAKEUP_UNDEFINED;  // what woke the previous cycle, read once at start
   struct Grant {
     std::string rel;
     bool write;
@@ -1871,7 +1897,8 @@ class LuaAppActivity::Backend final : public crosslua::Backend {
 // ---------------------------------------------------------------------------
 LuaAppActivity::LuaAppActivity(GfxRenderer& renderer, MappedInputManager& mappedInput, std::string appName,
                                std::string appDir)
-    : Activity("LuaApp", renderer, mappedInput), appName_(std::move(appName)), appDir_(std::move(appDir)) {}
+    : Activity("LuaApp", renderer, mappedInput), appName_(std::move(appName)), appDir_(std::move(appDir)) {
+  wakeCause_ = esp_sleep_get_wakeup_cause();  // valid right after a deep-sleep wake; UNDEFINED on a normal reset}
 
 LuaAppActivity::~LuaAppActivity() = default;
 

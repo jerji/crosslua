@@ -43,6 +43,11 @@ class Backend {
   virtual uint32_t millis() = 0;
   // RAM floor for starting a radio mode; lower after the first radio use in this app (the radio's RAM never fully returns).
   virtual size_t radioFloorBytes() { return 80 * 1024; }
+  // --- deep sleep: system.sleep(seconds) arms a timer wake (plus the power button) and enters the SAME upstream sleep flow
+  // (sleep screen, plugin events, rail power-down); the call never returns and the device reboots on wake. system.last_wake()
+  // reports what woke the previous cycle. No permission: the power button always wakes the device. ---
+  virtual const char* wakeCause() { return "power-on"; }  // "timer" | "button" | "power-on" | "other"
+  virtual bool systemSleep(int seconds, char* err, size_t errCap) = 0;  // true = armed and entering sleep (never returns on device)
   virtual size_t freeHeap() = 0;
   // Cheap free-RAM read for the allocator guard (runs on every growing allocation); defaults to freeHeap().
   virtual size_t freeHeapQuick() { return freeHeap(); }

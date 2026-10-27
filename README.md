@@ -44,13 +44,14 @@ upstream files touched: [`docs/lua/UPSTREAM_TOUCHPOINTS.md`](docs/lua/UPSTREAM_T
 
 - **[CrossPoint Reader](https://github.com/crosspoint-reader/crosspoint-reader)** (upstream, MIT © 2025 CrossPoint Reader
   organization) — this fork's entire foundation: firmware, UI, plugin system, dev serial channel.
+- **[Grimoire](https://github.com/SynnBunn/Grimoire)** (no license file — inspiration only, no code copied) — the minimal
+  Lua-scriptable firmware that proved Lua belongs on this hardware; our `net.*` surface targets Grimoire parity and ships with a
+  pure-Lua compatibility shim for its spells.
 - **[biscuit](https://github.com/DaveAllie/biscuit)** (MIT © 2025 Dave Allie) — the reference for how to build network apps on
   this hardware; our socket/HTTP semantics and the poll-don't-callback radio design follow its patterns.
 - **[crossplay](https://github.com/crosspoint-reader/crossplay)** (MIT © 2025 CrossPoint Reader organization) — source of the
   ESP-NOW radio sequence (`LinkRadio`) our `espnow.*` and `wifi.tx` backends mirror.
 - **freeink-sdk** (MIT © 2026 FreeInk) — hardware drivers behind `device.*`, `audio.*`, `mic.*`; linked read-only.
-- The nano² smart-lock binding reimplements two calls from the lock vendor's SDK, which **ships without a license file** —
-  treat that part as proprietary and don't redistribute it.
 
 ---
 

@@ -7,8 +7,8 @@ local function __main()
 
   gfx.clear()
   -- header band
-  gfx.rect(0, 0, 480, 34, true)  -- filled black header band
-  gfx.text(16, 12, "CrossLua  ·  Lua apps on your e-reader", "ui12", "w")
+  gfx.rect(0, 0, 480, 40, true)  -- filled black header band
+  gfx.text(16, 14, "CrossLua  ·  Lua apps on your e-reader", "ui12", "w")
 
   local y = 56
   gfx.text(16, y, "Hello from Lua!", "sans18", "b")
@@ -35,12 +35,12 @@ local function __main()
   for i = 1, 8 do hex = hex .. string.format("%02x", h:byte(i)) end
   gfx.text(16, y + 20, hex, "ui12")
   gfx.text(250, y, "raw radio, in Lua", "small")
-  gfx.text(250, y + 20, "net.listen · udp · espnow", "ui12")
-  gfx.text(250, y + 44, "sniff · inject", "ui12")
+  gfx.text(250, y + 20, "net.listen · udp", "small")
+  gfx.text(250, y + 44, "espnow · sniff · inject", "small")
   gfx.text(16, y + 70, "TLS, HTTP, JSON, mDNS, files, audio and mic — all from Lua.", "small")
 
   gfx.rect(16, 620, 448, 4, true)
-  gfx.text(16, 640, "Everything above is a 60-line Lua app.", "small")
+  gfx.text(16, 640, "Everything above is one small Lua app.", "small")
   gfx.text(16, 664, "Permissions are granted per app, with a dialog.", "small")
   gfx.present("full")
   while input.wait() ~= "back" do end
