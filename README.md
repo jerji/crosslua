@@ -43,7 +43,8 @@ upstream files touched: [`docs/lua/UPSTREAM_TOUCHPOINTS.md`](docs/lua/UPSTREAM_T
 ## Credits & licenses
 
 - **[CrossPoint Reader](https://github.com/crosspoint-reader/crosspoint-reader)** (upstream, MIT © 2025 CrossPoint Reader
-  organization) — this fork's entire foundation: firmware, UI, plugin system, dev serial channel.
+  organization) — this fork's entire foundation: firmware, UI, plugin system, dev serial channel, and the **FreeInk SDK**
+  (MIT © 2026 FreeInk) it bundles, whose hardware drivers sit behind everything in `device.*`, `audio.*` and `mic.*`.
 - **[Grimoire](https://github.com/SynnBunn/Grimoire)** (no license file — inspiration only, no code copied) — the minimal
   Lua-scriptable firmware that proved Lua belongs on this hardware; our `net.*` surface targets Grimoire parity and ships with a
   pure-Lua compatibility shim for its spells.
@@ -51,7 +52,6 @@ upstream files touched: [`docs/lua/UPSTREAM_TOUCHPOINTS.md`](docs/lua/UPSTREAM_T
   this hardware; our socket/HTTP semantics and the poll-don't-callback radio design follow its patterns.
 - **[crossplay](https://github.com/crosspoint-reader/crossplay)** (MIT © 2025 CrossPoint Reader organization) — source of the
   ESP-NOW radio sequence (`LinkRadio`) our `espnow.*` and `wifi.tx` backends mirror.
-- **freeink-sdk** (MIT © 2026 FreeInk) — hardware drivers behind `device.*`, `audio.*`, `mic.*`; linked read-only.
 
 ---
 
