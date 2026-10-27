@@ -71,6 +71,7 @@ int wifi_connect(lua_State* L) {
     lua_pushboolean(L, 1);
     return 1;
   }
+  if (be(L).espnowRunning()) return pushNo(L, "espnow is running: call espnow.stop() before joining WiFi");
   // Measured on the X4: bringing WiFi up costs ~56 KB of RAM and a TLS session wants >= 40 KB free on top of that.
   // Fail NOW with a clear reason rather than half-way through a request.
   const size_t freeNow = be(L).freeHeap();
@@ -186,6 +187,7 @@ int wifi_softap(lua_State* L) {
   int clients = 0;
   if (be(L).softApInfo(cur, sizeof(cur), curIp, sizeof(curIp), &clients)) return pushNo(L, "a hotspot is already running (wifi.off() stops it)");
   if (be(L).wifiConnected()) return pushNo(L, "WiFi is joined as a client: call wifi.off() before starting a hotspot");
+  if (be(L).espnowRunning()) return pushNo(L, "espnow is running: call espnow.stop() before starting a hotspot");
   const size_t freeNow = be(L).freeHeap();
   if (freeNow < SOFTAP_MIN_FREE_BYTES) {
     char msg[120];

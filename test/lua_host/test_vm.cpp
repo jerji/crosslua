@@ -9,6 +9,7 @@
 #include <functional>
 #include <cmath>
 extern "C" {
+#include "src/lua/PermText.h"
 #include "lauxlib.h"
 #include "lua.h"
 }
@@ -406,6 +407,50 @@ struct MockBackend : Backend {
   std::vector<ApCall> apCalls;
   int apClients = 0;
   bool netReady() override { return wifiUp || apUp; }
+  // --- ESP-NOW mock ---
+  bool enPermitted = false, enApproved = true, enUp = false, enFail = false, enSendFail = false;
+  int enChannel = 0, enDropped = 0;
+  struct EnSent { uint8_t mac[6]; bool broadcast; std::string data; };
+  std::vector<EnSent> enSent;
+  struct EnIn { uint8_t mac[6]; std::string data; };
+  std::vector<EnIn> enInbox;  // scripted frames, delivered oldest first
+  bool espnowAllowed() override { return net && enPermitted && enApproved; }
+  bool espnowRunning() override { return enUp; }
+  bool espnowStart(int channel, uint8_t mac[6], char* err, size_t errCap) override {
+    if (enFail) { snprintf(err, errCap, "esp_now_init failed (mock)"); return false; }
+    enUp = true;
+    enChannel = channel;
+    const uint8_t m[6] = {0x02, 0x00, 0x00, 0x00, 0x00, 0xA1};
+    memcpy(mac, m, 6);
+    return true;
+  }
+  void espnowStop() override { enUp = false; }
+  bool espnowSend(const uint8_t mac[6], bool broadcast, const void* d, size_t n, char* err, size_t errCap) override {
+    if (enSendFail) { snprintf(err, errCap, "the radio refused the frame (mock)"); return false; }
+    EnSent e;
+    memcpy(e.mac, mac, 6);
+    e.broadcast = broadcast;
+    e.data.assign(static_cast<const char*>(d), n);
+    enSent.push_back(e);
+    return true;
+  }
+  int espnowRecv(void* buf, size_t cap, uint8_t mac[6]) override {
+    if (enInbox.empty()) return 0;
+    EnIn in = enInbox.front();
+    enInbox.erase(enInbox.begin());
+    const size_t n = std::min(cap, in.data.size());
+    memcpy(buf, in.data.data(), n);
+    memcpy(mac, in.mac, 6);
+    return static_cast<int>(n);
+  }
+  bool espnowInfo(uint8_t mac[6], int* channel, int* dropped) override {
+    if (!enUp) return false;
+    const uint8_t m[6] = {0x02, 0x00, 0x00, 0x00, 0x00, 0xA1};
+    memcpy(mac, m, 6);
+    *channel = enChannel;
+    *dropped = enDropped;
+    return true;
+  }
   bool hotspotAllowed() override { return net && hotspotPermitted && hotspotApproved; }
   bool softApStart(const char* ssid, const char* password, int channel, int maxClients, char* ip, size_t ipCap, char* err, size_t errCap) override {
     if (apFail) { snprintf(err, errCap, "cannot start the hotspot (mock)"); return false; }
@@ -427,7 +472,7 @@ struct MockBackend : Backend {
     snprintf(ssid, sc, "TestNet"); snprintf(ip, ic, "192.168.1.50"); *rssi = -57;
     return true;
   }
-  void wifiOff() override { wifiUp = false; }
+  void wifiOff() override { wifiUp = false; apUp = false; enUp = false; }  // like the firmware: the hotspot and espnow stop too
   size_t largestFreeBlock() override { return largest; }
   bool httpRequest(const HttpRequest& rq, HttpResult& res) override {
     SeenReq r;
@@ -5077,6 +5122,245 @@ int main() {
       CHECK(run(vm, be, 100000) == Status::Finished);
       CHECK(be.logs.size() == 2 && be.logs[0] == "false\tcannot start the hotspot (mock)" && be.logs[1] == "nil\tno hotspot running");
     }
+  }
+  {
+    TEST("espnow: start/send/recv/info/stop, mac parsing, payload limits, permission layers, radio exclusivity");
+    {
+      MockBackend be;
+      be.net = true;
+      be.enPermitted = true;
+      const uint8_t peer1[6] = {0xDE, 0xAD, 0xBE, 0xEF, 0x00, 0x01};
+      MockBackend::EnIn a; memcpy(a.mac, peer1, 6); a.data = std::string("hello\0bin", 9);
+      MockBackend::EnIn b; memcpy(b.mac, peer1, 6); b.data = "second";
+      be.enInbox = {a, b};
+      be.enDropped = 3;
+      LuaVm vm;
+      CHECK(vm.open(128 * 1024));
+      registerApi(vm, be);
+      const char* script = R"LUA(
+        print(espnow.info())
+        print(espnow.send(nil, "x"))
+        print(espnow.recv())
+        print(espnow.start())
+        local i = espnow.info()
+        print(i.mac, i.channel, i.dropped)
+        print(espnow.start())
+        print(espnow.send(nil, "to everyone"))
+        print(espnow.send("broadcast", "also everyone"))
+        print(espnow.send("AA:bb:0C:dd:EE:ff", "unicast"))
+        print(espnow.send("aa:bb:cc:dd:ee:ff", ("z"):rep(250)))
+        local d, m = espnow.recv()
+        print(#d, d:byte(6), m)
+        d, m = espnow.recv()
+        print(d, m)
+        print(select("#", espnow.recv()), espnow.recv())
+        print(espnow.stop())
+        print(espnow.send(nil, "x"))
+        print(espnow.recv())
+        print(espnow.info())
+        print(espnow.stop())
+      )LUA";
+      CHECK(vm.load("t", script, strlen(script)));
+      CHECK(run(vm, be, 200000) == Status::Finished);
+      const char* NS = "nil\tespnow is not started (call espnow.start() first)";
+      const char* want[] = {NS, NS, NS, "true\t02:00:00:00:00:a1", "02:00:00:00:00:a1\t1\t3",
+                            "nil\tespnow is already running (espnow.stop() first)", "true", "true", "true", "true",
+                            "9\t0\tde:ad:be:ef:00:01", "second\tde:ad:be:ef:00:01", "1\tnil", "true", NS, NS, NS, "true"};
+      const size_t N = sizeof(want) / sizeof(want[0]);
+      if (be.logs.size() != N || getenv("DUMP_LOGS")) for (size_t i = 0; i < be.logs.size(); i++) printf("    en log[%zu] '%s'\n", i, be.logs[i].c_str());
+      CHECK(be.logs.size() == N);
+      for (size_t i = 0; i < N && i < be.logs.size(); i++) {
+        CHECK(be.logs[i] == want[i]);
+        if (be.logs[i] != want[i]) printf("    en #%zu got '%s' want '%s'\n", i + 1, be.logs[i].c_str(), want[i]);
+      }
+      CHECK(be.enSent.size() == 4);
+      if (be.enSent.size() == 4) {
+        const uint8_t bc[6] = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF};
+        CHECK(!memcmp(be.enSent[0].mac, bc, 6) && be.enSent[0].broadcast && be.enSent[0].data == "to everyone");
+        CHECK(!memcmp(be.enSent[1].mac, bc, 6) && be.enSent[1].broadcast);
+        const uint8_t uni[6] = {0xAA, 0xBB, 0x0C, 0xDD, 0xEE, 0xFF};
+        CHECK(!memcmp(be.enSent[2].mac, uni, 6) && !be.enSent[2].broadcast && be.enSent[2].data == "unicast");
+        CHECK(be.enSent[3].data.size() == 250 && !be.enSent[3].broadcast);
+      }
+      CHECK(be.enChannel == 1 && !be.enUp);
+    }
+    {
+      MockBackend be;  // channel option
+      be.net = true;
+      be.enPermitted = true;
+      LuaVm vm;
+      CHECK(vm.open(128 * 1024));
+      registerApi(vm, be);
+      const char* script = "print(espnow.start{channel = 13})\nprint(espnow.info().channel)";
+      CHECK(vm.load("t", script, strlen(script)));
+      CHECK(run(vm, be, 100000) == Status::Finished);
+      CHECK(be.logs.size() == 2 && be.logs[0] == "true\t02:00:00:00:00:a1" && be.logs[1] == "13" && be.enChannel == 13);
+    }
+    {
+      MockBackend be;  // validation: nothing invalid reaches the backend
+      be.net = true;
+      be.enPermitted = true;
+      LuaVm vm;
+      CHECK(vm.open(128 * 1024));
+      registerApi(vm, be);
+      const char* script = R"LUA(
+        local C = "channel must be an integer 1..13"
+        print(espnow.start{channel = 0}); print(espnow.start{channel = 14}); print(espnow.start{channel = 1.5})
+        print(espnow.start{channel = "6"}); print(espnow.start{colour = 1}); print(espnow.start{"x"})
+        print((pcall(espnow.start, 5)))
+        print(espnow.start{channel = 1})
+        local MAC = "mac must be 'aa:bb:cc:dd:ee:ff' or \"broadcast\""
+        print(espnow.send("aa:bb:cc:dd:ee", "x"))
+        print(espnow.send("aa:bb:cc:dd:ee:gg", "x"))
+        print(espnow.send("aa-bb-cc-dd-ee-ff", "x"))
+        print(espnow.send("aa:bb:cc:dd:ee:ff:", "x"))
+        print(espnow.send("aabbccddeeff", "x"))
+        print(espnow.send("aa:bb:cc:dd:ee:f", "x"))
+        print(espnow.send("Broadcast", "x"))
+        print(espnow.send(nil, ""))
+        print(espnow.send(nil, ("z"):rep(251)))
+        print((pcall(espnow.send, nil)))
+        print((pcall(espnow.send, {}, "x")))
+      )LUA";
+      CHECK(vm.load("t", script, strlen(script)));
+      CHECK(run(vm, be, 200000) == Status::Finished);
+      const char* C = "nil\tchannel must be an integer 1..13";
+      const char* M = "nil\tmac must be 'aa:bb:cc:dd:ee:ff' or \"broadcast\"";
+      const char* D = "nil\tdata must be 1..250 bytes";
+      const char* want[] = {C, C, C, C, "nil\tunknown option 'colour'", "nil\toptions must have string keys", "false",
+                            "true\t02:00:00:00:00:a1", M, M, M, M, M, M, M, D, D, "false", "false"};
+      const size_t N = sizeof(want) / sizeof(want[0]);
+      if (be.logs.size() != N || getenv("DUMP_LOGS")) for (size_t i = 0; i < be.logs.size(); i++) printf("    enerr log[%zu] '%s'\n", i, be.logs[i].c_str());
+      CHECK(be.logs.size() == N);
+      for (size_t i = 0; i < N && i < be.logs.size(); i++) {
+        CHECK(be.logs[i] == want[i]);
+        if (be.logs[i] != want[i]) printf("    enerr #%zu got '%s' want '%s'\n", i + 1, be.logs[i].c_str(), want[i]);
+      }
+      CHECK(be.enSent.empty());
+    }
+    {
+      MockBackend be;  // permission layers
+      be.enPermitted = true;
+      be.net = false;
+      LuaVm vm;
+      CHECK(vm.open(128 * 1024));
+      registerApi(vm, be);
+      const char* script = "print(espnow.start())\nprint(espnow.send(nil, 'x'))\nprint(espnow.recv())\nprint(espnow.info())\nprint(espnow.stop())";
+      CHECK(vm.load("t", script, strlen(script)));
+      CHECK(run(vm, be, 100000) == Status::Finished);
+      CHECK(be.logs.size() == 5);
+      for (int i = 0; i < 4 && i < static_cast<int>(be.logs.size()); i++) CHECK(be.logs[i].rfind("nil\tnetwork not permitted", 0) == 0);
+      CHECK(be.logs.size() == 5 && be.logs[4] == "true");  // stop is always allowed
+      CHECK(!be.enUp);
+    }
+    for (int variant = 0; variant < 2; variant++) {
+      MockBackend be;  // declared without approval / not declared at all
+      be.net = true;
+      be.enPermitted = variant == 0;
+      be.enApproved = false;
+      LuaVm vm;
+      CHECK(vm.open(128 * 1024));
+      registerApi(vm, be);
+      const char* script = "print(espnow.start())\nprint(espnow.send(nil, 'x'))\nprint(espnow.recv())\nprint(espnow.info())";
+      CHECK(vm.load("t", script, strlen(script)));
+      CHECK(run(vm, be, 100000) == Status::Finished);
+      CHECK(be.logs.size() == 4);
+      for (size_t i = 0; i < be.logs.size(); i++) CHECK(be.logs[i].rfind("nil\tespnow not permitted", 0) == 0);
+      CHECK(!be.enUp && be.enSent.empty());
+    }
+    {
+      MockBackend be;  // radio exclusivity in both directions, RAM floor, backend failure
+      be.net = true;
+      be.enPermitted = true;
+      be.hotspotPermitted = true;
+      LuaVm vm;
+      CHECK(vm.open(128 * 1024));
+      registerApi(vm, be);
+      const char* script = R"LUA(
+        print(espnow.start())
+        print(wifi.softap("x"))
+        print(wifi.connect{tls = false})
+        espnow.stop()
+        print(wifi.softap("x"))
+        print(espnow.start())
+        wifi.off()
+        print(espnow.start())
+      )LUA";
+      CHECK(vm.load("t", script, strlen(script)));
+      CHECK(run(vm, be, 200000) == Status::Finished);
+      const char* want[] = {"true\t02:00:00:00:00:a1", "false\tespnow is running: call espnow.stop() before starting a hotspot",
+                            "false\tespnow is running: call espnow.stop() before joining WiFi", "true\t192.168.4.1",
+                            "nil\tthe radio is in use by WiFi or the hotspot: call wifi.off() first", "true\t02:00:00:00:00:a1"};
+      const size_t N = sizeof(want) / sizeof(want[0]);
+      if (be.logs.size() != N || getenv("DUMP_LOGS")) for (size_t i = 0; i < be.logs.size(); i++) printf("    enx log[%zu] '%s'\n", i, be.logs[i].c_str());
+      CHECK(be.logs.size() == N);
+      for (size_t i = 0; i < N && i < be.logs.size(); i++) {
+        CHECK(be.logs[i] == want[i]);
+        if (be.logs[i] != want[i]) printf("    enx #%zu got '%s' want '%s'\n", i + 1, be.logs[i].c_str(), want[i]);
+      }
+    }
+    {
+      MockBackend be;  // joined as a client: espnow refuses
+      be.net = true;
+      be.enPermitted = true;
+      be.wifiUp = true;
+      LuaVm vm;
+      CHECK(vm.open(128 * 1024));
+      registerApi(vm, be);
+      const char* script = "print(espnow.start())";
+      CHECK(vm.load("t", script, strlen(script)));
+      CHECK(run(vm, be, 100000) == Status::Finished);
+      CHECK(be.logs.size() == 1 && be.logs[0] == "nil\tthe radio is in use by WiFi or the hotspot: call wifi.off() first" && !be.enUp);
+    }
+    for (int pass = 0; pass < 2; pass++) {
+      MockBackend be;  // RAM floor 80 KB, boundary values
+      be.net = true;
+      be.enPermitted = true;
+      be.freeHeapVal = pass == 0 ? 80 * 1024 - 1 : 80 * 1024;
+      LuaVm vm;
+      CHECK(vm.open(128 * 1024));
+      registerApi(vm, be);
+      const char* script = "print(espnow.start())";
+      CHECK(vm.load("t", script, strlen(script)));
+      CHECK(run(vm, be, 100000) == Status::Finished);
+      if (pass == 0) CHECK(be.logs.size() == 1 && be.logs[0] == "nil\tnot enough free RAM for espnow (free 79K, need 80K)" && !be.enUp);
+      else CHECK(be.logs.size() == 1 && be.logs[0] == "true\t02:00:00:00:00:a1" && be.enUp);
+    }
+    {
+      MockBackend be;  // backend failures pass through
+      be.net = true;
+      be.enPermitted = true;
+      be.enFail = true;
+      LuaVm vm;
+      CHECK(vm.open(128 * 1024));
+      registerApi(vm, be);
+      const char* script = "print(espnow.start())\nprint(espnow.info())";
+      CHECK(vm.load("t", script, strlen(script)));
+      CHECK(run(vm, be, 100000) == Status::Finished);
+      CHECK(be.logs.size() == 2 && be.logs[0] == "nil\tesp_now_init failed (mock)" && be.logs[1].rfind("nil\tespnow is not started", 0) == 0);
+      be.enFail = false;
+      be.enSendFail = true;
+      be.logs.clear();
+      LuaVm vm2;
+      CHECK(vm2.open(128 * 1024));
+      registerApi(vm2, be);
+      const char* script2 = "print(espnow.start())\nprint(espnow.send(nil, 'x'))";
+      CHECK(vm2.load("t", script2, strlen(script2)));
+      CHECK(run(vm2, be, 100000) == Status::Finished);
+      CHECK(be.logs.size() == 2 && be.logs[1] == "nil\tthe radio refused the frame (mock)");
+    }
+  }
+  {
+    TEST("permission dialog packing: most sensitive first, <= width per line, nothing dropped or reordered");
+    using crosslua::packPermissionLabels;
+    CHECK(packPermissionLabels({}, 25) == "");
+    CHECK(packPermissionLabels({"MICROPHONE"}, 25) == "MICROPHONE\n");
+    CHECK(packPermissionLabels({"MICROPHONE", "ESP-NOW", "HOTSPOT", "SERVER", "SPEAKER"}, 25) == "MICROPHONE, ESP-NOW\nHOTSPOT, SERVER, SPEAKER\n");
+    CHECK(packPermissionLabels({"AAAAAAAAAA", "BBBBBBBBBB"}, 22) == "AAAAAAAAAA, BBBBBBBBBB\n");  // exactly full
+    CHECK(packPermissionLabels({"AAAAAAAAAA", "BBBBBBBBBB"}, 21) == "AAAAAAAAAA\nBBBBBBBBBB\n");      // one over
+    CHECK(packPermissionLabels({"TOOLONGLABELXXXXXXXXXXXXXX", "B", "C"}, 10) == "TOOLONGLABELXXXXXXXXXXXXXX\nB, C\n");
+    CHECK(packPermissionLabels({"A", "B", "C"}, 1000) == "A, B, C\n");
+    CHECK(packPermissionLabels({"MICROPHONE", "SPEAKER"}, 25) == "MICROPHONE, SPEAKER\n");
   }
   printf(g_fail ? "\n%d FAILED\n" : "\nALL PASSED\n", g_fail);
   return g_fail ? 1 : 0;

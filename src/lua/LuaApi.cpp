@@ -751,7 +751,7 @@ struct LazyNs {
 // Several names share a loader (wifi+http, zip+epub): the loader defines all of its globals at once.
 const LazyNs LAZY[] = {{"time", loadTime},   {"device", loadDevice}, {"led", loadLed},         {"fs", registerFs},
                        {"json", registerJson}, {"wifi", registerNet},  {"http", registerNet},    {"net", registerSock},
-                       {"zip", registerZip},   {"epub", registerZip},  {"crypto", registerCrypto}, {"audio", registerAudio}, {"mic", registerMic},
+                       {"zip", registerZip},   {"epub", registerZip},  {"crypto", registerCrypto}, {"audio", registerAudio}, {"mic", registerMic}, {"espnow", registerEspNow},
                        {"coroutine", loadCoroutine}, {"utf8", loadUtf8}};
 
 // _G.__index(G, key): runs only for globals that do not exist yet.

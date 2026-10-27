@@ -165,6 +165,15 @@ class Backend {
   virtual bool softApStart(const char* ssid, const char* password, int channel, int maxClients, char* ip, size_t ipCap, char* err,
                            size_t errCap) = 0;
   virtual bool softApInfo(char* ssid, size_t ssidCap, char* ip, size_t ipCap, int* clients) = 0;  // false: no hotspot running
+  // --- ESP-NOW (connectionless frames between nearby devices); needs "network" + "espnow" and the user's approval. The radio
+  // is exclusive with WiFi and the hotspot. Receiving fills a small ring from the WiFi task; Lua only ever polls it. ---
+  virtual bool espnowAllowed() = 0;
+  virtual bool espnowRunning() { return false; }
+  virtual bool espnowStart(int channel, uint8_t mac[6], char* err, size_t errCap) = 0;
+  virtual void espnowStop() = 0;
+  virtual bool espnowSend(const uint8_t mac[6], bool broadcast, const void* data, size_t n, char* err, size_t errCap) = 0;
+  virtual int espnowRecv(void* buf, size_t cap, uint8_t mac[6]) = 0;  // bytes (> 0), or 0 when nothing is waiting
+  virtual bool espnowInfo(uint8_t mac[6], int* channel, int* dropped) = 0;  // false: not started
   // Ask the system to bring WiFi up (it may show its own network picker). Non-blocking: the script is parked and
   // resumed with "wifi:ok" / "wifi:fail" once the system UI has finished.
   virtual void wifiRequestConnect() = 0;

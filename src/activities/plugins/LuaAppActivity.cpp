@@ -6,6 +6,9 @@
 #include <AudioManager.h>
 #include <Buzzer.h>
 #include <Microphone.h>
+#include <atomic>
+#include <esp_now.h>
+#include <esp_wifi.h>
 #include <SecureClient.h>
 #include <SecureHttpClient.h>
 #include <EnvironmentSensor.h>
@@ -60,6 +63,7 @@
 #include "components/themes/BaseTheme.h"
 #include <HalFrontlight.h>
 #include "lua/LuaApi.h"
+#include "lua/PermText.h"
 #include "lua/LuaInternal.h"
 #include "lua/LuaVm.h"
 
@@ -84,6 +88,8 @@ constexpr size_t LUA_HEAP_FLOOR = 40 * 1024;
 // completed with a matching hash. 12 KB leaves Lua ~32 KB to work with. One-way for the app's lifetime: apps that touched
 // WiFi restart the device on exit (heap defrag), so the framework is not left starved.
 constexpr size_t LUA_HEAP_FLOOR_ONLINE = 12 * 1024;
+// Characters per line the native confirmation dialog shows before it wraps (measured on the X4 with upper-case labels: "HOTSPOT, SERVER," fit, "HOTSPOT, SERVER, SPEAKER" wrapped; 22 keeps our line count equal to the real one).
+constexpr size_t PERMISSION_LINE_WIDTH = 22;
 // net.read may go this low for the single allocation that copies data OUT of the network stack (which relieves the pressure).
 constexpr size_t LUA_HEAP_FLOOR_DRAIN = 6 * 1024;
 // True once any app in this activity session asked for WiFi. wifi.off() sets the WiFi mode back to NULL, but the radio has
@@ -122,11 +128,12 @@ class LuaAppActivity::Backend final : public crosslua::Backend {
 
   // ---- storage grants ("storage": {"read": [...], "write": [...]} in manifest.json) ------------------------------
   // Parsed from the manifest but INVISIBLE to the API (grantCount() == 0) until the user approved exactly this request.
-  bool hasGrantRequest() const { return !requested_.empty() || listenReq_ || hotspotReq_ || audioReq_ || micReq_; }
+  bool hasGrantRequest() const { return !requested_.empty() || listenReq_ || hotspotReq_ || espnowReq_ || audioReq_ || micReq_; }
   // Canonical text of the request; an approval is valid only for an identical request (any change asks again).
   std::string grantCanonical() const {
     std::vector<std::string> v;
     for (const Grant& g : requested_) v.push_back(std::string(g.write ? "w:" : "r:") + g.rel);
+    if (espnowReq_) v.push_back("p:espnow");  // raw frames to anyone in radio range
     if (hotspotReq_) v.push_back("p:hotspot");  // starting a WiFi network that others can join
     if (listenReq_) v.push_back("p:listen");  // accepting connections from the LAN is part of the approved request too
     if (micReq_) v.push_back("p:microphone");  // a recording device: consented to explicitly, never silently
@@ -162,16 +169,17 @@ class LuaAppActivity::Backend final : public crosslua::Backend {
       if (g.write && crosslua::grantIsDangerous(g.rel.c_str())) *danger = true;
     }
     std::string s;
-    // Short lines, the most sensitive first: the dialog clips long text and a recording device must never be cut off.
-    if (micReq_) s += "MICROPHONE: record\n";
-    if (listenReq_ || hotspotReq_) {  // one line: the dialog clips after ~4 lines
-      s += "NETWORK: ";
-      if (listenReq_) s += "listen";
-      if (listenReq_ && hotspotReq_) s += ", ";
-      if (hotspotReq_) s += "hotspot";
-      s += "\n";
+    // One short label per permission, packed into as few lines as fit (the dialog clips after ~3 lines of ~25 characters), the most
+    // sensitive first so a recording device can never be the part that is cut off. Packing is host-tested (PermText.h).
+    {
+      std::vector<const char*> labels;
+      if (micReq_) labels.push_back("MICROPHONE");
+      if (espnowReq_) labels.push_back("ESP-NOW");
+      if (hotspotReq_) labels.push_back("HOTSPOT");
+      if (listenReq_) labels.push_back("SERVER");
+      if (audioReq_) labels.push_back("SPEAKER");
+      s += crosslua::packPermissionLabels(labels, PERMISSION_LINE_WIDTH);
     }
-    if (audioReq_) s += "SPEAKER: play\n";
     if (!rd.empty()) s += "READ: " + rd + "\n";
     if (!wr.empty()) s += "WRITE: " + wr + "\n";
     if (*danger) s += "\nWARNING: this includes the whole card or the plugins folder, i.e. other apps' code.";
@@ -181,9 +189,11 @@ class LuaAppActivity::Backend final : public crosslua::Backend {
   // Title of the confirmation screen: says what is being asked for.
   std::string grantTitle(const std::string& app) const {
     const bool files = !requested_.empty();
-    const int n = (listenReq_ ? 1 : 0) + (hotspotReq_ ? 1 : 0) + (audioReq_ ? 1 : 0) + (micReq_ ? 1 : 0) + (files ? 1 : 0);
+    const int n = (listenReq_ ? 1 : 0) + (hotspotReq_ ? 1 : 0) + (espnowReq_ ? 1 : 0) + (audioReq_ ? 1 : 0) + (micReq_ ? 1 : 0) +
+                  (files ? 1 : 0);
     if (n > 1) return app + " wants access to your device";
     if (micReq_) return app + " wants to use the microphone";
+    if (espnowReq_) return app + " wants to use the radio directly";
     if (hotspotReq_) return app + " wants to start a hotspot";
     if (listenReq_) return app + " wants to accept connections";
     if (audioReq_) return app + " wants to play sounds";
@@ -304,6 +314,116 @@ class LuaAppActivity::Backend final : public crosslua::Backend {
     *clients = WiFi.softAPgetStationNum();
     return true;
   }
+  // --- ESP-NOW (same call sequence as crossplay's LinkRadio / biscuit's MeshChat: STA mode, fixed channel, broadcast peer).
+  // The receive callback runs in the WiFi task, so it only copies into a single-producer/single-consumer ring; Lua polls it. ---
+  static constexpr int ESPNOW_RING = 6;
+  struct EnPacket {
+    uint8_t mac[6];
+    uint8_t len;
+    uint8_t data[250];
+  };
+  EnPacket enRing_[ESPNOW_RING] = {};
+  std::atomic<uint8_t> enHead_{0}, enTail_{0};  // head: consumer (Lua poll) owns; tail: producer (callback) owns
+  std::atomic<int> enDropped_{0};
+  bool espnowUp_ = false;
+  int espnowChannel_ = 1;
+  uint8_t espnowMac_[6] = {0};
+  inline static Backend* espnowSelf_ = nullptr;
+  static void onEspNowRecv(const esp_now_recv_info_t* info, const uint8_t* data, int len) {
+    Backend* b = espnowSelf_;
+    if (!b || !info || !data || len <= 0 || len > 250) return;
+    const uint8_t tail = b->enTail_.load(std::memory_order_relaxed);
+    const uint8_t next = static_cast<uint8_t>((tail + 1) % ESPNOW_RING);
+    if (next == b->enHead_.load(std::memory_order_acquire)) {
+      b->enDropped_.fetch_add(1, std::memory_order_relaxed);
+      return;
+    }
+    EnPacket& p = b->enRing_[tail];
+    memcpy(p.mac, info->src_addr, 6);
+    memcpy(p.data, data, static_cast<size_t>(len));
+    p.len = static_cast<uint8_t>(len);
+    b->enTail_.store(next, std::memory_order_release);
+  }
+  bool espnowAllowed() override { return net_ && espnowReq_ && approved_; }
+  bool espnowRunning() override { return espnowUp_; }
+  bool espnowStart(int channel, uint8_t mac[6], char* err, size_t errCap) override {
+    g_radioUsedThisSession = true;  // leaving the app reboots into a clean heap, like every WiFi screen
+    WiFi.persistent(false);
+    WiFi.mode(WIFI_STA);
+    WiFi.setAutoReconnect(false);
+    WiFi.disconnect(false);
+    auto fail = [&](const char* msg) {
+      snprintf(err, errCap, "%s", msg);
+      espnowStop();
+      return false;
+    };
+    if (esp_wifi_set_channel(static_cast<uint8_t>(channel), WIFI_SECOND_CHAN_NONE) != ESP_OK) return fail("could not set the channel");
+    if (esp_now_init() != ESP_OK) return fail("esp_now_init failed");
+    espnowUp_ = true;
+    enHead_.store(0);
+    enTail_.store(0);
+    enDropped_.store(0);
+    espnowSelf_ = this;
+    if (esp_now_register_recv_cb(&Backend::onEspNowRecv) != ESP_OK) return fail("could not register the receive callback");
+    esp_now_peer_info_t peer = {};
+    memset(peer.peer_addr, 0xFF, 6);
+    peer.channel = static_cast<uint8_t>(channel);
+    peer.ifidx = WIFI_IF_STA;
+    peer.encrypt = false;
+    const esp_err_t added = esp_now_add_peer(&peer);
+    if (added != ESP_OK && added != ESP_ERR_ESPNOW_EXIST) return fail("could not add the broadcast peer");
+    if (esp_wifi_get_mac(WIFI_IF_STA, espnowMac_) != ESP_OK) return fail("could not read the MAC address");
+    espnowChannel_ = channel;
+    memcpy(mac, espnowMac_, 6);
+    if (setFloorFn) setFloorFn(LUA_HEAP_FLOOR_ONLINE);  // the radio owns its RAM now (same as after wifi.connect / a hotspot)
+    return true;
+  }
+  void espnowStop() override {
+    if (espnowUp_) {
+      esp_now_unregister_recv_cb();
+      esp_now_deinit();
+      espnowUp_ = false;
+    }
+    if (espnowSelf_ == this) espnowSelf_ = nullptr;
+    if ((WiFi.getMode() & WIFI_MODE_STA) && !wifiConnected()) WiFi.mode(WIFI_OFF);
+  }
+  bool espnowSend(const uint8_t mac[6], bool broadcast, const void* data, size_t n, char* err, size_t errCap) override {
+    (void)broadcast;  // the broadcast address is simply FF:FF:FF:FF:FF:FF (a peer added at start)
+    if (!esp_now_is_peer_exist(mac)) {
+      esp_now_peer_info_t peer = {};
+      memcpy(peer.peer_addr, mac, 6);
+      peer.channel = static_cast<uint8_t>(espnowChannel_);
+      peer.ifidx = WIFI_IF_STA;
+      peer.encrypt = false;
+      const esp_err_t added = esp_now_add_peer(&peer);
+      if (added != ESP_OK && added != ESP_ERR_ESPNOW_EXIST) {
+        snprintf(err, errCap, added == ESP_ERR_ESPNOW_FULL ? "too many peers (max 20)" : "could not add the peer");
+        return false;
+      }
+    }
+    if (esp_now_send(mac, static_cast<const uint8_t*>(data), n) != ESP_OK) {
+      snprintf(err, errCap, "the radio refused the frame");
+      return false;
+    }
+    return true;
+  }
+  int espnowRecv(void* buf, size_t cap, uint8_t mac[6]) override {
+    const uint8_t head = enHead_.load(std::memory_order_relaxed);
+    if (head == enTail_.load(std::memory_order_acquire)) return 0;
+    const EnPacket& p = enRing_[head];
+    const size_t n = std::min<size_t>(p.len, cap);
+    memcpy(buf, p.data, n);
+    memcpy(mac, p.mac, 6);
+    enHead_.store(static_cast<uint8_t>((head + 1) % ESPNOW_RING), std::memory_order_release);
+    return static_cast<int>(n);
+  }
+  bool espnowInfo(uint8_t mac[6], int* channel, int* dropped) override {
+    if (!espnowUp_) return false;
+    memcpy(mac, espnowMac_, 6);
+    *channel = espnowChannel_;
+    *dropped = enDropped_.load(std::memory_order_relaxed);
+    return true;
+  }
   void wifiRequestConnect() override {
     g_radioUsedThisSession = true;
     wifiConnectRequested = true;
@@ -372,6 +492,7 @@ class LuaAppActivity::Backend final : public crosslua::Backend {
     }
     if (led_.begun()) led_.clear();
     if (imu_.present()) imu_.sleep();  // the tilt page-turner wakes it again when it needs it
+    espnowStop();                      // the receive callback points into this object
     audio_.stop();                     // waits for the playback task, so the WAV callbacks die with us
     if (mic_.present()) mic_.end();    // powers the mic rail down
     if (audioFile_) audioFile_.close();
@@ -463,6 +584,7 @@ class LuaAppActivity::Backend final : public crosslua::Backend {
     return true;
   }
   void wifiOff() override {
+    espnowStop();
     WiFi.softAPdisconnect(true);
     WiFi.disconnect(false);
     WiFi.mode(WIFI_OFF);
@@ -1321,6 +1443,7 @@ class LuaAppActivity::Backend final : public crosslua::Backend {
       else if (p.is<const char*>() && !strcmp(p.as<const char*>(), "audio")) audioReq_ = true;
       else if (p.is<const char*>() && !strcmp(p.as<const char*>(), "microphone")) micReq_ = true;
       else if (p.is<const char*>() && !strcmp(p.as<const char*>(), "hotspot")) hotspotReq_ = true;
+      else if (p.is<const char*>() && !strcmp(p.as<const char*>(), "espnow")) espnowReq_ = true;
     for (int w = 0; w < 2; w++)
       for (JsonVariantConst v : doc["storage"][w ? "write" : "read"].as<JsonArrayConst>()) {
         char rel[104];
@@ -1504,6 +1627,7 @@ class LuaAppActivity::Backend final : public crosslua::Backend {
   bool audioReq_ = false;   // manifest asked for "audio" (effective only after approval)
   bool micReq_ = false;     // manifest asked for "microphone" (effective only after approval)
   bool hotspotReq_ = false; // manifest asked for "hotspot" (effective only after approval)
+  bool espnowReq_ = false;  // manifest asked for "espnow" (effective only after approval)
   struct Grant {
     std::string rel;
     bool write;
