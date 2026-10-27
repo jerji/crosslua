@@ -2,7 +2,7 @@ name: CI (build)
 
 on:
   push:
-    branches: [develop]
+    branches: [lua-runtime]
   pull_request:
 
 permissions:
