@@ -68,6 +68,23 @@ Source of truth: `freeink-sdk/libs/hardware/BoardConfig` (16 flags) and the libs
 | `NET_TLS13` | network | caps flag `tls13` so apps know what `http` can talk to | caps flag **done** |
 Order of work: (1) caps flags for everything + `device.motion` + `device.environment` + `device.tone` + `led.*` (one pattern, small, no permissions); (2) `audio.*` and `mic.*` with the permission flow; (3) BLE keyboard and colour once someone can test them.
 
+## Required for apps: Home Assistant control and other REST/JSON services (decided with Angel: features first, apps after)
+Angel's target: a CrossLua app that reads and controls Home Assistant (`GET /api/states/<id>`, `POST /api/services/<domain>/<service>`
+with a `Bearer` token). Audit of what `http.request` could do before this work: HTTPS, custom headers (GET only!), `json.encode/decode`,
+`time.sync`, mDNS discovery. Gaps found by reading the code (not assumed):
+
+| need | status | notes |
+|---|---|---|
+| POST with a JSON body | to do | `http.request` POST is hard-wired to `application/x-www-form-urlencoded`. Add `content_type`; a `Content-Type` header together with a body is refused (use the option) |
+| custom headers on POST | to do (**bug**) | the POST path (`HttpDownloader::postForm`) silently DROPS the caller's headers, so no `Authorization` header can reach a service call. Route POST through `SecureHttpClient`, which sends them |
+| methods PUT / PATCH / DELETE | to do | HA and most REST APIs use them; `SecureHttpClient::sendRequest` takes any method |
+| certificate pinning for `http.request` (`ca=`) | to do | same `ca=` PEM rule as `net.connect{tls=true}`. An HA token is effectively admin, so the default "encrypted but unauthenticated" is a real risk. Default stays unverified for compatibility; documented |
+| response headers (`response_headers=true`) | to do | opt-in table (lower-case names; duplicates joined with `, `): rate limits, `Location`, `ETag`, `Retry-After` |
+| `save_to` with POST / `ca=` / response headers | parked | the file path keeps the existing GET-only downloader; combining is refused with a clear message |
+| secret store for tokens | parked | `data:` is already private per app; an encrypted-at-rest store needs a device key and a native approval flow: later |
+| WebSocket client (HA push events), MQTT client | parked (library, not native) | doable in Lua over `net.connect{tls=true}` (handshake needs SHA-1 + base64: check `crypto`/`json` first). Plain polling covers a control panel |
+| long-lived polling / background tasks | not planned | a request blocks the device and a TLS handshake peaks near 39 KB of RAM: a control panel is tap-driven, not a dashboard that refreshes every few seconds |
+
 ## Tier 3 — later / niche / heavy
 
 | primitive | unlocks | why later |
