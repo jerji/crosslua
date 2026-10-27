@@ -1,1 +1,1 @@
-{"title": "Lua tests", "description": "On-device Lua test hub: one menu, every test in app:tests/", "permissions": ["network", "library", "listen", "audio", "microphone", "hotspot", "espnow"]}
+{"title": "Lua tests", "description": "On-device Lua test hub: one menu, every test in app:tests/", "permissions": ["network", "library", "listen", "audio", "microphone", "hotspot", "espnow", "monitor"]}

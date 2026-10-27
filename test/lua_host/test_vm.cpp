@@ -414,11 +414,13 @@ struct MockBackend : Backend {
   std::vector<EnSent> enSent;
   struct EnIn { uint8_t mac[6]; std::string data; };
   std::vector<EnIn> enInbox;  // scripted frames, delivered oldest first
+  size_t radioFloorBytes() override { return radioEverStarted ? 48 * 1024 : 80 * 1024; }
   bool espnowAllowed() override { return net && enPermitted && enApproved; }
   bool espnowRunning() override { return enUp; }
   bool espnowStart(int channel, uint8_t mac[6], char* err, size_t errCap) override {
     if (enFail) { snprintf(err, errCap, "esp_now_init failed (mock)"); return false; }
     enUp = true;
+    radioEverStarted = true;
     enChannel = channel;
     const uint8_t m[6] = {0x02, 0x00, 0x00, 0x00, 0x00, 0xA1};
     memcpy(mac, m, 6);
@@ -442,6 +444,52 @@ struct MockBackend : Backend {
     memcpy(buf, in.data.data(), n);
     memcpy(mac, in.mac, 6);
     return static_cast<int>(n);
+  }
+  // --- wifi.monitor mock ---
+  bool monPermitted = false, monApproved = true, monUp = false, monFail = false, monParentFail = false;
+  bool radioEverStarted = false;
+  int monChannel = 0, monCaptured = 0, monDropped = 0;
+  uint32_t monFileBytes = 0;
+  char monPathOut[160] = {0};
+  struct MonIn { std::string data; int rssi; int channel; };
+  std::vector<MonIn> monInbox;
+  bool monitorAllowed() override { return net && monPermitted && monApproved; }
+  bool monitorRunning() override { return monUp; }
+  bool monitorStart(int channel, const char* pcapPath, char* err, size_t errCap) override {
+    if (monFail) { snprintf(err, errCap, "esp_wifi_set_promiscuous failed (mock)"); return false; }
+    monUp = true;
+    radioEverStarted = true;
+    monChannel = channel;
+    monFileBytes = pcapPath ? 24 : 0;  // a PCAP global header
+    if (pcapPath) snprintf(monPathOut, sizeof(monPathOut), "%s", pcapPath); else monPathOut[0] = 0;
+    return true;
+  }
+  void monitorStop(uint32_t* pcapBytes) override {
+    *pcapBytes = monFileBytes;
+    monUp = false;
+  }
+  int monitorRecv(void* buf, size_t cap, int* rssi, int* channel) override {
+    if (monInbox.empty()) {
+      monDropped++;  // simulates a frame lost to a full ring, so info().dropped is exercised
+      return 0;
+    }
+    monCaptured++;
+    MonIn in = monInbox.front();
+    monInbox.erase(monInbox.begin());
+    const size_t n = std::min(cap, in.data.size());
+    memcpy(buf, in.data.data(), n);
+    *rssi = in.rssi;
+    *channel = in.channel;
+    return static_cast<int>(n);
+  }
+  bool monitorInfo(int* channel, int* captured, int* dropped, char* path, size_t pathCap, uint32_t* pcapBytes) override {
+    if (!monUp) return false;
+    *channel = monChannel;
+    *captured = monCaptured;
+    *dropped = monDropped;
+    snprintf(path, pathCap, "%s", monPathOut);
+    *pcapBytes = monFileBytes;
+    return true;
   }
   bool espnowInfo(uint8_t mac[6], int* channel, int* dropped) override {
     if (!enUp) return false;
@@ -472,7 +520,7 @@ struct MockBackend : Backend {
     snprintf(ssid, sc, "TestNet"); snprintf(ip, ic, "192.168.1.50"); *rssi = -57;
     return true;
   }
-  void wifiOff() override { wifiUp = false; apUp = false; enUp = false; }  // like the firmware: the hotspot and espnow stop too
+  void wifiOff() override { wifiUp = false; apUp = false; enUp = false; monUp = false; }  // like the firmware: the hotspot and espnow stop too
   size_t largestFreeBlock() override { return largest; }
   bool httpRequest(const HttpRequest& rq, HttpResult& res) override {
     SeenReq r;
@@ -5362,6 +5410,208 @@ int main() {
     CHECK(packPermissionLabels({"A", "B", "C"}, 1000) == "A, B, C\n");
     CHECK(packPermissionLabels({"MICROPHONE", "SPEAKER"}, 25) == "MICROPHONE, SPEAKER\n");
   }
-  printf(g_fail ? "\n%d FAILED\n" : "\nALL PASSED\n", g_fail);
+  {
+    TEST("wifi.monitor: start/recv/info/stop, options validation, permission layers, radio exclusivity, RAM floor, pcap counters");
+    {
+      MockBackend be;  // happy path: frames in order, metadata preserved
+      be.net = true;
+      be.monPermitted = true;
+      const uint8_t f1[4] = {0x80, 0x00, 0xAA, 0xBB};
+      be.monInbox = {{std::string("\x80\x00\xaa\xbb", 4), -52, 1}, {"second", -71, 13}};
+      LuaVm vm;
+      CHECK(vm.open(128 * 1024));
+      registerApi(vm, be);
+      const char* script = R"LUA(
+        print(wifi.monitor_recv())
+        print(wifi.monitor_info())
+        print(wifi.monitor_start())
+        local i = wifi.monitor_info()
+        print(i.channel, i.captured, i.dropped, i.file, i.bytes)
+        print(wifi.monitor_start())
+        local f, m = wifi.monitor_recv()
+        print(#f, f:byte(1), m.rssi, m.channel)
+        local g, m2 = wifi.monitor_recv()
+        print(g, m2.rssi, m2.channel)
+        print(wifi.monitor_recv())
+        local i2 = wifi.monitor_info()
+        print(i2.captured, i2.dropped)
+        print(wifi.monitor_stop())
+        print(wifi.monitor_recv())
+        print(wifi.monitor_info())
+        print(wifi.monitor_stop())
+      )LUA";
+      CHECK(vm.load("t", script, strlen(script)));
+      CHECK(run(vm, be, 200000) == Status::Finished);
+      const char* NS = "nil\tmonitor is not running (call wifi.monitor_start() first)";
+      const char* want[] = {NS, NS, "true", "1\t0\t0\tnil\tnil", "nil\tmonitor is already running (wifi.monitor_stop() first)",
+                            "4\t128\t-52\t1", "second\t-71\t13", "nil", "2\t1", "0", NS, NS, "0"};
+      const size_t N = sizeof(want) / sizeof(want[0]);
+      if (be.logs.size() != N || getenv("DUMP_LOGS")) for (size_t i = 0; i < be.logs.size(); i++) printf("    mon log[%zu] '%s'\n", i, be.logs[i].c_str());
+      CHECK(be.logs.size() == N);
+      for (size_t i = 0; i < N && i < be.logs.size(); i++) {
+        CHECK(be.logs[i] == want[i]);
+        if (be.logs[i] != want[i]) printf("    mon #%zu got '%s' want '%s'\n", i + 1, be.logs[i].c_str(), want[i]);
+      }
+      CHECK(be.monChannel == 1 && !be.monUp);
+    }
+    {
+      MockBackend be;  // options: channel + file
+      be.net = true;
+      be.monPermitted = true;
+      LuaVm vm;
+      CHECK(vm.open(128 * 1024));
+      registerApi(vm, be);
+      const char* script = R"LUA(
+        print(wifi.monitor_start{channel = 13, file = "data:cap.pcap"})
+        local i = wifi.monitor_info()
+        print(i.file, i.bytes)
+        print(wifi.monitor_stop())
+      )LUA";
+      CHECK(vm.load("t", script, strlen(script)));
+      CHECK(run(vm, be, 100000) == Status::Finished);
+      // i.file is the resolved on-card path, not the "data:..." spec the app wrote
+      CHECK(be.logs.size() == 3 && be.logs[0] == "true" && be.logs[1] == "/.crosslua/data/test/cap.pcap\t24" && be.logs[2] == "24" &&
+            be.monChannel == 13);
+    }
+    {
+      MockBackend be;  // validation: nothing invalid reaches the backend
+      be.net = true;
+      be.monPermitted = true;
+      LuaVm vm;
+      CHECK(vm.open(128 * 1024));
+      registerApi(vm, be);
+      const char* script = R"LUA(
+        local C = "channel must be an integer 1..13"
+        print(wifi.monitor_start{channel = 0}); print(wifi.monitor_start{channel = 14}); print(wifi.monitor_start{channel = 1.5})
+        print(wifi.monitor_start{channel = "6"}); print(wifi.monitor_start{hop = 1}); print(wifi.monitor_start{"x"})
+        print((pcall(wifi.monitor_start, 5)))
+        local F = "file must be a path string ending in .pcap"
+        print((pcall(wifi.monitor_start, {file = 3}))); print(wifi.monitor_start{file = "data:cap.bin"}); print(wifi.monitor_start{file = "data:cap"})
+      )LUA";
+      CHECK(vm.load("t", script, strlen(script)));
+      CHECK(run(vm, be, 200000) == Status::Finished);
+      const char* C = "nil\tchannel must be an integer 1..13";
+      const char* F = "nil\tfile must be a path string ending in .pcap";
+      const char* want[] = {C, C, C, C, "nil\tunknown option 'hop'", "nil\toptions must have string keys", "false",
+                            "true", "nil\tfile must end in .pcap", "nil\tfile must end in .pcap"};
+      const size_t N = sizeof(want) / sizeof(want[0]);
+      if (be.logs.size() != N || getenv("DUMP_LOGS")) for (size_t i = 0; i < be.logs.size(); i++) printf("    monerr log[%zu] '%s'\n", i, be.logs[i].c_str());
+      CHECK(be.logs.size() == N);
+      for (size_t i = 0; i < N && i < be.logs.size(); i++) {
+        CHECK(be.logs[i] == want[i]);
+        if (be.logs[i] != want[i]) printf("    monerr #%zu got '%s' want '%s'\n", i + 1, be.logs[i].c_str(), want[i]);
+      }
+      CHECK(!be.monUp);
+    }
+    {
+      MockBackend be;  // permission layers
+      be.monPermitted = true;
+      be.net = false;
+      LuaVm vm;
+      CHECK(vm.open(128 * 1024));
+      registerApi(vm, be);
+      const char* script = "print(wifi.monitor_start())\nprint(wifi.monitor_recv())\nprint(wifi.monitor_info())\nprint(wifi.monitor_stop())";
+      CHECK(vm.load("t", script, strlen(script)));
+      CHECK(run(vm, be, 100000) == Status::Finished);
+      CHECK(be.logs.size() == 4);
+      for (int i = 0; i < 3 && i < static_cast<int>(be.logs.size()); i++) CHECK(be.logs[i].rfind("nil\tnetwork not permitted", 0) == 0);
+      CHECK(be.logs.size() == 4 && be.logs[3] == "0");  // stop is always allowed
+      CHECK(!be.monUp);
+    }
+    for (int variant = 0; variant < 2; variant++) {
+      MockBackend be;  // declared without approval / not declared at all
+      be.net = true;
+      be.monPermitted = variant == 0;
+      be.monApproved = false;
+      LuaVm vm;
+      CHECK(vm.open(128 * 1024));
+      registerApi(vm, be);
+      const char* script = "print(wifi.monitor_start())\nprint(wifi.monitor_recv())\nprint(wifi.monitor_info())";
+      CHECK(vm.load("t", script, strlen(script)));
+      CHECK(run(vm, be, 100000) == Status::Finished);
+      CHECK(be.logs.size() == 3);
+      for (size_t i = 0; i < be.logs.size(); i++) CHECK(be.logs[i].rfind("nil\tmonitor not permitted", 0) == 0);
+      CHECK(!be.monUp);
+    }
+    {
+      MockBackend be;  // radio exclusivity in both directions
+      be.net = true;
+      be.monPermitted = true;
+      be.enPermitted = true;
+      be.hotspotPermitted = true;
+      LuaVm vm;
+      CHECK(vm.open(128 * 1024));
+      registerApi(vm, be);
+      const char* script = R"LUA(
+        print(espnow.start())
+        print(wifi.monitor_start())
+        espnow.stop()
+        print(wifi.monitor_start())
+        print(espnow.start())
+        print(wifi.connect{tls = false})
+        print(wifi.softap("x"))
+        wifi.off()
+        print(espnow.start())
+      )LUA";
+      CHECK(vm.load("t", script, strlen(script)));
+      CHECK(run(vm, be, 200000) == Status::Finished);
+      const char* want[] = {"true\t02:00:00:00:00:a1", "nil\tespnow is running: call espnow.stop() first", "true",
+                            "nil\tthe WiFi sniffer is running: call wifi.monitor_stop() first",
+                            "false\tthe WiFi sniffer is running: call wifi.monitor_stop() first",
+                            "false\tthe WiFi sniffer is running: call wifi.monitor_stop() first",
+                            "true\t02:00:00:00:00:a1"};
+      const size_t N = sizeof(want) / sizeof(want[0]);
+      if (be.logs.size() != N || getenv("DUMP_LOGS")) for (size_t i = 0; i < be.logs.size(); i++) printf("    monx log[%zu] '%s'\n", i, be.logs[i].c_str());
+      CHECK(be.logs.size() == N);
+      for (size_t i = 0; i < N && i < be.logs.size(); i++) {
+        CHECK(be.logs[i] == want[i]);
+        if (be.logs[i] != want[i]) printf("    monx #%zu got '%s' want '%s'\n", i + 1, be.logs[i].c_str(), want[i]);
+      }
+      CHECK(!be.monUp && be.enUp);
+    }
+    {
+      MockBackend be;  // hotspot first, then monitor refused; wifi.off gives the radio back
+      be.net = true;
+      be.monPermitted = true;
+      be.hotspotPermitted = true;
+      LuaVm vm;
+      CHECK(vm.open(128 * 1024));
+      registerApi(vm, be);
+      const char* script = "print(wifi.softap('x'))\nprint(wifi.monitor_start())\nwifi.off()\nprint(wifi.monitor_start())\nprint(wifi.monitor_stop())";
+      CHECK(vm.load("t", script, strlen(script)));
+      CHECK(run(vm, be, 100000) == Status::Finished);
+      const char* want[] = {"true\t192.168.4.1", "nil\tthe radio is in use by WiFi or the hotspot: call wifi.off() first", "true", "0"};
+      CHECK(be.logs.size() == 4);
+      for (size_t i = 0; i < 4 && i < be.logs.size(); i++) CHECK(be.logs[i] == want[i]);
+    }
+    for (int pass = 0; pass < 2; pass++) {
+      MockBackend be;  // RAM floor 80 KB, boundary values
+      be.net = true;
+      be.monPermitted = true;
+      be.freeHeapVal = pass == 0 ? 80 * 1024 - 1 : 80 * 1024;
+      LuaVm vm;
+      CHECK(vm.open(128 * 1024));
+      registerApi(vm, be);
+      const char* script = "print(wifi.monitor_start())";
+      CHECK(vm.load("t", script, strlen(script)));
+      CHECK(run(vm, be, 100000) == Status::Finished);
+      if (pass == 0) CHECK(be.logs.size() == 1 && be.logs[0] == "nil\tnot enough free RAM for monitor (free 79K, need 80K)" && !be.monUp);
+      else CHECK(be.logs.size() == 1 && be.logs[0] == "true" && be.monUp);
+    }
+    {
+      MockBackend be;  // backend failure passes through
+      be.net = true;
+      be.monPermitted = true;
+      be.monFail = true;
+      LuaVm vm;
+      CHECK(vm.open(128 * 1024));
+      registerApi(vm, be);
+      const char* script = "print(wifi.monitor_start())\nprint(wifi.monitor_info())";
+      CHECK(vm.load("t", script, strlen(script)));
+      CHECK(run(vm, be, 100000) == Status::Finished);
+      CHECK(be.logs.size() == 2 && be.logs[0] == "nil\tesp_wifi_set_promiscuous failed (mock)" && be.logs[1].rfind("nil\tmonitor is not running", 0) == 0);
+    }
+  }
+  printf(g_fail ? "\n%d FAILED\n" : "\nALL PASSED\n", g_fail);  printf(g_fail ? "\n%d FAILED\n" : "\nALL PASSED\n", g_fail);
   return g_fail ? 1 : 0;
 }

@@ -10,7 +10,6 @@ namespace crosslua {
 namespace {
 
 constexpr int ESPNOW_MAX_DATA = 250;  // ESP-NOW v1 payload limit
-constexpr size_t ESPNOW_MIN_FREE_BYTES = 80 * 1024;  // radio in STA mode + the ring; re-measure on the device (see docs)
 constexpr int ESPNOW_CHANNELS = 13;
 
 int pushFail(lua_State* L, const char* msg) {
@@ -72,12 +71,14 @@ int espnow_start(lua_State* L) {
   if (int r = gateEspNow(L)) return r;
   if (channel < 1 || channel > ESPNOW_CHANNELS || channel != static_cast<int>(channel)) return pushFail(L, "channel must be an integer 1..13");
   if (be(L).espnowRunning()) return pushFail(L, "espnow is already running (espnow.stop() first)");
+  if (be(L).monitorRunning()) return pushFail(L, "the WiFi sniffer is running: call wifi.monitor_stop() first");
   if (be(L).netReady()) return pushFail(L, "the radio is in use by WiFi or the hotspot: call wifi.off() first");
+  const size_t floor = be(L).radioFloorBytes();
   const size_t freeNow = be(L).freeHeap();
-  if (freeNow < ESPNOW_MIN_FREE_BYTES) {
+  if (freeNow < floor) {
     char msg[96];
     snprintf(msg, sizeof(msg), "not enough free RAM for espnow (free %uK, need %uK)", static_cast<unsigned>(freeNow / 1024),
-             static_cast<unsigned>(ESPNOW_MIN_FREE_BYTES / 1024));
+             static_cast<unsigned>(floor / 1024));
     return pushFail(L, msg);
   }
   uint8_t mac[6] = {0};

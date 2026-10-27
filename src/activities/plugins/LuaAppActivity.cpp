@@ -8,6 +8,7 @@
 #include <Microphone.h>
 #include <atomic>
 #include <esp_now.h>
+#include <esp_timer.h>
 #include <esp_wifi.h>
 #include <SecureClient.h>
 #include <SecureHttpClient.h>
@@ -128,12 +129,13 @@ class LuaAppActivity::Backend final : public crosslua::Backend {
 
   // ---- storage grants ("storage": {"read": [...], "write": [...]} in manifest.json) ------------------------------
   // Parsed from the manifest but INVISIBLE to the API (grantCount() == 0) until the user approved exactly this request.
-  bool hasGrantRequest() const { return !requested_.empty() || listenReq_ || hotspotReq_ || espnowReq_ || audioReq_ || micReq_; }
+  bool hasGrantRequest() const { return !requested_.empty() || listenReq_ || hotspotReq_ || espnowReq_ || monitorReq_ || audioReq_ || micReq_; }
   // Canonical text of the request; an approval is valid only for an identical request (any change asks again).
   std::string grantCanonical() const {
     std::vector<std::string> v;
     for (const Grant& g : requested_) v.push_back(std::string(g.write ? "w:" : "r:") + g.rel);
     if (espnowReq_) v.push_back("p:espnow");  // raw frames to anyone in radio range
+    if (monitorReq_) v.push_back("p:monitor");  // passive capture of everything in radio range
     if (hotspotReq_) v.push_back("p:hotspot");  // starting a WiFi network that others can join
     if (listenReq_) v.push_back("p:listen");  // accepting connections from the LAN is part of the approved request too
     if (micReq_) v.push_back("p:microphone");  // a recording device: consented to explicitly, never silently
@@ -175,6 +177,7 @@ class LuaAppActivity::Backend final : public crosslua::Backend {
       std::vector<const char*> labels;
       if (micReq_) labels.push_back("MICROPHONE");
       if (espnowReq_) labels.push_back("ESP-NOW");
+      if (monitorReq_) labels.push_back("SNIFFER");
       if (hotspotReq_) labels.push_back("HOTSPOT");
       if (listenReq_) labels.push_back("SERVER");
       if (audioReq_) labels.push_back("SPEAKER");
@@ -193,6 +196,7 @@ class LuaAppActivity::Backend final : public crosslua::Backend {
                   (files ? 1 : 0);
     if (n > 1) return app + " wants access to your device";
     if (micReq_) return app + " wants to use the microphone";
+    if (monitorReq_) return app + " wants to capture nearby WiFi traffic";
     if (espnowReq_) return app + " wants to use the radio directly";
     if (hotspotReq_) return app + " wants to start a hotspot";
     if (listenReq_) return app + " wants to accept connections";
@@ -256,6 +260,7 @@ class LuaAppActivity::Backend final : public crosslua::Backend {
   }
 
   uint32_t millis() override { return ::millis(); }
+  size_t radioFloorBytes() override { return radioEverStarted_ ? 48 * 1024 : 80 * 1024; }
   size_t freeHeap() override { return HalMemory::getInternalHeap().freeBytes; }
   size_t freeHeapQuick() override { return ESP.getFreeHeap(); }  // O(1); getInternalHeap() also walks for the largest block
   size_t minFreeHeap() override { return HalMemory::getInternalHeap().minFreeBytes; }
@@ -347,7 +352,8 @@ class LuaAppActivity::Backend final : public crosslua::Backend {
   bool espnowAllowed() override { return net_ && espnowReq_ && approved_; }
   bool espnowRunning() override { return espnowUp_; }
   bool espnowStart(int channel, uint8_t mac[6], char* err, size_t errCap) override {
-    g_radioUsedThisSession = true;  // leaving the app reboots into a clean heap, like every WiFi screen
+    g_radioUsedThisSession = true;
+    radioEverStarted_ = true;  // leaving the app reboots into a clean heap, like every WiFi screen
     WiFi.persistent(false);
     WiFi.mode(WIFI_STA);
     WiFi.setAutoReconnect(false);
@@ -357,6 +363,10 @@ class LuaAppActivity::Backend final : public crosslua::Backend {
       espnowStop();
       return false;
     };
+    if (monUp_) {
+      snprintf(err, errCap, "the WiFi sniffer is running: call wifi.monitor_stop() first");
+      return false;
+    }
     if (esp_wifi_set_channel(static_cast<uint8_t>(channel), WIFI_SECOND_CHAN_NONE) != ESP_OK) return fail("could not set the channel");
     if (esp_now_init() != ESP_OK) return fail("esp_now_init failed");
     espnowUp_ = true;
@@ -422,6 +432,151 @@ class LuaAppActivity::Backend final : public crosslua::Backend {
     memcpy(mac, espnowMac_, 6);
     *channel = espnowChannel_;
     *dropped = enDropped_.load(std::memory_order_relaxed);
+    return true;
+  }
+  // --- wifi.monitor (promiscuous 802.11 capture; the PCAP writer streams through a 2 KB buffer, no heap; biscuit's
+  // PacketMonitorActivity does the same callback-to-file trick). Frames are truncated at 250 bytes in the ring; the PCAP
+  // record keeps the original length so readers know what was cut. Timestamps are us since boot, not wall clock. ---
+  static constexpr int MON_RING = 8;
+  static constexpr size_t MON_PCAP_BUFFER = 2048;
+  struct MonPkt {
+    uint16_t len;
+    int8_t rssi;
+    uint8_t data[250];
+  };
+  MonPkt monRing_[MON_RING] = {};
+  std::atomic<uint8_t> monHead_{0}, monTail_{0};
+  std::atomic<int> monCaptured_{0}, monDropped_{0};
+  bool monUp_ = false;
+  bool radioEverStarted_ = false;  // the radio's RAM does not come back without a reboot (see wifi.off docs)
+  int monChannel_ = 1;
+  HalFile monFile_;
+  char monPath_[160] = {0};
+  uint32_t monBytes_ = 0;
+  uint8_t monBuf_[MON_PCAP_BUFFER] = {};
+  size_t monBufLen_ = 0;
+  inline static Backend* monSelf_ = nullptr;
+  static void onPromiscuous(void* cbBuf, wifi_promiscuous_pkt_type_t type) {
+    Backend* b = monSelf_;
+    if (!b || !cbBuf || (type != WIFI_PKT_MGMT && type != WIFI_PKT_DATA)) return;
+    const wifi_promiscuous_pkt_t* pkt = static_cast<const wifi_promiscuous_pkt_t*>(cbBuf);
+    const int len = pkt->rx_ctrl.sig_len;
+    if (len <= 0) return;
+    b->monCaptured_.fetch_add(1, std::memory_order_relaxed);
+    if (b->monFile_) b->pcapAppend(pkt->payload, static_cast<size_t>(len), pkt->rx_ctrl.rssi);
+    const uint8_t tail = b->monTail_.load(std::memory_order_relaxed);
+    const uint8_t next = static_cast<uint8_t>((tail + 1) % MON_RING);
+    if (next == b->monHead_.load(std::memory_order_acquire)) {
+      b->monDropped_.fetch_add(1, std::memory_order_relaxed);
+      return;
+    }
+    MonPkt& p = b->monRing_[tail];
+    p.len = static_cast<uint16_t>(len < 250 ? len : 250);
+    memcpy(p.data, pkt->payload, p.len);
+    p.rssi = static_cast<int8_t>(pkt->rx_ctrl.rssi);
+    b->monTail_.store(next, std::memory_order_release);
+  }
+  // Appends one PCAP record (16-byte header + packet) to the buffer, flushing whole buffer-loads to the card.
+  void pcapAppend(const uint8_t* pkt, size_t len, int rssi) {
+    (void)rssi;
+    const size_t stored = len < 250 ? len : 250;
+    if (monBufLen_ + 16 + stored > sizeof(monBuf_)) {
+      if (monBufLen_ && monFile_.write(monBuf_, monBufLen_) == monBufLen_) monBytes_ += monBufLen_;
+      monBufLen_ = 0;
+    }
+    if (16 + stored > sizeof(monBuf_)) return;  // cannot happen (stored <= 250)
+    const int64_t us = esp_timer_get_time();
+    uint8_t rec[16];
+    const uint32_t sec = static_cast<uint32_t>(us / 1000000), usec = static_cast<uint32_t>(us % 1000000);
+    memcpy(rec + 0, &sec, 4);
+    memcpy(rec + 4, &usec, 4);
+    memcpy(rec + 8, &stored, 4);
+    memcpy(rec + 12, &len, 4);
+    memcpy(monBuf_ + monBufLen_, rec, 16);
+    monBufLen_ += 16;
+    memcpy(monBuf_ + monBufLen_, pkt, stored);
+    monBufLen_ += stored;
+  }
+  bool monitorAllowed() override { return net_ && monitorReq_ && approved_; }
+  bool monitorRunning() override { return monUp_; }
+  bool monitorStart(int channel, const char* pcapPath, char* err, size_t errCap) override {
+    g_radioUsedThisSession = true;  // leaving the app reboots into a clean heap, like every WiFi screen
+    auto fail = [&](const char* msg) {
+      snprintf(err, errCap, "%s", msg);
+      uint32_t dummy = 0;
+      monitorStop(&dummy);
+      return false;
+    };
+    WiFi.persistent(false);
+    // Like biscuit's PacketMonitorActivity: keep the driver running as a (disconnected) STA and enable promiscuous on top.
+    // Arduino's WiFi.mode(WIFI_MODE_NULL) never boots the driver and NULL mode broke reception on the X4.
+    WiFi.mode(WIFI_MODE_STA);
+    WiFi.disconnect(false);
+    if (esp_wifi_set_channel(static_cast<uint8_t>(channel), WIFI_SECOND_CHAN_NONE) != ESP_OK) return fail("could not set the channel");
+    radioEverStarted_ = true;
+    wifi_promiscuous_filter_t filter = {.filter_mask = WIFI_PROMIS_FILTER_MASK_MGMT | WIFI_PROMIS_FILTER_MASK_DATA};
+    if (esp_wifi_set_promiscuous_filter(&filter) != ESP_OK) return fail("could not set the capture filter");
+    monHead_.store(0);
+    monTail_.store(0);
+    monCaptured_.store(0);
+    monDropped_.store(0);
+    monBufLen_ = 0;
+    monBytes_ = 0;
+    monPath_[0] = 0;
+    if (pcapPath) {
+      monFile_ = Storage.open(pcapPath, O_WRONLY | O_CREAT | O_TRUNC);
+      if (!monFile_) return fail("cannot open the file for writing");
+      snprintf(monPath_, sizeof(monPath_), "%s", pcapPath);
+      // PCAP global header: little-endian MICROSECOND magic 0xa1b2c3d4 (0xa1b23c4d would mean nanoseconds), version 2.4,
+      // snaplen 65535, LINKTYPE_IEEE802_11 (105)
+      static const uint8_t pcapHeader[24] = {0xd4, 0xc3, 0xb2, 0xa1, 0x02, 0x00, 0x04, 0x00, 0, 0, 0, 0,
+                                             0, 0, 0, 0, 0xff, 0xff, 0x00, 0x00, 0x69, 0x00, 0x00, 0x00};
+      memcpy(monBuf_, pcapHeader, sizeof(pcapHeader));
+      monBufLen_ = sizeof(pcapHeader);
+    }
+    monSelf_ = this;
+    monUp_ = true;
+    monChannel_ = channel;
+    if (esp_wifi_set_promiscuous_rx_cb(&Backend::onPromiscuous) != ESP_OK) return fail("could not register the capture callback");
+    if (esp_wifi_set_promiscuous(true) != ESP_OK) return fail("could not start promiscuous mode");
+    if (setFloorFn) setFloorFn(LUA_HEAP_FLOOR_ONLINE);  // the radio owns its RAM now (same as after wifi.connect / a hotspot)
+    return true;
+  }
+  void monitorStop(uint32_t* pcapBytes) override {
+    if (monUp_) {
+      monUp_ = false;
+      esp_wifi_set_promiscuous(false);
+      esp_wifi_set_promiscuous_rx_cb(nullptr);
+      if (monSelf_ == this) monSelf_ = nullptr;
+    }
+    if (monFile_) {
+      if (monBufLen_ && monFile_.write(monBuf_, monBufLen_) == monBufLen_) monBytes_ += monBufLen_;
+      monBufLen_ = 0;
+      monFile_.close();
+    }
+    *pcapBytes = monBytes_;
+    if (!wifiConnected() && !WiFi.softAPIP()) {  // give the radio back entirely (promiscuous leaves it started)
+      WiFi.mode(WIFI_OFF);
+    }
+  }
+  int monitorRecv(void* buf, size_t cap, int* rssi, int* channel) override {
+    const uint8_t head = monHead_.load(std::memory_order_relaxed);
+    if (head == monTail_.load(std::memory_order_acquire)) return 0;
+    const MonPkt& p = monRing_[head];
+    const size_t n = std::min<size_t>(p.len, cap);
+    memcpy(buf, p.data, n);
+    *rssi = p.rssi;
+    *channel = monChannel_;
+    monHead_.store(static_cast<uint8_t>((head + 1) % MON_RING), std::memory_order_release);
+    return static_cast<int>(n);
+  }
+  bool monitorInfo(int* channel, int* captured, int* dropped, char* path, size_t pathCap, uint32_t* pcapBytes) override {
+    if (!monUp_) return false;
+    *channel = monChannel_;
+    *captured = monCaptured_.load(std::memory_order_relaxed);
+    *dropped = monDropped_.load(std::memory_order_relaxed);
+    snprintf(path, pathCap, "%s", monPath_);
+    *pcapBytes = monBytes_;
     return true;
   }
   void wifiRequestConnect() override {
@@ -492,6 +647,10 @@ class LuaAppActivity::Backend final : public crosslua::Backend {
     }
     if (led_.begun()) led_.clear();
     if (imu_.present()) imu_.sleep();  // the tilt page-turner wakes it again when it needs it
+    {
+      uint32_t monBytes = 0;
+      monitorStop(&monBytes);          // the capture callback points into this object; flush and close the PCAP
+    }
     espnowStop();                      // the receive callback points into this object
     audio_.stop();                     // waits for the playback task, so the WAV callbacks die with us
     if (mic_.present()) mic_.end();    // powers the mic rail down
@@ -584,6 +743,8 @@ class LuaAppActivity::Backend final : public crosslua::Backend {
     return true;
   }
   void wifiOff() override {
+    uint32_t monBytes = 0;
+    monitorStop(&monBytes);
     espnowStop();
     WiFi.softAPdisconnect(true);
     WiFi.disconnect(false);
@@ -1444,6 +1605,7 @@ class LuaAppActivity::Backend final : public crosslua::Backend {
       else if (p.is<const char*>() && !strcmp(p.as<const char*>(), "microphone")) micReq_ = true;
       else if (p.is<const char*>() && !strcmp(p.as<const char*>(), "hotspot")) hotspotReq_ = true;
       else if (p.is<const char*>() && !strcmp(p.as<const char*>(), "espnow")) espnowReq_ = true;
+      else if (p.is<const char*>() && !strcmp(p.as<const char*>(), "monitor")) monitorReq_ = true;
     for (int w = 0; w < 2; w++)
       for (JsonVariantConst v : doc["storage"][w ? "write" : "read"].as<JsonArrayConst>()) {
         char rel[104];
@@ -1628,6 +1790,7 @@ class LuaAppActivity::Backend final : public crosslua::Backend {
   bool micReq_ = false;     // manifest asked for "microphone" (effective only after approval)
   bool hotspotReq_ = false; // manifest asked for "hotspot" (effective only after approval)
   bool espnowReq_ = false;  // manifest asked for "espnow" (effective only after approval)
+  bool monitorReq_ = false; // manifest asked for "monitor" (effective only after approval)
   struct Grant {
     std::string rel;
     bool write;

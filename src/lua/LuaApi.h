@@ -41,6 +41,8 @@ class Backend {
 
   // --- system --------------------------------------------------------------
   virtual uint32_t millis() = 0;
+  // RAM floor for starting a radio mode; lower after the first radio use in this app (the radio's RAM never fully returns).
+  virtual size_t radioFloorBytes() { return 80 * 1024; }
   virtual size_t freeHeap() = 0;
   // Cheap free-RAM read for the allocator guard (runs on every growing allocation); defaults to freeHeap().
   virtual size_t freeHeapQuick() { return freeHeap(); }
@@ -174,6 +176,14 @@ class Backend {
   virtual bool espnowSend(const uint8_t mac[6], bool broadcast, const void* data, size_t n, char* err, size_t errCap) = 0;
   virtual int espnowRecv(void* buf, size_t cap, uint8_t mac[6]) = 0;  // bytes (> 0), or 0 when nothing is waiting
   virtual bool espnowInfo(uint8_t mac[6], int* channel, int* dropped) = 0;  // false: not started
+  // --- wifi.monitor (promiscuous 802.11 capture + optional native PCAP writer); needs "network" + "monitor" and approval. The
+  // radio is exclusive with WiFi/the hotspot/espnow. The callback fills a small ring from the WiFi task; Lua only polls it. ---
+  virtual bool monitorAllowed() = 0;
+  virtual bool monitorRunning() { return false; }
+  virtual bool monitorStart(int channel, const char* pcapPath, char* err, size_t errCap) = 0;  // pcapPath: nullptr = no file
+  virtual void monitorStop(uint32_t* pcapBytes) = 0;
+  virtual int monitorRecv(void* buf, size_t cap, int* rssi, int* channel) = 0;  // bytes (> 0), or 0 when nothing is waiting
+  virtual bool monitorInfo(int* channel, int* captured, int* dropped, char* path, size_t pathCap, uint32_t* pcapBytes) = 0;
   // Ask the system to bring WiFi up (it may show its own network picker). Non-blocking: the script is parked and
   // resumed with "wifi:ok" / "wifi:fail" once the system UI has finished.
   virtual void wifiRequestConnect() = 0;

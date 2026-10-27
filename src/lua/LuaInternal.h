@@ -59,6 +59,7 @@ void registerSock(lua_State* L, Ctx* c);
 void registerAudio(lua_State* L, Ctx* c);
 void registerMic(lua_State* L, Ctx* c);
 void registerEspNow(lua_State* L, Ctx* c);
+void registerWifiMonitor(lua_State* L, Ctx* c);
 // Same write rules as fs.write (data: always, sd: only with a write grant, never *.bin) for bindings outside LuaFs.cpp.
 // On failure pushes nil,msg and returns false. ensureParentDir creates the parent folder (recursive) when missing.
 bool writePathArg(lua_State* L, int i, char* out, size_t cap);
@@ -72,6 +73,8 @@ void registerGfxImage(lua_State* L);
 // Shared by wifi.*, http.* and net.*: what an app sees when its manifest lacks the permission.
 inline constexpr const char* NET_DENIED = "network not permitted: add \"permissions\": [\"network\"] to this app's manifest.json";
 // For net.listen and net.accept (exposes the device to the LAN): an extra permission beyond the base network permission.
+inline constexpr const char* MONITOR_DENIED =
+    "monitor not permitted: add \"permissions\": [\"network\", \"monitor\"] to this app's manifest.json (and approve it)";
 inline constexpr const char* ESPNOW_DENIED =
     "espnow not permitted: add \"permissions\": [\"network\", \"espnow\"] to this app's manifest.json (and approve it)";
 inline constexpr const char* HOTSPOT_DENIED =

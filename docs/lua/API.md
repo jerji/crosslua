@@ -315,7 +315,29 @@ ring filled from the WiFi task and `espnow.recv()` polls it, so no Lua code ever
 | `espnow.stop()` | Always allowed. `wifi.off()` also stops it |
 
 The approval screen lists permissions as short labels packed onto as few lines as fit, most sensitive first
-(`MICROPHONE, ESP-NOW` / `HOTSPOT, SERVER` / `SPEAKER`), because the native dialog clips after about three lines.
+(`MICROPHONE, ESP-NOW` / `SNIFFER, HOTSPOT` / `SERVER, SPEAKER`), because the native dialog clips after about three lines.
+
+## wifi.monitor — passive 802.11 capture + native PCAP writer (needs `network` + `monitor` AND the user's approval)
+```json
+{"title": "Sniffer", "permissions": ["network", "monitor"]}
+```
+Promiscuous capture of management and data frames on one fixed channel. The approval screen labels it `SNIFFER`, because passively
+recording everything in radio range is at least as sensitive as a microphone. **The radio is exclusive:** it refuses while WiFi is
+joined, a hotspot is up or `espnow` runs (and those refuse while it runs); `wifi.off()` also stops it. Leaving the app tears the radio
+down and reboots to Home, like every WiFi use. There are no callbacks: the backend keeps an 8-slot ring filled from the WiFi task
+and `wifi.monitor_recv()` polls it, so no Lua code ever runs from the radio. Capture is on one channel (no hopping: `start` again
+on another channel after `stop`).
+
+| call | notes |
+|---|---|
+| `wifi.monitor_start([{channel=1..13, file="data:x.pcap"}])` → `true` \| `nil, err` | Default channel 1. With `file` a PCAP is written natively (same write rules as `mic.record`: `data:` always, `sd:` only inside a granted folder, must end in `.pcap`). Needs 80 KB free RAM, or 48 KB once the radio has already been used in this app (its RAM never fully returns). Measured on the X4: the radio takes ~55 KB (free 105 -> 49 KB) |
+| `wifi.monitor_recv()` → `frame, {rssi, channel}` \| `nil` | Never blocks. `nil` alone = nothing waiting; `nil, err` = not started. `frame` is the raw 802.11 frame **truncated to 250 bytes** (the PCAP file records the original length) |
+| `wifi.monitor_info()` → `{channel, captured, dropped[, file, bytes]}` \| `nil, err` | `captured` counts every frame seen, `dropped` those lost to a full ring (the PCAP still gets them). `file` is the resolved on-card path and `bytes` what has reached the card so far: the writer buffers 2 KB, so most of a short capture flushes at `stop` |
+| `wifi.monitor_stop()` → `bytes` | Flushes and closes the PCAP; returns its total size (0 without a file). Always allowed |
+
+The PCAP is standard libpcap 2.4 (microsecond magic `0xa1b2c3d4`, LINKTYPE_IEEE802_11 = 105) that Wireshark/scapy open directly.
+Timestamps are microseconds **since boot**, not wall-clock time. Verified on the X4 against an injecting adapter: the file parsed
+with scapy, 16 records, inter-frame gaps matching the injection cadence.
 
 ## epub — book metadata without opening the book
 | call | notes |
