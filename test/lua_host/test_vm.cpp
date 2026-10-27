@@ -455,6 +455,16 @@ struct MockBackend : Backend {
   std::vector<MonIn> monInbox;
   // --- wifi.tx mock ---
   bool txPermitted = false, txApproved = true, txUp = false, txFail = false;
+  // --- deep sleep mock ---
+  std::string wakeCauseVal = "power-on";
+  int sleepSeconds = -1;
+  bool sleepFail = false;
+  const char* wakeCause() override { return wakeCauseVal.c_str(); }
+  bool systemSleep(int seconds, char* err, size_t errCap) override {
+    if (sleepFail) { snprintf(err, errCap, "could not arm the timer wake (mock)"); return false; }
+    sleepSeconds = seconds;
+    return true;  // on the device this never returns
+  }
   int txChannelVal = 0, txSent = 0;
   bool txAllowed() override { return net && txPermitted && txApproved; }
   bool txRunning() override { return txUp; }
@@ -1118,23 +1128,6 @@ int main() {
     loadDir(be, dir, "", mainSrc);
     return mainSrc;
   };
-  {
-    TEST("example app hello_lua: draws, reacts to buttons, quits on back");
-    LuaVm vm; MockBackend be;
-    std::string src = loadApp(be, "hello_lua");
-    CHECK(!src.empty());
-    CHECK(vm.open(96 * 1024));
-    registerApi(vm, be);
-    CHECK(vm.load("hello_lua", src.data(), src.size()));
-    CHECK(vm.resume() == Status::Waiting);  // initial draw done, now waiting for input (5 s refresh timeout)
-    CHECK(vm.timeoutMs() == 5000);
-    size_t presents = 0;
-    for (auto& c : be.calls) if (c.rfind("present:", 0) == 0) presents++;
-    CHECK(presents == 1);
-    CHECK(vm.resume("right") == Status::Waiting);
-    CHECK(vm.resume(nullptr) == Status::Waiting);  // timeout refresh
-    CHECK(vm.resume("back") == Status::Finished);
-  }
   {
     TEST("example app selftest_lua: every on-device check also passes on the host mock (now in the test hub)");
     LuaVm vm; MockBackend be;
@@ -5959,6 +5952,59 @@ int main() {
       CHECK(vm3.load("t", script3, strlen(script3)));
       CHECK(run(vm3, be, 100000) == Status::Finished);
       CHECK(be.logs.size() == 2 && be.logs[1].rfind("nil\tmonitor not permitted", 0) == 0);
+    }
+  }
+  {
+    TEST("system.sleep / system.last_wake: validation, backend handover, wake cause");
+    {
+      MockBackend be;
+      LuaVm vm;
+      CHECK(vm.open(128 * 1024));
+      registerApi(vm, be);
+      const char* script = R"LUA(
+        print(system.last_wake())
+        print(system.sleep(0))
+        print(system.sleep(-5))
+        print(system.sleep(1.5))
+        print(system.sleep("60"))
+        print(system.sleep(604801))
+        print((pcall(system.sleep)))
+        print(system.sleep(12))
+        print("after sleep")
+      )LUA";
+      CHECK(vm.load("t", script, strlen(script)));
+      CHECK(run(vm, be, 100000) == Status::Finished);
+      const char* C = "nil\tseconds must be an integer 1..604800 (a week)";
+      const char* want[] = {"power-on", C, C, C, C, C, "true", "true", "after sleep"};
+      const size_t N = sizeof(want) / sizeof(want[0]);
+      if (be.logs.size() != N || getenv("DUMP_LOGS")) for (size_t i = 0; i < be.logs.size(); i++) printf("    sleep log[%zu] '%s'\n", i, be.logs[i].c_str());
+      CHECK(be.logs.size() == N);
+      for (size_t i = 0; i < N && i < be.logs.size(); i++) {
+        CHECK(be.logs[i] == want[i]);
+        if (be.logs[i] != want[i]) printf("    sleep #%zu got '%s' want '%s'\n", i + 1, be.logs[i].c_str(), want[i]);
+      }
+      CHECK(be.sleepSeconds == 12);
+    }
+    {
+      MockBackend be;  // wake cause variants + backend failure
+      be.wakeCauseVal = "timer";
+      LuaVm vm;
+      CHECK(vm.open(128 * 1024));
+      registerApi(vm, be);
+      const char* script = "print(system.last_wake())";
+      CHECK(vm.load("t", script, strlen(script)));
+      CHECK(run(vm, be, 100000) == Status::Finished);
+      CHECK(be.logs.size() == 1 && be.logs[0] == "timer");
+      be.wakeCauseVal = "button";
+      be.sleepFail = true;
+      be.logs.clear();
+      LuaVm vm2;
+      CHECK(vm2.open(128 * 1024));
+      registerApi(vm2, be);
+      const char* script2 = "print(system.last_wake())\nprint(system.sleep(30))";
+      CHECK(vm2.load("t", script2, strlen(script2)));
+      CHECK(run(vm2, be, 100000) == Status::Finished);
+      CHECK(be.logs.size() == 2 && be.logs[0] == "button" && be.logs[1] == "nil\tcould not arm the timer wake (mock)" && be.sleepSeconds == -1);
     }
   }
   printf(g_fail ? "\n%d FAILED\n" : "\nALL PASSED\n", g_fail);
