@@ -292,6 +292,9 @@ class LuaAppActivity::Backend final : public crosslua::Backend {
     }
     delay(100);  // the AP needs a moment before its address is valid (same wait as the upstream screen)
     fmtIp(ip, ipCap, WiFi.softAPIP());
+    // Same as after a successful wifi.connect(): the radio now owns ~60 KB, so the 40 KB allocator floor would leave Lua nothing
+    // (measured: a client joining made the app die with "not enough memory"). Sockets keep their own 16 KB check.
+    if (setFloorFn) setFloorFn(LUA_HEAP_FLOOR_ONLINE);
     return true;
   }
   bool softApInfo(char* ssid, size_t ssidCap, char* ip, size_t ipCap, int* clients) override {
