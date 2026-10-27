@@ -511,6 +511,14 @@ struct MockBackend : Backend {
     *channel = in.channel;
     return static_cast<int>(n);
   }
+  bool monSetFail = false;
+  bool monitorSetChannel(int channel, char* err, size_t errCap) override {
+    if (monSetFail) { snprintf(err, errCap, "could not set the channel (mock)"); return false; }
+    if (!monUp && !txUp) { snprintf(err, errCap, "no radio mode is running (mock)"); return false; }
+    monChannel = channel;
+    txChannelVal = channel;
+    return true;
+  }
   bool monitorInfo(int* channel, int* captured, int* dropped, char* path, size_t pathCap, uint32_t* pcapBytes) override {
     if (!monUp) return false;
     *channel = monChannel;
@@ -5876,6 +5884,81 @@ int main() {
       CHECK(vm3.load("t", script3, strlen(script3)));
       CHECK(run(vm3, be, 100000) == Status::Finished);
       CHECK(be.logs.size() == 1 && be.logs[0] == "nil\tthe radio refused the frame (mock)");
+    }
+  }
+  {
+    TEST("wifi.monitor_channel: hop while the sniffer or the injector runs, shared channel, validation");
+    {
+      MockBackend be;
+      be.net = true;
+      be.monPermitted = true;
+      be.txPermitted = true;
+      LuaVm vm;
+      CHECK(vm.open(128 * 1024));
+      registerApi(vm, be);
+      const char* script = R"LUA(
+        print(wifi.monitor_channel(6))
+        print(wifi.monitor_start{channel = 1})
+        print(wifi.monitor_channel(6))
+        print(wifi.monitor_info().channel)
+        print(wifi.tx_start())
+        print(wifi.tx_info().channel)
+        print(wifi.monitor_channel(11))
+        print(wifi.tx_info().channel)
+        print(wifi.monitor_channel(0))
+        print(wifi.monitor_channel(14))
+        print(wifi.monitor_channel(1.5))
+        print(wifi.monitor_channel("6"))
+        print((pcall(wifi.monitor_channel)))
+        print(wifi.tx_stop())
+        print(wifi.monitor_stop())
+        print(wifi.monitor_channel(3))
+      )LUA";
+      CHECK(vm.load("t", script, strlen(script)));
+      CHECK(run(vm, be, 200000) == Status::Finished);
+      const char* NS = "nil\tno radio mode is running (wifi.monitor_start() or wifi.tx_start() first)";
+      const char* C = "nil\tchannel must be an integer 1..13";
+      const char* want[] = {NS, "true", "true", "6", "true", "6", "true", "11", C, C, C, C, "true", "true", "0", NS};
+      const size_t N = sizeof(want) / sizeof(want[0]);
+      if (be.logs.size() != N || getenv("DUMP_LOGS")) for (size_t i = 0; i < be.logs.size(); i++) printf("    hop log[%zu] '%s'\n", i, be.logs[i].c_str());
+      CHECK(be.logs.size() == N);
+      for (size_t i = 0; i < N && i < be.logs.size(); i++) {
+        CHECK(be.logs[i] == want[i]);
+        if (be.logs[i] != want[i]) printf("    hop #%zu got '%s' want '%s'\n", i + 1, be.logs[i].c_str(), want[i]);
+      }
+      CHECK(be.monChannel == 11);  // the last hop wins
+    }
+    {
+      MockBackend be;  // backend failure and the monitor permission gate
+      be.net = true;
+      be.monPermitted = true;
+      be.txPermitted = true;
+      LuaVm vm;
+      CHECK(vm.open(128 * 1024));
+      registerApi(vm, be);
+      const char* script = "print(wifi.tx_start())\nprint(wifi.monitor_channel(2))";
+      CHECK(vm.load("t", script, strlen(script)));
+      CHECK(run(vm, be, 100000) == Status::Finished);
+      CHECK(be.logs.size() == 2 && be.logs[0] == "true" && be.logs[1] == "true");
+      be.monSetFail = true;
+      be.logs.clear();
+      LuaVm vm2;
+      CHECK(vm2.open(128 * 1024));
+      registerApi(vm2, be);
+      const char* script2 = "print(wifi.tx_start())\nprint(wifi.monitor_channel(2))";
+      CHECK(vm2.load("t", script2, strlen(script2)));
+      CHECK(run(vm2, be, 100000) == Status::Finished);
+      CHECK(be.logs.size() == 2 && be.logs[1] == "nil\tcould not set the channel (mock)");
+      be.monSetFail = false;
+      be.monPermitted = false;
+      be.logs.clear();
+      LuaVm vm3;
+      CHECK(vm3.open(128 * 1024));
+      registerApi(vm3, be);
+      const char* script3 = "print(wifi.tx_start())\nprint(wifi.monitor_channel(2))";
+      CHECK(vm3.load("t", script3, strlen(script3)));
+      CHECK(run(vm3, be, 100000) == Status::Finished);
+      CHECK(be.logs.size() == 2 && be.logs[1].rfind("nil\tmonitor not permitted", 0) == 0);
     }
   }
   printf(g_fail ? "\n%d FAILED\n" : "\nALL PASSED\n", g_fail);

@@ -138,6 +138,20 @@ int monitor_info(lua_State* L) {
   return 1;
 }
 
+// wifi.monitor_channel(n) -> true | nil, err. Hops the radio to another channel (1..13) while the sniffer and/or the injector
+// run; both follow (one radio, one channel). Frames captured before the hop stay queued in the ring.
+int monitor_channel(lua_State* L) {
+  if (lua_type(L, 1) != LUA_TNUMBER) return pushFail(L, "channel must be an integer 1..13");
+  const lua_Number n = luaL_checknumber(L, 1);
+  if (int r = gateMonitor(L)) return r;
+  if (n < 1 || n > MON_CHANNELS || n != static_cast<int>(n)) return pushFail(L, "channel must be an integer 1..13");
+  if (!be(L).monitorRunning() && !be(L).txRunning()) return pushFail(L, "no radio mode is running (wifi.monitor_start() or wifi.tx_start() first)");
+  char err[96] = {0};
+  if (!be(L).monitorSetChannel(static_cast<int>(n), err, sizeof(err))) return pushFail(L, err[0] ? err : "could not set the channel");
+  lua_pushboolean(L, 1);
+  return 1;
+}
+
 // wifi.monitor_stop() -> bytes written to the PCAP (0 without a file). Always allowed.
 int monitor_stop(lua_State* L) {
   uint32_t bytes = 0;
@@ -152,7 +166,7 @@ int monitor_stop(lua_State* L) {
 void registerWifiMonitor(lua_State* L, Ctx* c) {
   (void)c;
   static const luaL_Reg fns[] = {{"monitor_start", monitor_start}, {"monitor_recv", monitor_recv}, {"monitor_info", monitor_info},
-                                 {"monitor_stop", monitor_stop},   {nullptr, nullptr}};
+                                 {"monitor_stop", monitor_stop},   {"monitor_channel", monitor_channel}, {nullptr, nullptr}};
   lua_getglobal(L, "wifi");
   luaL_setfuncs(L, fns, 0);
   lua_pop(L, 1);

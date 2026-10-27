@@ -573,6 +573,18 @@ class LuaAppActivity::Backend final : public crosslua::Backend {
     monHead_.store(static_cast<uint8_t>((head + 1) % MON_RING), std::memory_order_release);
     return static_cast<int>(n);
   }
+  bool monitorSetChannel(int channel, char* err, size_t errCap) override {
+    if (!monUp_ && !txUp_) {
+      snprintf(err, errCap, "no radio mode is running");
+      return false;
+    }
+    if (esp_wifi_set_channel(static_cast<uint8_t>(channel), WIFI_SECOND_CHAN_NONE) != ESP_OK) {
+      snprintf(err, errCap, "could not set the channel");
+      return false;
+    }
+    monChannel_ = channel;  // one radio, one channel: the sniffer and the injector always follow together
+    return true;
+  }
   bool monitorInfo(int* channel, int* captured, int* dropped, char* path, size_t pathCap, uint32_t* pcapBytes) override {
     if (!monUp_) return false;
     *channel = monChannel_;

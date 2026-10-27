@@ -79,6 +79,39 @@ local st = fs.stat("data:cap.pcap")
 check("pcap exists on the card", st ~= nil and st.size == bytes, st and st.size)
 -- the capture is left on the card (overwritten by the next run) so the host can download it and parse it with a real PCAP reader
 
+-- channel hopping: the host injects on channel 1 the whole time; frames must stop on ch6 and resume on ch1
+local okh, eh = wifi.monitor_start({channel = 1})
+check("monitor restart for hop phase", okh == true, tostring(eh))
+if okh then
+  -- count only the host's injected frames (they carry a "HOST-FRAME" marker in the body); ambient WiFi is ignored
+  local function marker()
+    local f = wifi.monitor_recv()
+    while f do
+      if f:find("HOST%-FRAME", 1, false) then return true end
+      f = wifi.monitor_recv()
+    end
+    return false
+  end
+  wifi.monitor_channel(6)
+  local t2 = system.millis()
+  local got6 = 0
+  while system.millis() - t2 < 5000 and input.poll() ~= "back" do
+    if marker() then got6 = got6 + 1 end
+    app.sleep(20)
+  end
+  wifi.monitor_channel(1)
+  t2 = system.millis()
+  local got1 = 0
+  while system.millis() - t2 < 7000 and input.poll() ~= "back" do
+    if marker() then got1 = got1 + 1 end
+    app.sleep(20)
+  end
+  print(("INFO hop: %d marker frames on ch6 (want 0), %d on ch1"):format(got6, got1))
+  check("hop away stops the injected frames", got6 == 0, got6)
+  check("hop back resumes them", got1 >= 3, got1)
+  wifi.monitor_stop()
+end
+
 heap("after stop")
 print(fails == 0 and "ALL PASSED" or (fails .. " FAILED"))
 gfx.clear()

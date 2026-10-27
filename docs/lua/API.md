@@ -333,6 +333,7 @@ on another channel after `stop`).
 | `wifi.monitor_start([{channel=1..13, file="data:x.pcap"}])` → `true` \| `nil, err` | Default channel 1. With `file` a PCAP is written natively (same write rules as `mic.record`: `data:` always, `sd:` only inside a granted folder, must end in `.pcap`). Needs 80 KB free RAM, or 48 KB once the radio has already been used in this app (its RAM never fully returns). Measured on the X4: the radio takes ~55 KB (free 105 -> 49 KB) |
 | `wifi.monitor_recv()` → `frame, {rssi, channel}` \| `nil` | Never blocks. `nil` alone = nothing waiting; `nil, err` = not started. `frame` is the raw 802.11 frame **truncated to 250 bytes** (the PCAP file records the original length) |
 | `wifi.monitor_info()` → `{channel, captured, dropped[, file, bytes]}` \| `nil, err` | `captured` counts every frame seen, `dropped` those lost to a full ring (the PCAP still gets them). `file` is the resolved on-card path and `bytes` what has reached the card so far: the writer buffers 2 KB, so most of a short capture flushes at `stop` |
+| `wifi.monitor_channel(n)` → `true` \| `nil, err` | Hops to another channel (1..13) **while running**: the sniffer and the injector follow together (one radio, one channel). Frames captured before the hop stay queued. Requires the monitor or the injector running |
 | `wifi.monitor_stop()` → `bytes` | Flushes and closes the PCAP; returns its total size (0 without a file). Always allowed |
 
 The PCAP is standard libpcap 2.4 (microsecond magic `0xa1b2c3d4`, LINKTYPE_IEEE802_11 = 105) that Wireshark/scapy open directly.

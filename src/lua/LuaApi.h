@@ -185,6 +185,7 @@ class Backend {
   virtual bool monitorStart(int channel, const char* pcapPath, char* err, size_t errCap) = 0;  // pcapPath: nullptr = no file
   virtual void monitorStop(uint32_t* pcapBytes) = 0;
   virtual int monitorRecv(void* buf, size_t cap, int* rssi, int* channel) = 0;  // bytes (> 0), or 0 when nothing is waiting
+  virtual bool monitorSetChannel(int channel, char* err, size_t errCap) = 0;  // hop live; needs the monitor or the injector running
   virtual bool monitorInfo(int* channel, int* captured, int* dropped, char* path, size_t pathCap, uint32_t* pcapBytes) = 0;
   // --- wifi.tx (raw 802.11 injection); needs "network" + "tx" and the user's approval. Exclusive with WiFi/hotspot/espnow but
   // COEXISTS with the monitor on the same channel (a start without a channel adopts the other mode's channel). ---

@@ -54,6 +54,12 @@ L = [
  ('MN25 info drops the file/bytes', '  if (path[0]) {', '  if (false) {', M),
  ('MN26 espnow.start allowed while monitor runs', '  if (be(L).monitorRunning()) return pushFail(L, "the WiFi sniffer is running: call wifi.monitor_stop() first");', '', E),
  ('MN27 wifi.connect allowed while monitor runs', 'call espnow.stop() before joining WiFi");\n  if (be(L).monitorRunning()) return pushNo(L, "the WiFi sniffer is running: call wifi.monitor_stop() first");', 'call espnow.stop() before joining WiFi");', N),
+ ('HP1 hop needs no permission', 'int monitor_channel(lua_State* L) {\n  if (lua_type(L, 1) != LUA_TNUMBER) return pushFail(L, "channel must be an integer 1..13");\n  const lua_Number n = luaL_checknumber(L, 1);\n  if (int r = gateMonitor(L)) return r;', 'int monitor_channel(lua_State* L) {\n  const lua_Number n = luaL_checknumber(L, 1);', M),
+ ('HP2 hop channel 0 allowed', 'if (n < 1 || n > MON_CHANNELS || n != static_cast<int>(n)) return pushFail(L, "channel must be an integer 1..13");\n  if (!be(L).monitorRunning()', 'if (n < 0 || n > MON_CHANNELS || n != static_cast<int>(n)) return pushFail(L, "channel must be an integer 1..13");\n  if (!be(L).monitorRunning()', M),
+ ('HP3 hop channel 14 allowed', 'n > MON_CHANNELS || n != static_cast<int>(n)) return pushFail(L, "channel must be an integer 1..13");\n  if (!be(L).monitorRunning()', 'n > MON_CHANNELS + 1 || n != static_cast<int>(n)) return pushFail(L, "channel must be an integer 1..13");\n  if (!be(L).monitorRunning()', M),
+ ('HP4 hop type unchecked', 'if (lua_type(L, 1) != LUA_TNUMBER) return pushFail(L, "channel must be an integer 1..13");', '', M),
+ ('HP5 hop without a running mode allowed', 'if (!be(L).monitorRunning() && !be(L).txRunning()) return pushFail(L, "no radio mode is running (wifi.monitor_start() or wifi.tx_start() first)");', '', M),
+ ('HP6 backend failure swallowed', 'if (!be(L).monitorSetChannel(static_cast<int>(n), err, sizeof(err))) return pushFail(L, err[0] ? err : "could not set the channel");\n  lua_pushboolean(L, 1);', 'be(L).monitorSetChannel(static_cast<int>(n), err, sizeof(err));\n  lua_pushboolean(L, 1);', M),
  ('MN28 softap allowed while monitor runs', 'call espnow.stop() before starting a hotspot");\n  if (be(L).monitorRunning()) return pushNo(L, "the WiFi sniffer is running: call wifi.monitor_stop() first");', 'call espnow.stop() before starting a hotspot");', N),
 ]
 print('== baseline', run(), flush=True)
