@@ -1,6 +1,6 @@
 # Upstream touchpoints
 
-**Rule (Angel): touch upstream-owned files as little as possible.** Prefer new code in CrossLua-owned files that calls existing APIs
+**Rule: touch upstream-owned files as little as possible.** Prefer new code in CrossLua-owned files that calls existing APIs
 read-only; `#ifdef CROSSLUA_DEV` anything that only exists for testing; log every remaining edit below.
 
 Everything CrossLua adds lives in new files (`lib/lua/`, `src/lua/`, `src/activities/plugins/LuaAppActivity.*`,
@@ -30,6 +30,6 @@ re-check them first when merging `upstream/master`.
 | `platformio.ini` | **edited**: `[base]` `lib_deps` gains `Buzzer`, `LedManager`, `EnvironmentSensor` (same `symlink://freeink-sdk/...` form as their neighbours) so the Lua `device.tone` / `led.*` / `device.environment` backends link; the libs already ship stub bodies for boards without the hardware |
 | `src/activities/plugins/LuaAppActivity.cpp` | also uses `freeink::Imu`, `Buzzer`, `LedManager`, `EnvironmentSensor` and the `BoardConfig::has*()` runtime queries — existing APIs, none modified |
 | `src/main.cpp` | the dev serial `CMD:` handler block moved verbatim into `devcapture::pollSerial()` (called from `loop()` as before, and from blocking Lua backend pumps so x4ctl injections survive a blocked loop; the dev channel previously died during `net.connect`/`http`) |
-| `lib/GfxRenderer/DevCapture.h` | declares `devcapture::pollSerial()` (defined in main.cpp; compiled in all builds, meaningful only in dev builds) |
+| `lib/GfxRenderer/DevCapture.{h,cpp}` | **new file** (upstream directory): screen-draw recording for `CMD:SCREEN`; `devcapture::pollSerial()` (defined there, called from main.cpp and blocking Lua backend pumps) keeps the dev serial channel alive during blocking calls |
 | `platformio.ini` | `[base] lib_deps` gains `AudioManager=symlink://freeink-sdk/libs/hardware/AudioManager` so the Lua `audio.*` backend links (the lib is already part of the SDK; boards without a speaker get its absence path) |
 | `platformio.ini` | `[base] lib_deps` gains `Microphone=symlink://freeink-sdk/libs/hardware/Microphone` for the Lua `mic.*` backend (boards without a mic get its absence path) |

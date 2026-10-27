@@ -1,3 +1,59 @@
+# CrossLua — a Lua app runtime for CrossPoint (`lua-runtime` branch)
+
+> [!WARNING]
+> **This branch is developed with heavy AI assistance.** The Lua runtime, its API surface, the host test suite and the docs below
+> were written by an AI coding agent (Hermes) working under human direction, then verified on real hardware (Xteink X4 and the
+> Metalio E-Ink 4 dev boards) with mutation-tested host tests. It works, but treat it as experimental: read the code before you
+> trust it with anything sensitive, and never approve a permission dialog you do not understand.
+
+## What this fork adds
+
+A sandboxed **Lua app runtime** for CrossPoint devices: apps are folders on the SD card with a `manifest.json`, run from
+Home → Plugins, and get a guarded standard library (`gfx`, `input`, `app`, `system`, `fs`, `time`, `crypto`, `json`, `epub`, …).
+The headline features, all verified on hardware:
+
+- **Network**: HTTPS/HTTP with TLS and CA pinning, JSON, TCP client sockets with back-cancel, TCP `net.listen`/`accept`,
+  UDP, mDNS queries, `wifi.connect`/`wifi.off`, and **`wifi.softap`** hotspots (HTTP server + captive DNS are plain Lua on top).
+- **Raw radio**: `espnow` (connectionless frames between nearby devices), `wifi.monitor` (promiscuous capture with a native
+  PCAP writer and **live channel hopping**), and `wifi.tx` (raw frame injection, coexists with the sniffer on one channel).
+- **Files**: sandboxed `fs` with SD-card storage grants (per-folder, user-approved), `fs.stat`/detailed listing, ZIP reading.
+- **Device**: microphone recording, WAV playback, haptics, frontlight, IMU, environment sensors, LED, buzzer, battery, clock.
+- **Safety**: every sensitive API sits behind a manifest permission and a native approval dialog that always shows the full list
+  (a recording device is never enabled silently).
+
+![CrossLua demo app](docs/images/crosslua-demo.png)
+
+(The screenshot is `sd_card_contents/plugins/demo_lua` — a 54-line app.)
+
+## RAM: read this before writing network apps
+
+The device has ~107 KB of free heap and a 32-bit Lua with a per-app budget (~85 KB). RAM is the main constraint, by design:
+
+- **Radio modes cost ~55 KB each** (ESP-NOW, monitor). The hotspot costs ~60 KB. `espnow.start` / `wifi.monitor_start` /
+  `wifi.tx_start` / `wifi.softap` refuse below an **80 KB free-heap floor** (48 KB once the radio has already been used in the
+  same app — the radio's RAM never fully comes back without a reboot).
+- **TLS** needs its own ~32 KB and refuses below a 96 KB floor; plain TCP needs 80 KB.
+- Leaving an app that ever used the radio **reboots to Home** to defragment the heap. `wifi.off()` frees some of it back, ~20 KB less than it took.
+- Check `system.heap()` / `system.lua_mem()` before loading anything large; loading fails cleanly at the budget, but the
+  failure you get on a full heap is a Lua error, not a crash.
+
+Full API reference: [`docs/lua/API.md`](docs/lua/API.md) · feature status: [`docs/lua/FEATURE_MATRIX.md`](docs/lua/FEATURE_MATRIX.md) ·
+upstream files touched: [`docs/lua/UPSTREAM_TOUCHPOINTS.md`](docs/lua/UPSTREAM_TOUCHPOINTS.md).
+
+## Credits & licenses
+
+- **[CrossPoint Reader](https://github.com/crosspoint-reader/crosspoint-reader)** (upstream, MIT © 2025 CrossPoint Reader
+  organization) — this fork's entire foundation: firmware, UI, plugin system, dev serial channel.
+- **[biscuit](https://github.com/DaveAllie/biscuit)** (MIT © 2025 Dave Allie) — the reference for how to build network apps on
+  this hardware; our socket/HTTP semantics and the poll-don't-callback radio design follow its patterns.
+- **[crossplay](https://github.com/crosspoint-reader/crossplay)** (MIT © 2025 CrossPoint Reader organization) — source of the
+  ESP-NOW radio sequence (`LinkRadio`) our `espnow.*` and `wifi.tx` backends mirror.
+- **freeink-sdk** (MIT © 2026 FreeInk) — hardware drivers behind `device.*`, `audio.*`, `mic.*`; linked read-only.
+- The nano² smart-lock binding reimplements two calls from the lock vendor's SDK, which **ships without a license file** —
+  treat that part as proprietary and don't redistribute it.
+
+---
+
 # CrossPoint Reader
 
 [![Fund contributors](https://img.shields.io/badge/%F0%9F%91%91_Fund_contributors-royalty.dev-BB953A?style=for-the-badge&labelColor=1a1a1a)](https://app.royalty.dev/crosspoint-reader/crosspoint-reader)

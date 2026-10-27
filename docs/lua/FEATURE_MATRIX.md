@@ -32,12 +32,12 @@ Lua heap). Verdicts in the per-fork files; here only the gaps.
 | `gfx.save_bmp(path)` (screenshot from inside an app) | tests, bug reports, sharing | **done**: binds `ScreenshotUtil::saveFramebufferAsBmp` (streams, no heap). 240 ms, pixel-identical round trip on the X4, 7 mutants caught. |
 | `epub.meta(path)` → `{title, author}` (no layout) | AvesO3 library, "about this book" apps | **done**: binds the firmware's `Epub::loadMetadata` (metadata-only OPF parse, no cache). Language is not exposed (that parse path does not return it). Measured on the X4: ~17 ms, ~55 KB heap peak, no leak; 10 mutants caught. |
 
-## Principle: touch upstream as little as possible (decided with Angel)
+## Principle: touch upstream as little as possible
 New features live in CrossLua-owned files (`src/lua/`, `src/activities/plugins/LuaAppActivity.*`, `lib/lua/`) and call existing SDK/firmware APIs
 read-only. An edit to an upstream-owned file needs a reason that cannot be met inside our files, is `#ifdef`-gated when it is dev-only, and is
 logged in `UPSTREAM_TOUCHPOINTS.md`. Rejected on this basis: setting the FAT clock (`HalStorage`) just to make `fs.stat().mtime` real.
 
-## Principle: CrossPoint is not only the X4 (decided with Angel)
+## Principle: CrossPoint is not only the X4
 Build the feature for every board the firmware supports, even when the X4 (our only test device) lacks the hardware.
 - Hardware features are gated by the firmware's own `FREEINK_CAP_*` flags and report honestly when absent: `nil/false, "no <thing> on this device"`, never a crash.
 - Apps discover what exists with **`device.caps()`** (below) instead of guessing the model.
@@ -53,7 +53,7 @@ Build the feature for every board the firmware supports, even when the X4 (our o
 | `device.caps()` sensor flags | to do | **done** |
 | frontlight warmth | done | `device.frontlight` already takes warmth; `caps().warmlight` says whether it does anything |
 
-## Hardware coverage: every `FREEINK_CAP_*` flag, mapped to Lua (goal set by Angel: support most CrossPoint hardware where possible)
+## Hardware coverage: every `FREEINK_CAP_*` flag, mapped to Lua (goal: support most CrossPoint hardware where possible)
 Source of truth: `freeink-sdk/libs/hardware/BoardConfig` (16 flags) and the libs behind them. Each feature follows the same recipe: a `device.caps()` flag, a Backend method that wraps the SDK lib (stubs link on boards without the hardware), host tests with a mock, honest `nil/false, "no X on this device"` results, a line in `devtest_lua`, and a build of an env that has the hardware to prove it compiles. Status key: **done**, **todo**, **permission** (needs a manifest permission + user approval, like network/grants), **park** (needs design or a volunteer with the board).
 | flag / hardware | SDK lib | Lua surface | status |
 |---|---|---|---|
@@ -73,8 +73,8 @@ Source of truth: `freeink-sdk/libs/hardware/BoardConfig` (16 flags) and the libs
 | `NET_TLS13` | network | caps flag `tls13` so apps know what `http` can talk to | caps flag **done** |
 Order of work: (1) caps flags for everything + `device.motion` + `device.environment` + `device.tone` + `led.*` (one pattern, small, no permissions); (2) `audio.*` and `mic.*` with the permission flow; (3) BLE keyboard and colour once someone can test them.
 
-## Required for apps: Home Assistant control and other REST/JSON services (decided with Angel: features first, apps after)
-Angel's target: a CrossLua app that reads and controls Home Assistant (`GET /api/states/<id>`, `POST /api/services/<domain>/<service>`
+## Required for apps: Home Assistant control and other REST/JSON services (features first, apps after)
+Target: a CrossLua app that reads and controls Home Assistant (`GET /api/states/<id>`, `POST /api/services/<domain>/<service>`
 with a `Bearer` token). Audit of what `http.request` could do before this work: HTTPS, custom headers (GET only!), `json.encode/decode`,
 `time.sync`, mDNS discovery. Gaps found by reading the code (not assumed):
 
@@ -103,17 +103,17 @@ with a `Bearer` token). Audit of what `http.request` could do before this work: 
 | `gfx.load_font(path)` TTF | custom fonts | Hard; FreeInkFont subsystem is deep. |
 | deep sleep with wake-timers/retained frame | sleep screens, alarms | Firmware power flow is invasive. |
 | decimal arithmetic for Calculator | biscuit/crossplay Calculator | Lua can do string-based decimal add/sub; only worth it if the Calculator gets ported. |
-| App categories / launcher for Lua apps (**parked by Angel, undecided**) | a flat Plugins list will not scale past a few dozen apps | Options discussed, no decision yet. **Mechanism is settled:** category = manifest `"category"` field only (not sub-folders: the Plugin Hub and `x4push` install flat at `/plugins/<name>`, data dirs are keyed by app name, `app.dir()` would change). **A.** native "Lua apps" screen (C++): fast, no VM RAM, but more C++ UI + one upstream entry point, not replaceable. **B (recommended).** a launcher that is itself a Lua app (`apps_lua`): zero upstream UI edits, replaceable, Recent/Favorites in plain Lua; needs new `app.list()` + `app.launch(name)` behind a `"launcher"` permission with an approval screen, costs ~15-20 KB RAM while browsing, one extra step; the flat list stays unless a tiny optional filter hides Lua apps (`"listed": false`). **C.** edit `PluginCatalogActivity` in place: one list, but risky (paging/index/uninstall-return logic in a 1,740-line upstream file, merge pain). Optional later: `/.crosslua/categories.json` override so users can re-sort without editing manifests. |
+| App categories / launcher for Lua apps (**parked, undecided**) | a flat Plugins list will not scale past a few dozen apps | Options discussed, no decision yet. **Mechanism is settled:** category = manifest `"category"` field only (not sub-folders: the Plugin Hub and `x4push` install flat at `/plugins/<name>`, data dirs are keyed by app name, `app.dir()` would change). **A.** native "Lua apps" screen (C++): fast, no VM RAM, but more C++ UI + one upstream entry point, not replaceable. **B (recommended).** a launcher that is itself a Lua app (`apps_lua`): zero upstream UI edits, replaceable, Recent/Favorites in plain Lua; needs new `app.list()` + `app.launch(name)` behind a `"launcher"` permission with an approval screen, costs ~15-20 KB RAM while browsing, one extra step; the flat list stays unless a tiny optional filter hides Lua apps (`"listed": false`). **C.** edit `PluginCatalogActivity` in place: one list, but risky (paging/index/uninstall-return logic in a 1,740-line upstream file, merge pain). Optional later: `/.crosslua/categories.json` override so users can re-sort without editing manifests. |
 
-## Requested by Angel
+## Requested
 - **Per-folder storage grants** (IMPLEMENTED, host-tested, 10 mutants, verified on the X4: native approval screen, Deny keeps the app from starting, approval persists, grants_lua 14/14; see API.md "Storage grants"): manifest
   `"storage": {"read": ["Books"], "write": ["Books/AO3","Downloads"]}` (`"/"` allowed for file managers). First launch shows a NATIVE
   confirmation listing the grants in plain words; approval stored in a hidden firmware-owned file (re-prompt when an
   update widens the grants). Hidden/dot paths and firmware images are NEVER grantable; `/plugins` (other apps' code) needs a
   separate louder warning. Enables `sd:` writes + `http save_to sd:Books/..`, `fs.rename/remove` inside grants, `app.open(path)`
-  (reader today; text/image viewers later). File-browser apps additionally needed `fs.stat` / detailed `fs.list` (size, type, mtime): **done** (`fs.stat`, `fs.list{detail,offset,limit}`; host-tested, 26 mutants; verified on the X4). Not planned (decided with Angel): a FAT clock, so device-created files keep one default stamp.
+  (reader today; text/image viewers later). File-browser apps additionally needed `fs.stat` / detailed `fs.list` (size, type, mtime): **done** (`fs.stat`, `fs.list{detail,offset,limit}`; host-tested, 26 mutants; verified on the X4). Not planned (not planned): a FAT clock, so device-created files keep one default stamp.
 
-## Also requested by Angel, scheduled for later
+## Also requested, scheduled for later
 - **`app.restart(entry)` (implemented, host-tested, 6 mutants; verified on the X4 via the Grimoire launcher -> run.lua -> launcher round trip)** — the app quits itself and is relaunched immediately with a different entry script (`main.lua` by
   default), giving a fresh VM and a fresh budget while still being ONE plugin entry. Use case: a menu shell (browse /
   update / about) whose network sub-app needs a lean start. Needs a small `LuaAppActivity` change (re-enter with a new
