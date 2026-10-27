@@ -266,7 +266,7 @@ class LuaAppActivity::Backend final : public crosslua::Backend {
   uint32_t millis() override { return ::millis(); }
   size_t radioFloorBytes() override { return radioEverStarted_ ? 48 * 1024 : 80 * 1024; }
   const char* wakeCause() override {
-    switch (wakeCause_) {
+    switch (esp_sleep_get_wakeup_cause()) {
       case ESP_SLEEP_WAKEUP_TIMER: return "timer";
       case ESP_SLEEP_WAKEUP_EXT0:
       case ESP_SLEEP_WAKEUP_EXT1:
@@ -1881,7 +1881,6 @@ class LuaAppActivity::Backend final : public crosslua::Backend {
   bool espnowReq_ = false;  // manifest asked for "espnow" (effective only after approval)
   bool monitorReq_ = false; // manifest asked for "monitor" (effective only after approval)
   bool txReq_ = false;      // manifest asked for "tx" (effective only after approval)
-  esp_sleep_wakeup_cause_t wakeCause_ = ESP_SLEEP_WAKEUP_UNDEFINED;  // what woke the previous cycle, read once at start
   struct Grant {
     std::string rel;
     bool write;
@@ -1897,8 +1896,7 @@ class LuaAppActivity::Backend final : public crosslua::Backend {
 // ---------------------------------------------------------------------------
 LuaAppActivity::LuaAppActivity(GfxRenderer& renderer, MappedInputManager& mappedInput, std::string appName,
                                std::string appDir)
-    : Activity("LuaApp", renderer, mappedInput), appName_(std::move(appName)), appDir_(std::move(appDir)) {
-  wakeCause_ = esp_sleep_get_wakeup_cause();  // valid right after a deep-sleep wake; UNDEFINED on a normal reset}
+    : Activity("LuaApp", renderer, mappedInput), appName_(std::move(appName)), appDir_(std::move(appDir)) {}
 
 LuaAppActivity::~LuaAppActivity() = default;
 

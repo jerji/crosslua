@@ -23,7 +23,6 @@ re-check them first when merging `upstream/master`.
 | `lib/hal/HalGPIO.{h,cpp}`, `src/main.cpp` | `#ifdef CROSSLUA_DEV`: `injectButton(idx, hold, delay)` / `CMD:BTN:<name>:<hold>:<delay>` arms a press for later so tests can reach a blocked main loop |
 | `src/activities/plugins/LuaAppActivity.cpp` | uses `WifiSelectionActivity`, `HttpDownloader`, `WifiPowerSaveGuard`, `silentRestart()` — all existing APIs, none modified |
 | `src/activities/plugins/LuaAppActivity.cpp` | also uses `ZipFile` (read-only) and `activityManager.goToReader()` — existing APIs |
-
 | `lib/hal/HalHaptics.h` | **edited**: new `HalHaptics::pulse(enabled, ms, strength)` (one non-blocking pulse, `false` without a motor); the existing `feedback()`/`longPress()` are untouched. Backs Lua `device.haptic`. Compiles to `return false` unless `FREEINK_CAP_HAPTIC` |
 | `src/activities/plugins/LuaAppActivity.cpp` | also uses `KeyboardEntryActivity` + `KeyboardResult` (`input.text`), `MappedInputManager` touch getters `wasScreenTouchDown/LongPress/Tapped/TouchReleased/isScreenTouchHeld` (touch events), `HalGPIO::isUsbConnected()/hasTouch()`, `SETTINGS.vibration`, the `FREEINK_CAP_*` flags, `esp_fill_random` — all existing APIs, none modified |
 | `src/lua/LuaCrypto.cpp` | uses ESP-IDF's mbedtls (`md`, `sha1`, `sha256`, `aes`) — already linked for OTA hashing; the host tests compile the same mbedtls sources from the PlatformIO `framework-espidf` package (`test/lua_host/mbedtls_host_config.h`, override the location with `MBEDTLS_DIR`) |

@@ -402,6 +402,33 @@ int dev_haptic(lua_State* L) {
   return 1;
 }
 // system.usb() -> boolean (cable connected)
+// system.sleep(seconds) -> true | nil, err. Arms a timer wake and enters the SAME deep-sleep flow the power button uses
+// (sleep screen, plugin events, rails off; the power button also wakes). The call never returns on the device: the wake is a
+// fresh boot. No permission: the power button always wakes the device, so nothing is locked away.
+namespace {
+int pushFail(lua_State* L, const char* msg) {
+  lua_pushnil(L);
+  lua_pushstring(L, msg);
+  return 2;
+}
+}  // namespace
+
+int sys_sleep(lua_State* L) {
+  if (lua_type(L, 1) != LUA_TNUMBER) return pushFail(L, "seconds must be an integer 1..604800 (a week)");
+  const lua_Number sec = luaL_checknumber(L, 1);
+  if (sec < 1 || sec > 604800 || sec != static_cast<int>(sec)) return pushFail(L, "seconds must be an integer 1..604800 (a week)");
+  char err[96] = {0};
+  if (!be(L).systemSleep(static_cast<int>(sec), err, sizeof(err))) return pushFail(L, err[0] ? err : "sleep failed");
+  lua_pushboolean(L, 1);  // unreachable on the device; the host mock ends the script here
+  return 1;
+}
+
+// system.last_wake() -> "timer" | "button" | "power-on" | "other". What woke the previous cycle ("power-on" = a real reset).
+int sys_last_wake(lua_State* L) {
+  lua_pushstring(L, be(L).wakeCause());
+  return 1;
+}
+
 int sys_usb(lua_State* L) {
   lua_pushboolean(L, be(L).usbConnected());
   return 1;
@@ -802,7 +829,8 @@ void registerApi(LuaVm& vm, Backend& backend) {
                                  {"dir", app_dir},     {"open_book", app_open_book},
                                  {"restart", app_restart}, {"entry", app_entry}, {nullptr, nullptr}};
   static const luaL_Reg sys[] = {{"millis", sys_millis}, {"heap", sys_heap},       {"lua_mem", sys_lua_mem},
-                                 {"battery", sys_battery}, {"mac", sys_mac}, {"usb", sys_usb}, {"dev_floor", sys_dev_floor}, {nullptr, nullptr}};
+                                 {"battery", sys_battery}, {"mac", sys_mac}, {"usb", sys_usb}, {"dev_floor", sys_dev_floor},
+                                 {"sleep", sys_sleep}, {"last_wake", sys_last_wake}, {nullptr, nullptr}};
   regTable(L, c, "gfx", gfx);
   regTable(L, c, "input", input);
   regTable(L, c, "app", app);
