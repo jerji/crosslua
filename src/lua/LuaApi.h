@@ -156,6 +156,15 @@ class Backend {
   virtual bool mdnsResult(int i, char* hostname, size_t hnCap, char* ip, size_t ipCap, int* port, char* instanceName, size_t inCap) = 0;
 
   virtual bool wifiConnected() = 0;
+  // The network layer can carry traffic: WiFi joined as a client OR this device's own hotspot is up. net.* gates on this; http.*
+  // (which needs the internet) keeps asking wifiConnected().
+  virtual bool netReady() { return wifiConnected(); }
+  // --- hotspot (access point): the app starts its own WiFi network; needs "network" + "hotspot" and the user's approval ---
+  virtual bool hotspotAllowed() = 0;
+  // password == nullptr: an OPEN network. ip receives the hotspot's address. false + err on failure.
+  virtual bool softApStart(const char* ssid, const char* password, int channel, int maxClients, char* ip, size_t ipCap, char* err,
+                           size_t errCap) = 0;
+  virtual bool softApInfo(char* ssid, size_t ssidCap, char* ip, size_t ipCap, int* clients) = 0;  // false: no hotspot running
   // Ask the system to bring WiFi up (it may show its own network picker). Non-blocking: the script is parked and
   // resumed with "wifi:ok" / "wifi:fail" once the system UI has finished.
   virtual void wifiRequestConnect() = 0;

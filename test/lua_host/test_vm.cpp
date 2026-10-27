@@ -400,6 +400,27 @@ struct MockBackend : Backend {
     return true;
   }
   bool wifiConnected() override { return wifiUp; }
+  // --- hotspot mock ---
+  bool apUp = false, hotspotPermitted = false, hotspotApproved = true, apFail = false;
+  struct ApCall { std::string ssid, password; bool open; int channel, maxClients; };
+  std::vector<ApCall> apCalls;
+  int apClients = 0;
+  bool netReady() override { return wifiUp || apUp; }
+  bool hotspotAllowed() override { return net && hotspotPermitted && hotspotApproved; }
+  bool softApStart(const char* ssid, const char* password, int channel, int maxClients, char* ip, size_t ipCap, char* err, size_t errCap) override {
+    if (apFail) { snprintf(err, errCap, "cannot start the hotspot (mock)"); return false; }
+    apCalls.push_back({ssid, password ? password : "", password == nullptr, channel, maxClients});
+    apUp = true;
+    snprintf(ip, ipCap, "192.168.4.1");
+    return true;
+  }
+  bool softApInfo(char* ssid, size_t ssidCap, char* ip, size_t ipCap, int* clients) override {
+    if (!apUp) return false;
+    snprintf(ssid, ssidCap, "%s", apCalls.empty() ? "?" : apCalls.back().ssid.c_str());
+    snprintf(ip, ipCap, "192.168.4.1");
+    *clients = apClients;
+    return true;
+  }
   void wifiRequestConnect() override { wifiAsked = true; }
   bool wifiInfo(char* ssid, size_t sc, char* ip, size_t ic, int* rssi) override {
     if (!wifiUp) return false;
@@ -4868,6 +4889,193 @@ int main() {
         if (got != want[i]) printf("    resterr #%zu got '%s' want '%s'\n", i + 1, got.c_str(), want[i]);
       }
       CHECK(be.seen.size() == 1);  // only the bodiless GET with a Content-Type header got through
+    }
+  }
+  {
+    TEST("wifi.softap: hotspot permission + approval, options, state conflicts, RAM floor, net.* works over the hotspot");
+    {
+      MockBackend be;
+      be.net = true;
+      be.hotspotPermitted = true;
+      be.listenPermitted = true;  // net.listen has its own permission; the point here is that it works over the hotspot
+      be.apClients = 2;
+      LuaVm vm;
+      CHECK(vm.open(128 * 1024));
+      registerApi(vm, be);
+      const char* script = R"LUA(
+        print(wifi.softap_info())
+        print(wifi.softap("X4-test"))
+        local i = wifi.softap_info()
+        print(i.ssid, i.ip, i.clients)
+        print(wifi.softap("again"))
+        local srv = net.listen(8080)
+        print(srv)
+        print(net.close(srv))
+        local u = net.udp_open(0)   -- the other gate (anything that creates traffic) must accept the hotspot too
+        print(u ~= nil)
+        if u then net.close(u) end
+        print(wifi.status().connected)
+        wifi.off()
+      )LUA";
+      CHECK(vm.load("t", script, strlen(script)));
+      CHECK(run(vm, be, 100000) == Status::Finished);
+      const char* want[] = {"nil\tno hotspot running", "true\t192.168.4.1", "X4-test\t192.168.4.1\t2",
+                            "false\ta hotspot is already running (wifi.off() stops it)", "1", "true", "true", "false"};
+      const size_t N = sizeof(want) / sizeof(want[0]);
+      if (be.logs.size() != N || getenv("DUMP_LOGS")) for (size_t i = 0; i < be.logs.size(); i++) printf("    ap log[%zu] '%s'\n", i, be.logs[i].c_str());
+      CHECK(be.logs.size() == N);
+      for (size_t i = 0; i < N && i < be.logs.size(); i++) {
+        CHECK(be.logs[i] == want[i]);
+        if (be.logs[i] != want[i]) printf("    ap #%zu got '%s' want '%s'\n", i + 1, be.logs[i].c_str(), want[i]);
+      }
+      CHECK(be.apCalls.size() == 1 && be.apCalls[0].open && be.apCalls[0].channel == 1 && be.apCalls[0].maxClients == 4);
+    }
+    {
+      MockBackend be;  // options reach the backend unchanged
+      be.net = true;
+      be.hotspotPermitted = true;
+      LuaVm vm;
+      CHECK(vm.open(128 * 1024));
+      registerApi(vm, be);
+      const char* script = R"LUA(print(wifi.softap("My Net", {password = "secret123", channel = 11, max_clients = 1})))LUA";
+      CHECK(vm.load("t", script, strlen(script)));
+      CHECK(run(vm, be, 100000) == Status::Finished);
+      CHECK(be.logs.size() == 1 && be.logs[0] == "true\t192.168.4.1");
+      CHECK(be.apCalls.size() == 1 && !be.apCalls[0].open && be.apCalls[0].password == "secret123" && be.apCalls[0].channel == 11 &&
+            be.apCalls[0].maxClients == 1 && be.apCalls[0].ssid == "My Net");
+    }
+    {
+      MockBackend be;  // validation: nothing invalid reaches the backend
+      be.net = true;
+      be.hotspotPermitted = true;
+      LuaVm vm;
+      CHECK(vm.open(128 * 1024));
+      registerApi(vm, be);
+      const char* script = R"LUA(
+        print(wifi.softap(""))
+        print(wifi.softap(("a"):rep(33)))
+        print(wifi.softap("bad\nname"))
+        print(wifi.softap("caf\xc3\xa9"))
+        print(wifi.softap("ok", {password = "short"}))
+        print(wifi.softap("ok", {password = "1234567"}))
+        print(wifi.softap("ok", {password = ("p"):rep(64)}))
+        print(wifi.softap("ok", {password = ""}))
+        print(wifi.softap("ok", {password = "has\ttab12345"}))
+        print(wifi.softap("ok", {password = 12345678}))
+        print(wifi.softap("ok", {channel = 0}))
+        print(wifi.softap("ok", {channel = 12}))
+        print(wifi.softap("ok", {channel = 1.5}))
+        print(wifi.softap("ok", {channel = "6"}))
+        print(wifi.softap("ok", {max_clients = 0}))
+        print(wifi.softap("ok", {max_clients = 5}))
+        print(wifi.softap("ok", {max_clients = 2.5}))
+        print(wifi.softap("ok", {max_clients = "2"}))
+        print(wifi.softap("ok", {colour = 1}))
+        print(wifi.softap("ok", {"x"}))
+        print((pcall(wifi.softap, "ok", 5)))
+        print((pcall(wifi.softap)))
+        print(wifi.softap(("a"):rep(32), {password = ("p"):rep(63), channel = 1, max_clients = 4}))
+      )LUA";
+      CHECK(vm.load("t", script, strlen(script)));
+      CHECK(run(vm, be, 200000) == Status::Finished);
+      const char* S = "false\tssid must be 1..32 printable ASCII characters";
+      const char* P = "false\tpassword must be 8..63 printable ASCII characters (leave it out for an open network)";
+      const char* C = "false\tchannel must be an integer 1..11";
+      const char* M = "false\tmax_clients must be an integer 1..4";
+      const char* want[] = {S, S, S, S, P, P, P, P, P, "false\tpassword must be a string", C, C, C, "false\tchannel must be an integer 1..11",
+                            M, M, M, "false\tmax_clients must be an integer 1..4", "false\tunknown option 'colour'",
+                            "false\toptions must have string keys", "false", "false", "true\t192.168.4.1"};
+      const size_t N = sizeof(want) / sizeof(want[0]);
+      if (be.logs.size() != N || getenv("DUMP_LOGS")) for (size_t i = 0; i < be.logs.size(); i++) printf("    aperr log[%zu] '%s'\n", i, be.logs[i].c_str());
+      CHECK(be.logs.size() == N);
+      for (size_t i = 0; i < N && i < be.logs.size(); i++) {
+        CHECK(be.logs[i] == want[i]);
+        if (be.logs[i] != want[i]) printf("    aperr #%zu got '%s' want '%s'\n", i + 1, be.logs[i].c_str(), want[i]);
+      }
+      CHECK(be.apCalls.size() == 1);  // only the last, all-maximum call was valid
+    }
+    {
+      MockBackend be;  // permission layers: network, hotspot, approval
+      be.hotspotPermitted = true;
+      be.net = false;  // no "network"
+      LuaVm vm;
+      CHECK(vm.open(128 * 1024));
+      registerApi(vm, be);
+      const char* script = "print(wifi.softap('x'))\nprint(wifi.softap_info())";
+      CHECK(vm.load("t", script, strlen(script)));
+      CHECK(run(vm, be, 100000) == Status::Finished);
+      CHECK(be.logs.size() == 2 && be.logs[0].rfind("false\tnetwork not permitted", 0) == 0 && be.logs[1].rfind("nil\tnetwork not permitted", 0) == 0);
+      CHECK(be.apCalls.empty());
+    }
+    {
+      MockBackend be;
+      be.net = true;
+      be.hotspotPermitted = false;  // network but no "hotspot"
+      LuaVm vm;
+      CHECK(vm.open(128 * 1024));
+      registerApi(vm, be);
+      const char* script = "print(wifi.softap('x'))";
+      CHECK(vm.load("t", script, strlen(script)));
+      CHECK(run(vm, be, 100000) == Status::Finished);
+      CHECK(be.logs.size() == 1 && be.logs[0].rfind("false\thotspot not permitted", 0) == 0 && be.apCalls.empty());
+    }
+    {
+      MockBackend be;
+      be.net = true;
+      be.hotspotPermitted = true;
+      be.hotspotApproved = false;  // declared, not approved
+      LuaVm vm;
+      CHECK(vm.open(128 * 1024));
+      registerApi(vm, be);
+      const char* script = "print(wifi.softap('x'))";
+      CHECK(vm.load("t", script, strlen(script)));
+      CHECK(run(vm, be, 100000) == Status::Finished);
+      CHECK(be.logs.size() == 1 && be.logs[0].rfind("false\thotspot not permitted", 0) == 0 && be.apCalls.empty());
+    }
+    {
+      MockBackend be;  // joined as a client already
+      be.net = true;
+      be.hotspotPermitted = true;
+      be.wifiUp = true;
+      LuaVm vm;
+      CHECK(vm.open(128 * 1024));
+      registerApi(vm, be);
+      const char* script = "print(wifi.softap('x'))";
+      CHECK(vm.load("t", script, strlen(script)));
+      CHECK(run(vm, be, 100000) == Status::Finished);
+      CHECK(be.logs.size() == 1 && be.logs[0] == "false\tWiFi is joined as a client: call wifi.off() before starting a hotspot" && be.apCalls.empty());
+    }
+    {
+      MockBackend be;  // RAM floor: 80 KB (hotspot ~60 KB + the socket layer's 16 KB), boundary values
+      be.net = true;
+      be.hotspotPermitted = true;
+      for (int pass = 0; pass < 2; pass++) {
+        be.apCalls.clear();
+        be.apUp = false;
+        be.logs.clear();
+        be.freeHeapVal = pass == 0 ? 80 * 1024 - 1 : 80 * 1024;
+        LuaVm vm;
+        CHECK(vm.open(128 * 1024));
+        registerApi(vm, be);
+        const char* script = "print(wifi.softap('x'))";
+        CHECK(vm.load("t", script, strlen(script)));
+        CHECK(run(vm, be, 100000) == Status::Finished);
+        if (pass == 0) CHECK(be.logs.size() == 1 && be.logs[0] == "false\tnot enough free RAM for a hotspot (free 79K, need 80K)" && be.apCalls.empty());
+        else CHECK(be.logs.size() == 1 && be.logs[0] == "true\t192.168.4.1" && be.apCalls.size() == 1);
+      }
+    }
+    {
+      MockBackend be;  // the backend's own failure text passes through; nothing is left "up"
+      be.net = true;
+      be.hotspotPermitted = true;
+      be.apFail = true;
+      LuaVm vm;
+      CHECK(vm.open(128 * 1024));
+      registerApi(vm, be);
+      const char* script = "print(wifi.softap('x'))\nprint(wifi.softap_info())";
+      CHECK(vm.load("t", script, strlen(script)));
+      CHECK(run(vm, be, 100000) == Status::Finished);
+      CHECK(be.logs.size() == 2 && be.logs[0] == "false\tcannot start the hotspot (mock)" && be.logs[1] == "nil\tno hotspot running");
     }
   }
   printf(g_fail ? "\n%d FAILED\n" : "\nALL PASSED\n", g_fail);

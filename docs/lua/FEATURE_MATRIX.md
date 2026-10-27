@@ -98,7 +98,7 @@ with a `Bearer` token). Audit of what `http.request` could do before this work: 
 | BLE `scan`/`central`/`peripheral`/`hid` (Grimoire `ble.*`, `hid.*`) | ~12 biscuit apps, Grimoire BLE spells, AvesO3 receive | Radio arbitration + NimBLE RAM; planned native radio-hooks milestone first. |
 | `wifi.monitor` promiscuous + native PCAP writer, `wifi.tx` raw | biscuit recon/offense suite, Ruby sniffer | Native ring-buffer engine first (planned); Lua polls. |
 | `espnow.send/recv` | crossplay PLAY NEARBY (11 games) | Radio conflict with WiFi; after BLE milestone. |
-| `wifi.softap` + captive DNS, `http.server` | biscuit dead-drop/bulletin/portal, crossplay web apps | Heap-heavy; File Transfer shows the pattern works natively. |
+| `wifi.softap` + captive DNS, `http.server` | biscuit dead-drop/bulletin/portal, crossplay web apps | **softap done** (`wifi.softap`, `wifi.softap_info`, `"hotspot"` permission with approval; `net.*` works over it). The HTTP server and the captive-portal DNS are Lua libraries over `net.listen`/`net.udp_*`, not native code (nothing upstream touched). |
 | `xml.parse` (expat binding) | OPDS feeds, OPF/NCX niceties | String-pattern scraping suffices for AO3/M2; revisit for OPDS. |
 | `gfx.load_font(path)` TTF | custom fonts | Hard; FreeInkFont subsystem is deep. |
 | deep sleep with wake-timers/retained frame | sleep screens, alarms | Firmware power flow is invasive. |

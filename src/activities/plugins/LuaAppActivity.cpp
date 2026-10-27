@@ -122,11 +122,12 @@ class LuaAppActivity::Backend final : public crosslua::Backend {
 
   // ---- storage grants ("storage": {"read": [...], "write": [...]} in manifest.json) ------------------------------
   // Parsed from the manifest but INVISIBLE to the API (grantCount() == 0) until the user approved exactly this request.
-  bool hasGrantRequest() const { return !requested_.empty() || listenReq_ || audioReq_ || micReq_; }
+  bool hasGrantRequest() const { return !requested_.empty() || listenReq_ || hotspotReq_ || audioReq_ || micReq_; }
   // Canonical text of the request; an approval is valid only for an identical request (any change asks again).
   std::string grantCanonical() const {
     std::vector<std::string> v;
     for (const Grant& g : requested_) v.push_back(std::string(g.write ? "w:" : "r:") + g.rel);
+    if (hotspotReq_) v.push_back("p:hotspot");  // starting a WiFi network that others can join
     if (listenReq_) v.push_back("p:listen");  // accepting connections from the LAN is part of the approved request too
     if (micReq_) v.push_back("p:microphone");  // a recording device: consented to explicitly, never silently
     if (audioReq_) v.push_back("p:audio");    // playing sounds is consented to for the same reason (a device that talks)
@@ -163,7 +164,13 @@ class LuaAppActivity::Backend final : public crosslua::Backend {
     std::string s;
     // Short lines, the most sensitive first: the dialog clips long text and a recording device must never be cut off.
     if (micReq_) s += "MICROPHONE: record\n";
-    if (listenReq_) s += "NETWORK: listen\n";
+    if (listenReq_ || hotspotReq_) {  // one line: the dialog clips after ~4 lines
+      s += "NETWORK: ";
+      if (listenReq_) s += "listen";
+      if (listenReq_ && hotspotReq_) s += ", ";
+      if (hotspotReq_) s += "hotspot";
+      s += "\n";
+    }
     if (audioReq_) s += "SPEAKER: play\n";
     if (!rd.empty()) s += "READ: " + rd + "\n";
     if (!wr.empty()) s += "WRITE: " + wr + "\n";
@@ -174,9 +181,10 @@ class LuaAppActivity::Backend final : public crosslua::Backend {
   // Title of the confirmation screen: says what is being asked for.
   std::string grantTitle(const std::string& app) const {
     const bool files = !requested_.empty();
-    const int n = (listenReq_ ? 1 : 0) + (audioReq_ ? 1 : 0) + (micReq_ ? 1 : 0) + (files ? 1 : 0);
+    const int n = (listenReq_ ? 1 : 0) + (hotspotReq_ ? 1 : 0) + (audioReq_ ? 1 : 0) + (micReq_ ? 1 : 0) + (files ? 1 : 0);
     if (n > 1) return app + " wants access to your device";
     if (micReq_) return app + " wants to use the microphone";
+    if (hotspotReq_) return app + " wants to start a hotspot";
     if (listenReq_) return app + " wants to accept connections";
     if (audioReq_) return app + " wants to play sounds";
     return app + " wants access to your files";
@@ -268,6 +276,31 @@ class LuaAppActivity::Backend final : public crosslua::Backend {
   // An app may only use the network if its manifest.json says so: {"permissions": ["network"]}.
   bool netAllowed() override { return net_; }
   bool wifiConnected() override { return WiFi.status() == WL_CONNECTED; }
+  // --- hotspot: Arduino WiFi.softAP, the same calls File Transfer's access-point mode makes (nothing upstream is touched) ---
+  bool apRunning() { return (WiFi.getMode() & WIFI_MODE_AP) != 0 && WiFi.softAPIP() != IPAddress(0, 0, 0, 0); }
+  bool netReady() override { return wifiConnected() || apRunning(); }
+  bool hotspotAllowed() override { return net_ && hotspotReq_ && approved_; }
+  bool softApStart(const char* ssid, const char* password, int channel, int maxClients, char* ip, size_t ipCap, char* err,
+                   size_t errCap) override {
+    g_radioUsedThisSession = true;  // leaving the app reboots into a clean heap, like every WiFi screen
+    WiFi.mode(WIFI_AP);
+    delay(100);
+    if (!WiFi.softAP(ssid, password, channel, false, maxClients)) {  // password nullptr = open network
+      WiFi.mode(WIFI_OFF);
+      snprintf(err, errCap, "cannot start the hotspot");
+      return false;
+    }
+    delay(100);  // the AP needs a moment before its address is valid (same wait as the upstream screen)
+    fmtIp(ip, ipCap, WiFi.softAPIP());
+    return true;
+  }
+  bool softApInfo(char* ssid, size_t ssidCap, char* ip, size_t ipCap, int* clients) override {
+    if (!apRunning()) return false;
+    snprintf(ssid, ssidCap, "%s", WiFi.softAPSSID().c_str());
+    fmtIp(ip, ipCap, WiFi.softAPIP());
+    *clients = WiFi.softAPgetStationNum();
+    return true;
+  }
   void wifiRequestConnect() override {
     g_radioUsedThisSession = true;
     wifiConnectRequested = true;
@@ -427,6 +460,7 @@ class LuaAppActivity::Backend final : public crosslua::Backend {
     return true;
   }
   void wifiOff() override {
+    WiFi.softAPdisconnect(true);
     WiFi.disconnect(false);
     WiFi.mode(WIFI_OFF);
   }
@@ -455,7 +489,14 @@ class LuaAppActivity::Backend final : public crosslua::Backend {
   Client& sockCli(int s) { return sockKind_[s] == 4 && tls_ ? static_cast<Client&>(*tls_) : static_cast<Client&>(socks_[s]); }
   static void fmtIp(char* out, size_t cap, const IPAddress& ip) { snprintf(out, cap, "%u.%u.%u.%u", ip[0], ip[1], ip[2], ip[3]); }
   bool netLocal(char* ip, char* mask, char* gw, char* dns, size_t cap) override {
-    if (WiFi.status() != WL_CONNECTED) return false;
+    if (WiFi.status() != WL_CONNECTED) {
+      if (!apRunning()) return false;  // our own hotspot: we are the gateway and the DNS, clients live in the same /24
+      fmtIp(ip, cap, WiFi.softAPIP());
+      fmtIp(mask, cap, WiFi.softAPSubnetMask());
+      fmtIp(gw, cap, WiFi.softAPIP());
+      fmtIp(dns, cap, WiFi.softAPIP());
+      return true;
+    }
     fmtIp(ip, cap, WiFi.localIP());
     fmtIp(mask, cap, WiFi.subnetMask());
     fmtIp(gw, cap, WiFi.gatewayIP());
@@ -1276,6 +1317,7 @@ class LuaAppActivity::Backend final : public crosslua::Backend {
       else if (p.is<const char*>() && !strcmp(p.as<const char*>(), "listen")) listenReq_ = true;
       else if (p.is<const char*>() && !strcmp(p.as<const char*>(), "audio")) audioReq_ = true;
       else if (p.is<const char*>() && !strcmp(p.as<const char*>(), "microphone")) micReq_ = true;
+      else if (p.is<const char*>() && !strcmp(p.as<const char*>(), "hotspot")) hotspotReq_ = true;
     for (int w = 0; w < 2; w++)
       for (JsonVariantConst v : doc["storage"][w ? "write" : "read"].as<JsonArrayConst>()) {
         char rel[104];
@@ -1458,6 +1500,7 @@ class LuaAppActivity::Backend final : public crosslua::Backend {
   bool listenReq_ = false;  // manifest asked for "listen" (effective only after approval)
   bool audioReq_ = false;   // manifest asked for "audio" (effective only after approval)
   bool micReq_ = false;     // manifest asked for "microphone" (effective only after approval)
+  bool hotspotReq_ = false; // manifest asked for "hotspot" (effective only after approval)
   struct Grant {
     std::string rel;
     bool write;

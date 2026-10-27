@@ -49,7 +49,7 @@ int gatePermission(lua_State* L) { return be(L).netAllowed() ? 0 : pushFail(L, N
 // Permission + WiFi up (anything that creates traffic).
 int gateOnline(lua_State* L) {
   if (int r = gatePermission(L)) return r;
-  return be(L).wifiConnected() ? 0 : pushFail(L, NOT_CONNECTED);
+  return be(L).netReady() ? 0 : pushFail(L, NOT_CONNECTED);
 }
 
 // Host names and IPv4 literals only: letters, digits, '.', '-', '_'.
@@ -393,7 +393,7 @@ int net_close(lua_State* L) {
 int gateListen(lua_State* L) {
   if (!be(L).netAllowed()) return pushFail(L, NET_DENIED);
   if (!be(L).listenAllowed()) return pushFail(L, LISTEN_DENIED);
-  if (!be(L).wifiConnected()) return pushFail(L, NOT_CONNECTED);
+  if (!be(L).netReady()) return pushFail(L, NOT_CONNECTED);
   return 0;
 }
 

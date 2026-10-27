@@ -131,6 +131,92 @@ int wifi_scan(lua_State* L) {
   return 2;
 }
 
+constexpr size_t SOFTAP_MIN_FREE_BYTES = 80 * 1024;  // measured on the X4: the hotspot costs ~60 KB, and net.listen then needs its own 16 KB floor
+constexpr int SOFTAP_MAX_CLIENTS = 4;
+
+bool printableAscii(const char* s, size_t n) {
+  for (size_t i = 0; i < n; i++)
+    if (static_cast<unsigned char>(s[i]) < 0x20 || static_cast<unsigned char>(s[i]) > 0x7E) return false;
+  return true;
+}
+
+// wifi.softap(ssid [, {password = "8..63 chars" (omit = OPEN network), channel = 1..11, max_clients = 1..4}]) -> true, ip | false, reason
+// Starts this device's own WiFi network (needs "network" + "hotspot" + the user's approval). Not combinable with a joined network.
+// net.listen / net.accept / net.udp_* then serve the clients that join; wifi.off() stops the hotspot.
+int wifi_softap(lua_State* L) {
+  size_t sl = 0;
+  const char* ssid = luaL_checklstring(L, 1, &sl);
+  const char* password = nullptr;
+  lua_Number channel = 1, maxClients = SOFTAP_MAX_CLIENTS;
+  if (!lua_isnoneornil(L, 2)) {
+    luaL_checktype(L, 2, LUA_TTABLE);
+    lua_pushnil(L);
+    while (lua_next(L, 2)) {
+      if (lua_type(L, -2) != LUA_TSTRING) return pushNo(L, "options must have string keys");
+      const char* k = lua_tostring(L, -2);
+      if (!strcmp(k, "password")) {
+        if (lua_type(L, -1) != LUA_TSTRING) return pushNo(L, "password must be a string");
+        password = lua_tostring(L, -1);
+      } else if (!strcmp(k, "channel")) {
+        if (lua_type(L, -1) != LUA_TNUMBER) return pushNo(L, "channel must be an integer 1..11");
+        channel = lua_tonumber(L, -1);
+      } else if (!strcmp(k, "max_clients")) {
+        if (lua_type(L, -1) != LUA_TNUMBER) return pushNo(L, "max_clients must be an integer 1..4");
+        maxClients = lua_tonumber(L, -1);
+      } else {
+        char msg[64];
+        snprintf(msg, sizeof(msg), "unknown option '%.24s'", k);
+        return pushNo(L, msg);
+      }
+      lua_pop(L, 1);
+    }
+  }
+  if (!allowed(L)) return pushNo(L, DENIED);
+  if (!be(L).hotspotAllowed()) return pushNo(L, HOTSPOT_DENIED);
+  if (sl < 1 || sl > 32 || !printableAscii(ssid, sl)) return pushNo(L, "ssid must be 1..32 printable ASCII characters");
+  if (password) {
+    const size_t pl = strlen(password);
+    if (pl < 8 || pl > 63 || !printableAscii(password, pl))
+      return pushNo(L, "password must be 8..63 printable ASCII characters (leave it out for an open network)");
+  }
+  if (channel < 1 || channel > 11 || channel != static_cast<int>(channel)) return pushNo(L, "channel must be an integer 1..11");
+  if (maxClients < 1 || maxClients > SOFTAP_MAX_CLIENTS || maxClients != static_cast<int>(maxClients))
+    return pushNo(L, "max_clients must be an integer 1..4");
+  char cur[40], curIp[20];
+  int clients = 0;
+  if (be(L).softApInfo(cur, sizeof(cur), curIp, sizeof(curIp), &clients)) return pushNo(L, "a hotspot is already running (wifi.off() stops it)");
+  if (be(L).wifiConnected()) return pushNo(L, "WiFi is joined as a client: call wifi.off() before starting a hotspot");
+  const size_t freeNow = be(L).freeHeap();
+  if (freeNow < SOFTAP_MIN_FREE_BYTES) {
+    char msg[120];
+    snprintf(msg, sizeof(msg), "not enough free RAM for a hotspot (free %uK, need %uK)", static_cast<unsigned>(freeNow / 1024),
+             static_cast<unsigned>(SOFTAP_MIN_FREE_BYTES / 1024));
+    return pushNo(L, msg);
+  }
+  char ip[20] = {0}, err[96] = {0};
+  if (!be(L).softApStart(ssid, password, static_cast<int>(channel), static_cast<int>(maxClients), ip, sizeof(ip), err, sizeof(err)))
+    return pushNo(L, err[0] ? err : "cannot start the hotspot");
+  lua_pushboolean(L, 1);
+  lua_pushstring(L, ip);
+  return 2;
+}
+
+// wifi.softap_info() -> {ssid, ip, clients} | nil, "no hotspot running"
+int wifi_softap_info(lua_State* L) {
+  if (!allowed(L)) return pushFail(L, DENIED);
+  char ssid[40], ip[20];
+  int clients = 0;
+  if (!be(L).softApInfo(ssid, sizeof(ssid), ip, sizeof(ip), &clients)) return pushFail(L, "no hotspot running");
+  lua_createtable(L, 0, 3);
+  lua_pushstring(L, ssid);
+  lua_setfield(L, -2, "ssid");
+  lua_pushstring(L, ip);
+  lua_setfield(L, -2, "ip");
+  lua_pushinteger(L, clients);
+  lua_setfield(L, -2, "clients");
+  return 1;
+}
+
 int wifi_off(lua_State* L) {
   be(L).wifiOff();
   return 0;
@@ -357,7 +443,7 @@ int http_get(lua_State* L) {
 
 void registerNet(lua_State* L, Ctx* c) {
   static const luaL_Reg wifiFns[] = {{"connect", wifi_connect}, {"status", wifi_status}, {"off", wifi_off},
-                                   {"scan", wifi_scan}, {nullptr, nullptr}};
+                                   {"scan", wifi_scan}, {"softap", wifi_softap}, {"softap_info", wifi_softap_info}, {nullptr, nullptr}};
   regTable(L, c, "wifi", wifiFns);
   static const luaL_Reg httpFns[] = {{"request", http_request}, {nullptr, nullptr}};
   regTable(L, c, "http", httpFns);

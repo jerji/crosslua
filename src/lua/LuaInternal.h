@@ -71,6 +71,8 @@ void registerGfxImage(lua_State* L);
 // Shared by wifi.*, http.* and net.*: what an app sees when its manifest lacks the permission.
 inline constexpr const char* NET_DENIED = "network not permitted: add \"permissions\": [\"network\"] to this app's manifest.json";
 // For net.listen and net.accept (exposes the device to the LAN): an extra permission beyond the base network permission.
+inline constexpr const char* HOTSPOT_DENIED =
+    "hotspot not permitted: add \"permissions\": [\"network\", \"hotspot\"] to this app's manifest.json (and approve it)";
 inline constexpr const char* MIC_DENIED =
     "microphone not permitted: add \"permissions\": [\"microphone\"] to this app's manifest.json (and approve it)";
 inline constexpr const char* AUDIO_DENIED =
