@@ -1,1 +1,1 @@
-{"title": "Checkers", "description": "English draughts vs the device. Capture is compulsory, and the board says so."}
+{"title": "Checkers", "description": "English draughts vs the device, or PLAY NEARBY with a second device over ESP-NOW. Capture is compulsory, and the board says so.", "permissions": ["network", "espnow"]}

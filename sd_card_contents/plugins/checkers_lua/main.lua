@@ -10,8 +10,14 @@
 -- Confirm does not repaint. A piece in hand shows a dot on each landing and
 -- corner marks on every enemy that landing captures.
 local ck = require("checkers")
+local nearby = require("nearby")
+local wire = require("wire")
+local GAME_ID = 0x0601
 
 local LIGHT, DARK = ck.LIGHT, ck.DARKSEAT
+-- The seat this device plays, and whether the board is drawn from DARK's side.
+-- Solo is always LIGHT and unflipped; a nearby match sets both per round.
+local me, flipped = LIGHT, false
 
 -- ---------------------------------------------------------------- geometry
 local W, H = gfx.size()
@@ -22,7 +28,9 @@ local TOP = 65                     -- below the 40px header band
 local FRAME = 9
 
 local function squareXY(i)
-  return LEFT + ck.fileOf(i) * SQ, TOP + ck.rankOf(i) * SQ
+  local f, r = ck.fileOf(i), ck.rankOf(i)
+  if flipped then f, r = 7 - f, 7 - r end
+  return LEFT + f * SQ, TOP + r * SQ
 end
 
 local function dither(x, y, sq)
@@ -145,7 +153,7 @@ end
 -- ---------------------------------------------------------------- menu
 local function menu()
   local sel = 0
-  local rows = { "PLAY", "HOW TO PLAY" }
+  local rows = { "PLAY", "PLAY NEARBY", "HOW TO PLAY" }
   while true do
     gfx.clear()
     header("CHECKERS")
@@ -179,7 +187,7 @@ local function menu()
     if ev == "back" then return nil end
     if ev == "up" then sel = (sel - 1) % #rows
     elseif ev == "down" then sel = (sel + 1) % #rows
-    elseif ev == "confirm" then return sel == 0 and "play" or "howto" end
+    elseif ev == "confirm" then return ({ "play", "nearby", "howto" })[sel + 1] end
   end
 end
 
@@ -275,7 +283,7 @@ local function drawBoard(g, cursor, picked, hint, busy)
   -- Under a compulsory capture that set collapses to the taking pieces, so
   -- the board demonstrates the rule instead of describing it.
   local ml = nil
-  if not busy and g.turn == LIGHT and not ck.over(g) then ml = ck.moves(g) end
+  if not busy and g.turn == me and not ck.over(g) then ml = ck.moves(g) end
   if ml and not picked then
     for i = 1, #ml do
       local x, y = squareXY(ml[i].from)
@@ -305,13 +313,13 @@ local function drawBoard(g, cursor, picked, hint, busy)
   -- The material strips: remaining pieces, theirs nearest the board, yours
   -- nearest you. Am I up or down is answered by which row is longer.
   local stripTop = TOP + BOARD + FRAME + 20
-  stripRow(stripTop, "THEM", ck.pieceCount(g, DARK), true)
-  stripRow(stripTop + 38, "YOU", ck.pieceCount(g, LIGHT), false)
+  stripRow(stripTop, "THEM", ck.pieceCount(g, 1 - me), true)
+  stripRow(stripTop + 38, "YOU", ck.pieceCount(g, me), false)
 
   local status
   if busy then
     status = "THINKING..."
-  elseif g.turn ~= LIGHT then
+  elseif g.turn ~= me then
     status = "THEIR MOVE"
   else
     status = (ml and #ml > 0 and #ml[1].taken > 0) and "YOU MUST TAKE" or "YOUR MOVE"
@@ -322,6 +330,7 @@ local function drawBoard(g, cursor, picked, hint, busy)
 end
 
 local function moveCursor(c, ev)
+  if flipped then ev = ({ up = "down", down = "up", left = "right", right = "left" })[ev] or ev end
   local f0, r0 = ck.fileOf(c), ck.rankOf(c)
   if ev == "up" then r0 = (r0 + 7) % 8
   elseif ev == "down" then r0 = (r0 + 1) % 8
@@ -333,6 +342,7 @@ end
 -- One game against the device. Returns the finished game, or nil when the
 -- player abandoned it back to the menu.
 local function playGame()
+  me, flipped = LIGHT, false
   local g = ck.start()
   local cursor, picked = 41, nil   -- (0,5): a movable man on the first turn
   local aiTurn, dirty = false, true
@@ -409,6 +419,182 @@ local function resultScreen(g)
   end
 end
 
+-- ---------------------------------------------------------------- PLAY NEARBY
+-- Two devices over ESP-NOW (nearby.lua). The whole board travels as the 67-byte
+-- game blob (wire.lua), so a move is the board after it. The side that moves
+-- first in a round plays LIGHT; the first mover flips each round, and both
+-- devices flip on the same rematch exchange.
+
+local function linkWaitScreen()
+  gfx.clear()
+  header("CHECKERS")
+  gfx.text(W // 2, 220, "LOOKING FOR A PLAYER", "sans18", "bc")
+  gfx.text(W // 2, 256, "Turn on PLAY NEARBY on the other device.", "ui12", "c")
+  capsule("BACK = CANCEL")
+  gfx.present()
+end
+
+local function linkEndScreen(S)
+  gfx.clear()
+  header("CHECKERS")
+  gfx.text(W // 2, 220, S.reason == "lost" and "LOST CONNECTION" or "THEY LEFT", "sans18", "bc")
+  capsule("CONFIRM OR BACK: MENU")
+  gfx.present()
+end
+
+local function linkResultScreen(g, sel, myAgain, peerAgain)
+  gfx.clear()
+  local oc = ck.outcome(g)
+  local title
+  if oc == "draw" then title = "A DRAW"
+  elseif (oc == "light") == (me == LIGHT) then title = "YOU WIN"
+  else title = "THEY WIN" end
+  header(title)
+  miniBoard((W - 320) // 2, 56, 40, g.cell)
+  gfx.text(W // 2, 56 + 320 + 28, string.format("%d - %d", ck.pieceCount(g, me), ck.pieceCount(g, 1 - me)), "sans18", "bc")
+  if myAgain then
+    gfx.text(W // 2, 56 + 320 + 62, "WAITING FOR THEM", "ui12", "c")
+  elseif peerAgain then
+    gfx.text(W // 2, 56 + 320 + 62, "THEY WANT ANOTHER GAME", "ui12", "c")
+  end
+  gfx.text(W // 2, H - 118, (sel == 1 and "> " or "  ") .. "PLAY AGAIN", "sans16", "c")
+  gfx.text(W // 2, H - 88, (sel == 2 and "> " or "  ") .. "LEAVE", "sans16", "c")
+  gfx.present()
+end
+
+-- One linked session, from the search screen to leaving. Returns to the menu.
+local function linkedPlay()
+  local S = nearby.new(GAME_ID, "PUP " .. string.sub(system.mac(), 16, 17))
+  local ok, err = S:start()
+  if not ok then
+    gfx.clear()
+    header("CHECKERS")
+    gfx.text(16, 100, "RADIO WILL NOT START", "sans16", "b")
+    gfx.text(16, 130, tostring(err):sub(1, 60), "ui12", "b")
+    capsule("BACK = MENU")
+    gfx.present()
+    while input.wait() ~= "back" do end
+    return
+  end
+
+  local mode = "search"          -- search | board | result | linkend
+  local meFirst = false          -- I move first this round
+  local g, cursor, picked = nil, 41, nil
+  local resultSel, myAgain = 1, false
+  local dirty = true
+
+  local function newRound()
+    me = meFirst and LIGHT or DARK
+    flipped = me == DARK
+    g = ck.start()
+    cursor = me == LIGHT and 41 or 18
+    picked = nil
+    resultSel, myAgain = 1, false
+    S:newRound()
+    mode = "board"
+    dirty = true
+  end
+
+  while true do
+    local now = system.millis()
+    S:pump(now)
+    S:tick(now)
+    if S:takeMatch() then
+      meFirst = S.iFirst
+      newRound()
+    end
+    local blob = S:takeState()
+    if blob and mode ~= "search" then
+      local ng = wire.unpack(blob)
+      if ng then
+        -- their first move of a new round can land before my own flip for
+        -- that round: start the round here, then take the move
+        if mode == "result" and not ck.over(ng) then
+          meFirst = not meFirst
+          newRound()
+        end
+        g, picked = ng, nil
+        mode = ck.over(g) and "result" or "board"
+        dirty = true
+      end
+    end
+    if S.phase == "ended" and mode ~= "linkend" then
+      mode = "linkend"
+      dirty = true
+    end
+    -- both said PLAY AGAIN: start the next round, the first mover flipping
+    if mode == "result" and myAgain and S.peerAgain then
+      meFirst = not meFirst
+      newRound()
+    end
+
+    if dirty then
+      dirty = false
+      if mode == "search" then
+        linkWaitScreen()
+      elseif mode == "board" then
+        local hint = "Back = leave"
+        if picked then hint = "Confirm = place   Back = drop" end
+        drawBoard(g, cursor, picked, hint, false)
+      elseif mode == "result" then
+        linkResultScreen(g, resultSel, myAgain, S.peerAgain)
+      else
+        linkEndScreen(S)
+      end
+    end
+
+    local ev = input.wait(100)
+    if ev == "back" then
+      if mode == "board" and picked then
+        picked = nil
+        dirty = true
+      else
+        break
+      end
+    elseif ev == "up" or ev == "down" or ev == "left" or ev == "right" then
+      if mode == "board" then
+        cursor = moveCursor(cursor, ev)
+        dirty = true
+      elseif mode == "result" and (ev == "left" or ev == "right") then
+        resultSel = 3 - resultSel
+        dirty = true
+      end
+    elseif ev == "confirm" then
+      if mode == "board" and g.turn == me and not ck.over(g) then
+        if not picked then
+          if ck.canPick(g, cursor) then
+            picked = cursor
+            dirty = true
+          end
+        else
+          local m = ck.moveBetween(g, picked, cursor)
+          if m then
+            ck.apply(g, m)
+            picked = nil
+            S:sendState(system.millis(), wire.pack(g))
+            mode = ck.over(g) and "result" or "board"
+            dirty = true
+          end
+        end
+      elseif mode == "result" then
+        if resultSel == 1 then
+          if not myAgain then
+            myAgain = true
+            S:say(system.millis(), nearby.NOTE_PLAY_AGAIN)
+            dirty = true
+          end
+        else
+          break
+        end
+      elseif mode == "linkend" then
+        break
+      end
+    end
+  end
+  S:stop(system.millis())
+  me, flipped = LIGHT, false
+end
+
 -- ---------------------------------------------------------------- entry
 local function __main()
   W, H = gfx.size()
@@ -417,6 +603,8 @@ local function __main()
     if choice == nil then break end
     if choice == "howto" then
       howTo()
+    elseif choice == "nearby" then
+      linkedPlay()
     else
       local g = playGame()
       while g do
