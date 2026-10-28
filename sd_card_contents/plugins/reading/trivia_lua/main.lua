@@ -121,15 +121,15 @@ local function __main()
       else
         if cur ~= "" then lines[#lines + 1] = cur end
         while gfx.text_width(w, font) > maxw do
-          local p = ""
+          local acc = ""
           for _, cp in utf8.codes(w) do
-            local t = p .. utf8.char(cp)
+            local t = acc .. utf8.char(cp)
             if gfx.text_width(t, font) > maxw then break end
-            p = t
+            acc = t
           end
-          if p == "" then p = utf8.char(utf8.codepoint(w)) end
-          lines[#lines + 1] = p
-          w = w:sub(#p + 1)
+          if acc == "" then acc = utf8.char(utf8.codepoint(w)) end
+          lines[#lines + 1] = acc
+          w = w:sub(#acc + 1)
           if w == "" then break end
         end
         cur = w
