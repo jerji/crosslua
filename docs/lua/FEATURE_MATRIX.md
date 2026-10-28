@@ -43,7 +43,7 @@ word. Order = leverage per effort, cheapest first. Everything here is NOT built 
 
 | # | primitive | unlocks | effort | notes |
 |---|---|---|---|---|
-| 1 | `crypto.md5` (+ `crc32`) | KOReader sync (document id + `x-auth-key`), Calibre | S | ✔ `crypto.hash` is sha1/sha256 only; mbedtls MD5 is already linked |
+| 1 | `crypto.md5` (+ `crc32`) | KOReader sync (document id + `x-auth-key`), Calibre | S | **done**: `crypto.md5`, `crypto.hash("md5")`, `crypto.crc32` (host-tested against hashlib/zlib vectors) |
 | 2 | `wifi.join(ssid, password)` or `wifi.connect{ssid=, password=}` | network pickers, provisioning apps | S | ✔ `wifi.connect` only takes `{tls}` and auto-joins the saved network |
 | 3 | button hold: `input.held_ms()` or hold events | games (flag/hold-to-delete), long-press menus | S | ✔ button events are release-only; only touch has `"long"` |
 | 4 | `led.flash(r, g, b [, n [, on_ms [, off_ms]]])` | notification patterns | S | ✔ was listed as done by mistake; `LedManager::flash` exists |

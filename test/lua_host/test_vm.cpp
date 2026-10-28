@@ -33,8 +33,8 @@ static const size_t DEFL_ZLIB_LEN = 37;
 static const char DEFL_BAD[] = "\x73\x00\x99\x99";
 
 extern "C" {
-// uzlib references these from its gzip/zlib header helpers; InflateReader never calls them (the firmware linker drops
-// them).
+// uzlib references these from its gzip/zlib header helpers; InflateReader never calls them (the
+// firmware linker drops them).
 unsigned int uzlib_adler32(const void*, unsigned int, unsigned int) { return 0; }
 unsigned int uzlib_crc32(const void*, unsigned int, unsigned int) { return 0; }
 }
@@ -71,8 +71,8 @@ struct MockBackend : Backend {
   int textWidth(int, const char* s, int) override { return static_cast<int>(strlen(s)) * 10; }
   int lineHeight(int) override { return 20; }
   int fontId(const char* n) override {
-    // Same names as the firmware backend (LuaAppActivity.cpp). Real font IDs are hashes and often NEGATIVE
-    // (SMALL_FONT_ID is), so the mock uses negative ids for half of them; 0 = unknown.
+    // Same names as the firmware backend (LuaAppActivity.cpp). Real font IDs are hashes and often
+    // NEGATIVE (SMALL_FONT_ID is), so the mock uses negative ids for half of them; 0 = unknown.
     static const char* const names[] = {"ui", "small", "ui12", "sans12", "sans14", "sans16", "sans18"};
     static const int ids[] = {1, -2, 3, -4, 5, -6, 7};
     for (int i = 0; i < 7; i++)
@@ -83,8 +83,8 @@ struct MockBackend : Backend {
   const char* popEvent() override {
     havePos = false;  // an empty poll or a button event has no position
     haveKey = false;  // ...and no key details either
-    // an "@ms" token holds every later event back until the mock clock reaches ms (a user who walks away and comes
-    // back)
+    // an "@ms" token holds every later event back until the mock clock reaches ms (a user who
+    // walks away and comes back)
     while (!events.empty() && events.front()[0] == '@') {
       if (now >= static_cast<uint32_t>(std::stoul(events.front().substr(1))))
         events.pop_front();
@@ -178,7 +178,7 @@ struct MockBackend : Backend {
     memcpy(&f->second[offset], d, n);
     return true;
   }
-  // ---- network mock: scripted responses, records what reached the backend --------------------------------------
+  // ---- network mock: scripted responses, records what reached the backend -----------------------
   struct FakeResp {
     int status = 200;
     std::string body;
@@ -371,7 +371,6 @@ struct MockBackend : Backend {
     if (!acceptOk) return -2;
     auto it = acceptQueue.find(serverSlot);
     if (it == acceptQueue.end() || it->second.empty()) return -1;
-    // Find a free slot for the client
     for (int i = 0; i < Backend::MAX_SOCKETS; i++) {
       if (socks[i].used) continue;
       MockSock cl = it->second.front();
@@ -384,7 +383,8 @@ struct MockBackend : Backend {
     }
     return -2;  // no free slot for the client
   }
-  // Pure manifest+approval flags: the binding checks the base network permission separately (gateListen / net_accept).
+  // Pure manifest+approval flags: the binding checks the base network permission separately
+  // (gateListen / net_accept).
   bool listenAllowed() override { return listenPermitted && listenApproved; }
   // --- audio mock ---
   bool audioPermitted = false;  // manifest declared "audio"
@@ -598,7 +598,8 @@ struct MockBackend : Backend {
     bleScanningNow = false;
     bleObservingNow = false;
   }
-  // raw mode (the observer): a table the tests fill, observed only after bleObserve() like the real stack
+  // raw mode (the observer): a table the tests fill, observed only after bleObserve() like the
+  // real stack
   std::vector<BleAdvert> bleAdvertsSeen;
   bool bleObservingNow = false, bleObserveFail = false, bleObserveFailSilent = false, bleObserveActive = false;
   int bleObserveCalls = 0, bleObserveStops = 0, bleDroppedVal = 0, bleObserveMs = -1;
@@ -892,7 +893,7 @@ struct MockBackend : Backend {
     }
     return true;
   }
-  // ---- library mock: fake zips (path -> entries), sd: permission, open_book ------------------------------------
+  // ---- library mock: fake zips (path -> entries), sd: permission, open_book ---------------------
   bool library = true;
   std::map<std::string, std::vector<std::pair<std::string, std::string>>> zips;
   std::string openedBook;
@@ -953,7 +954,7 @@ struct MockBackend : Backend {
     openedBook = absPath;
     return true;
   }
-  // ---- batch A mock: scan/time/rename/mac/qr/frontlight/inflate/rounded -----------------------------------------
+  // ---- batch A mock: scan/time/rename/mac/qr/frontlight/inflate/rounded -------------------------
   std::vector<Backend::WifiScanInfo> nets{{"NetA", -40, true}, {"", -60, false}, {"NetC", -75, true}};
   bool syncOk = true;
   std::string mac_ = "AA:BB:CC:DD:EE:FF";
@@ -1079,7 +1080,7 @@ struct MockBackend : Backend {
     (void)filled;
     roundedSeen++;
   }
-  // ---- image mock: path -> source size; records the last draw so tests can check fit/centre/permissions ---------
+  // ---- image mock: path -> source size; records the last draw (fit/centre/permissions) ----------
   std::map<std::string, std::pair<int, int>> images;
   struct ImageCall {
     std::string path;
@@ -1109,7 +1110,7 @@ struct MockBackend : Backend {
     *outH = dh;
     return true;
   }
-  // ---- storage grants mock: (relative path, write?) pairs the "user approved" ---------------------------------------
+  // ---- storage grants mock: (relative path, write?) pairs the "user approved" -------------------
   std::vector<std::pair<std::string, bool>> grants;
   // device capabilities / usb / haptics / touch positions / text prompt
   Backend::DeviceCaps caps;
@@ -1190,7 +1191,7 @@ struct MockBackend : Backend {
     *write = grants[i].second;
     return grants[i].first.c_str();
   }
-  // ---- restart mock: records the requested entry script ---------------------------------------------------------
+  // ---- restart mock: records the requested entry script -----------------------------------------
   std::string restartedTo;
   bool requestRestart(const char* entry) override {
     restartedTo = entry;
@@ -1522,7 +1523,8 @@ int main() {
   }
 
   // ======================= example apps from sd_card_contents/ =======================
-  // Loads sd_card_contents/plugins/<name>/ (including subfolders like decks/) into the mock SD at /plugins/test/.
+  // Loads sd_card_contents/plugins/<name>/ (including subfolders like decks/) into the mock SD
+  // at /plugins/test/.
   std::function<void(MockBackend&, const std::string&, const std::string&, std::string&)> loadDir =
       [&](MockBackend& be, const std::string& dir, const std::string& rel, std::string& mainSrc) {
         DIR* d = opendir(dir.c_str());
@@ -1548,7 +1550,8 @@ int main() {
     std::string mainSrc;
     const std::string dir =
         name == std::string("selftest_lua")
-            ? std::string("sd_card_contents/plugins/lua_tests_lua")  // selftest now lives in the test hub
+            ? std::string(
+                  "sd_card_contents/plugins/lua_tests_lua")  // selftest files live in the lua_tests_lua plugin dir
             : std::string("sd_card_contents/plugins/") + name;
     loadDir(be, dir, "", mainSrc);
     return mainSrc;
@@ -1678,7 +1681,8 @@ int main() {
           identical++;
           continue;
         }
-        // Same integers, floats within 1e-4 relative? (float printing / libm last-digit differences)
+        // Same integers, floats within 1e-4 relative? (float printing / libm
+        // last-digit differences)
         std::istringstream a(gotLine), b(want);
         std::string ta, tb;
         bool ok = true;
@@ -2214,7 +2218,8 @@ int main() {
       CHECK(be.logs[nWant].find("false\t") == 0);  // pcall(http.request, "notatable") raised (bad argument)
       CHECK(be.logs[nWant + 1] == "3");            // system.heap() -> free, min, largest block
     }
-    // Only well-formed requests ever reached the backend: a, json, 404, err, POST, missing, max_body=3, save_to
+    // Only well-formed requests ever reached the backend: a, json, 404, err, POST,
+    // missing, max_body=3, save_to
     CHECK(be.seen.size() == 8);
     if (be.seen.size() == 8) {
       CHECK(be.seen[0].method == "GET" && be.seen[0].maxBody == 16384 && be.seen[0].savePath.empty() &&
@@ -2592,7 +2597,7 @@ int main() {
         "true",  // time.now() reflects the set
         "nil\tepoch out of the plausible range (2020..2096)",
     };
-    (void)want;  // expectations asserted incrementally below to keep the diff readable
+    (void)want;  // expectations are asserted incrementally below
     CHECK(be.logs.size() >= 31);
     if (be.logs.size() >= 31) {
       CHECK(be.logs[0] == "2\t3\tNetA\t-40\t\tfalse");
@@ -3336,6 +3341,74 @@ int main() {
   }
   {
     TEST(
+        "crypto: md5 and crc32 vs hashlib/zlib vectors (RFC 1321, the CRC-32 check value), chunked == one-shot, "
+        "limits");
+    MockBackend be;
+    LuaVm vm;
+    CHECK(vm.open(512 * 1024));
+    registerApi(vm, be);
+    const char* script = R"LUA(
+      for _, s in ipairs({"", "a", "abc", "message digest", "abcdefghijklmnopqrstuvwxyz", ("1234567890"):rep(8)}) do
+        print(crypto.hex(crypto.md5(s)))
+      end
+      print(crypto.hex(crypto.md5(("0123456789abcdef"):rep(4096))))   -- exactly 64 KB: the one-shot limit
+      print(crypto.md5(("x"):rep(65537)))                              -- one byte over
+      local bin = {}
+      for i = 1, 768 do bin[i] = string.char((i - 1) % 256) end
+      bin = table.concat(bin)
+      print(crypto.hex(crypto.md5(bin)))
+      local h = crypto.hash("md5")
+      for i = 1, #bin, 100 do h:update(bin:sub(i, i + 99)) end
+      local d = h:digest()
+      print(#d, crypto.hex(d) == crypto.hex(crypto.md5(bin)))
+      print(h:digest())
+      print(crypto.hash("whirlpool"))
+      for _, s in ipairs({"", "a", "abc", "123456789", "The quick brown fox jumps over the lazy dog"}) do
+        print(crypto.hex(crypto.crc32(s)))
+      end
+      print(#crypto.crc32("x"), crypto.hex(crypto.crc32(bin)))
+      local whole = ("hello, crc world"):rep(50)
+      local first = crypto.crc32(whole:sub(1, 300))
+      print(crypto.hex(first), crypto.hex(crypto.crc32(whole:sub(301), first)), crypto.hex(crypto.crc32(whole)))
+      print(crypto.crc32("x", "abc"))
+      print(crypto.crc32(("x"):rep(65537)))
+      print(select("#", pcall(crypto.md5)), (pcall(crypto.md5)))
+    )LUA";
+    CHECK(vm.load("t", script, strlen(script)));
+    CHECK(run(vm, be, 20000000) == Status::Finished);
+    const std::vector<std::string> want = {
+        "d41d8cd98f00b204e9800998ecf8427e",
+        "0cc175b9c0f1b6a831c399e269772661",
+        "900150983cd24fb0d6963f7d28e17f72",
+        "f96b697d7cb7938d525a2f31aaf161d0",
+        "c3fcd3d76192e4007dfb496cca67e13b",
+        "57edf4a22be3c955ac49da2e2107b67a",
+        "ea2e4a9d8add947abc90705d59d34a74",
+        "nil\tdata must be at most 64 KB (use crypto.hash for more)",
+        "e6899eaaf06fd702f3ed3f988eb19362",
+        "16\ttrue",
+        "nil\thash already finished (digest() was called)",
+        "nil\tunknown algorithm (sha1, sha256, md5)",
+        "00000000",
+        "e8b7be43",
+        "352441c2",
+        "cbf43926",
+        "414fa339",
+        "4\tb0c0df2a",
+        "fff3c395\t9f9f71b5\t9f9f71b5",
+        "nil\tprevious must be a 4-byte crc32 string",
+        "nil\tdata must be at most 64 KB (call again with the previous value for more)",
+        "2\tfalse",
+    };
+    CHECK(be.logs == want);
+    if (be.logs != want) {
+      for (size_t i = 0; i < std::max(be.logs.size(), want.size()); i++)
+        printf("  [%zu] got '%s' want '%s'\n", i, i < be.logs.size() ? be.logs[i].c_str() : "<none>",
+               i < want.size() ? want[i].c_str() : "<none>");
+    }
+  }
+  {
+    TEST(
         "crypto: mbedtls hashes/HMAC/PBKDF2/AES-CBC vs hashlib+openssl vectors, RFC 4231/6238/7914/4648, limits, "
         "errors");
     MockBackend be;
@@ -3363,7 +3436,7 @@ int main() {
       local hh = crypto.hash("sha1"); hh:update("x"); hh:digest()
       show(hh:digest())
       show(hh:update("y"))
-      show(crypto.hash("md5"))
+      show(crypto.hash("whirlpool"))
       show((function() local h = crypto.hash("sha256"); local d = ("0123456789"):rep(10000); for i = 1, #d, 7777 do h:update(d:sub(i, i + 7776)) end; return crypto.hex(h:digest()) end)())
       show(crypto.hex(crypto.pbkdf2_sha256("passwd", "salt", 1, 64)))
       show(crypto.hex(crypto.pbkdf2_sha256("password", "salt", 2, 32)))
@@ -3439,7 +3512,7 @@ int main() {
         "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad",
         "nil\thash already finished (digest() was called)",
         "nil\thash already finished (digest() was called)",
-        "nil\tunknown algorithm (sha1, sha256)",
+        "nil\tunknown algorithm (sha1, sha256, md5)",
         "aca9e593cc629cbaa94cd5a07dc029424aad93e5129e5d11f8dcd2f139c16cc0",
         "55ac046e56e3089fec1691c22544b605f94185216dde0465e68b9d57c20dacbc49ca9cccf179b645991664b39d77ef317c71b845b1e30b"
         "d509112041d3a19783",
@@ -4080,9 +4153,9 @@ int main() {
     }
     if (be.logs.size() != N || getenv("DUMP_LOGS"))
       for (size_t i = 0; i < be.logs.size(); i++) printf("    udp2 log[%zu] '%s'\n", i, be.logs[i].c_str());
-    // the 8 first handles: h (UDP, handle 1) + 7 TCP = 8 open; the 9th open fails; after closing one TCP, a UDP slot
-    // opens
-    CHECK(be.txLog.empty());  // udpSendFail: the failed send must not reach the backend log  // exactly one send
+    // the 8 first handles: h (UDP, handle 1) + 7 TCP = 8 open; the 9th open fails; after closing
+    // one TCP, a UDP slot opens
+    CHECK(be.txLog.empty());  // udpSendFail: the failed send must not reach the backend log; exactly one send
                               // reached the backend
   }
   {
@@ -4501,8 +4574,9 @@ int main() {
       peakOk = vm.peakBytes();
       if (getenv("DUMP_LOGS")) printf("   module %zu B, peak with a huge budget %zu B\n", mod.size(), peakOk);
     }
-    // measured on the host: streaming + drop-the-full-copy peaks at ~111 KB; without the streaming ~128 KB; the
-    // original load order (source buffer + full + stripped copies together) ~181 KB
+    // measured on the host: streaming + drop-the-full-copy peaks at ~111 KB; without the
+    // streaming ~128 KB; the original load order (source buffer + full + stripped copies
+    // together) ~181 KB
     CHECK(peakOk > mod.size() && peakOk < 120000);
     MockBackend be;
     be.files["/plugins/test/big.lua"] = mod;
@@ -4573,7 +4647,8 @@ int main() {
     be.events = {};
     setup(vm, be, "local m = require('waiter') print(tostring(m.got))");
     be.events.push_back("confirm");
-    // run(): first resume hits input.wait with an event queued -> fast path. Use an empty queue instead:
+    // run(): first resume hits input.wait with an event queued -> fast path. Use an empty queue
+    // instead:
     be.events.clear();
     CHECK(vm.resume() == Status::Waiting);  // yielded from inside the module's top level
     CHECK(vm.timeoutMs() == 10);
@@ -5615,8 +5690,8 @@ int main() {
         CHECK(be.logs[i] == want[i]);
         if (be.logs[i] != want[i]) printf("    list #%zu got '%s' want '%s'\n", i + 1, be.logs[i].c_str(), want[i]);
       }
-      // stat is only asked for the entries inside the window: 4 (full detail) + 2 (the 2-entry window); plain listings
-      // ask for none
+      // stat is only asked for the entries inside the window: 4 (full detail) + 2 (the 2-entry
+      // window); plain listings ask for none
       CHECK(be.statCalls == 6);
     }
     {
@@ -5782,8 +5857,8 @@ int main() {
         CHECK(be.logs[i] == want[i]);
         if (be.logs[i] != want[i]) printf("    rest #%zu got '%s' want '%s'\n", i + 1, be.logs[i].c_str(), want[i]);
       }
-      // what the backend was handed: the POST carries its Authorization header, the JSON content type and the pinned
-      // PEM
+      // what the backend was handed: the POST carries its Authorization header, the JSON content
+      // type and the pinned PEM
       CHECK(be.seen.size() == 7);
       if (be.seen.size() == 7) {
         const auto& p = be.seen[0];
@@ -5845,9 +5920,9 @@ int main() {
       CHECK(vm.load("t", script, strlen(script)));
       CHECK(run(vm, be, 4000000) == Status::Finished);
       CHECK(be.logs.size() == 1 && be.logs[0] == "done");
-      // No byte counter here: ASAN replaces malloc, so mallinfo is blind. 300 requests make a missing free() a wall of
-      // LeakSanitizer reports (304 leaked allocations when the free is removed), which the run script turns into exit
-      // code 1.
+      // No byte counter here: ASAN replaces malloc, so mallinfo is blind. 300 requests make a
+      // missing free() a wall of LeakSanitizer reports (304 leaked allocations when the free is
+      // removed), which the run script turns into exit code 1.
     }
     {
       MockBackend be;  // validation: nothing invalid reaches the backend
@@ -7565,9 +7640,10 @@ int main() {
     TEST(
         "vault.lua: matches an independent implementation (python hmac/pbkdf2 + openssl AES), roundtrip, PIN change, "
         "validation, tampering, device binding");
-    // python: dk = hmac(secret 00..1f, "crosslua-device-key:v1\0test\0vault-v1"); pre = hmac(dk, "1234"); master =
-    // pbkdf2(pre, salt a0..af, 1000, 32); enc/mac = hmac(master, "vault-enc\1"/"vault-mac\1"); AES-256-CBC (openssl)
-    // over "hello vault\n"*3; HMAC over header+ciphertext.
+    // python: dk = hmac(secret 00..1f, "crosslua-device-key:v1\0test\0vault-v1"); pre = hmac(dk,
+    // "1234"); master = pbkdf2(pre, salt a0..af, 1000, 32); enc/mac = hmac(master,
+    // "vault-enc\1"/"vault-mac\1"); AES-256-CBC (openssl) over "hello vault\n"*3; HMAC over
+    // header+ciphertext.
     const std::string HEX =
         "58564c5401000003e8a0a1a2a3a4a5a6a7a8a9aaabacadaeafc0c1c2c3c4c5c6c7c8c9cacbcccdcecfa67e0b8c8c6eb4e897edd3aa08f1"
         "a6c33426e692fac06a50271cc718"
@@ -7860,7 +7936,8 @@ int main() {
       bool finished = false;
       size_t textsLeft = 0, eventsLeft = 0;
     };
-    // keys that enter a numeric PIN on the wheel: up x digit, right to lock it in, confirm after the last one
+    // keys that enter a numeric PIN on the wheel: up x digit, right to lock it in, confirm after
+    // the last one
     auto PIN = [](const std::string& d) {
       std::vector<std::string> k;
       for (size_t i = 0; i < d.size(); i++) {
@@ -7875,8 +7952,9 @@ int main() {
         for (auto& e : p) out.push_back(e);
       return out;
     };
-    // an "@ms" token waits (on the mock clock, through the app's own timeouts) until ms have passed; a screen that
-    // waits for a key with no timeout drops the token, like a user who walks away and comes back
+    // an "@ms" token waits (on the mock clock, through the app's own timeouts) until ms have
+    // passed; a screen that waits for a key with no timeout drops the token, like a user who
+    // walks away and comes back
     auto drive = [&](MockBackend& be, std::deque<std::string> texts, std::deque<std::string> keys) {
       Drive d;
       std::string src = loadApp(be, "totp_lua");
@@ -7977,8 +8055,8 @@ int main() {
       CHECK(shown(be, "Spin each digit") && shown(be, ":*:"));  // the wheel was drawn and locked digits are masked
     }
     {
-      // C. back on the wheel leaves the app; left on the first digit offers the keyboard (a passphrase is the same
-      // string)
+      // C. back on the wheel leaves the app; left on the first digit offers the keyboard (a
+      // passphrase is the same string)
       Drive c = drive(be, {}, {"back"});
       CHECK(c.finished && c.eventsLeft == 0 && !shown(be, ":GitHub:"));
       Drive k = drive(be, {"1234"}, {"left", "back"});
@@ -7998,7 +8076,8 @@ int main() {
           "json.decode(vault.unlock('data:vault.bin', '1234').data); print(#db.accounts, db.accounts[2].name, "
           "db.accounts[2].issuer)");
       CHECK(be.logs.size() == 2 && be.logs[0] == "false" && be.logs[1] == "2\tbob\tAcme");
-      // importing again with no file explains where to put it; importing the same link again adds nothing
+      // importing again with no file explains where to put it; importing the same
+      // link again adds nothing
       Drive d2 = drive(be, {}, KEYS({PIN("1234"), {"confirm", "down", "confirm", "confirm", "back"}}));
       CHECK(d2.finished && d2.eventsLeft == 0 && shown(be, "import.txt"));
       lua(be, "fs.write('data:import.txt', 'otpauth://totp/Acme:bob?secret=JBSWY3DPEHPK3PXP&issuer=Acme\\n')");
@@ -8006,8 +8085,8 @@ int main() {
       CHECK(d3.finished && d3.eventsLeft == 0 && shown(be, ":Added 0, skipped 1.:"));
     }
     {
-      // E. delete: "Keep it" changes nothing, "Delete it" removes the selected account (the last row, however often
-      // down is pressed)
+      // E. delete: "Keep it" changes nothing, "Delete it" removes the selected account (the last
+      // row, however often down is pressed)
       Drive keep = drive(be, {}, KEYS({PIN("1234"), {"confirm", "down", "down", "confirm", "confirm", "back"}}));
       CHECK(keep.finished && keep.eventsLeft == 0);
       lua(be,
@@ -8024,8 +8103,8 @@ int main() {
       CHECK(be.logs.size() == 1 && be.logs[0] == "1\tGitHub");
     }
     {
-      // F. change PIN: a short passphrase and a mismatch are refused (vault unchanged), then it works and the old PIN
-      // stops working
+      // F. change PIN: a short passphrase and a mismatch are refused (vault unchanged), then it
+      // works and the old PIN stops working
       const std::vector<std::string> TO_CHANGE = {"confirm", "down", "down", "down", "confirm"};
       Drive d1 = drive(be, {"12"}, KEYS({PIN("1234"), TO_CHANGE, {"left", "confirm", "back"}}));
       CHECK(d1.finished && d1.eventsLeft == 0 && d1.titles == vec({"New PIN (passphrase)"}) &&
@@ -8042,8 +8121,8 @@ int main() {
       CHECK(be.logs.size() == 2 && be.logs[0] == "nil\twrong PIN or damaged vault" && be.logs[1] == "1");
     }
     {
-      // G. "Lock now" asks for the PIN again; H. an idle app locks itself after two minutes and the code changes at the
-      // window boundary
+      // G. "Lock now" asks for the PIN again; H. an idle app locks itself after two minutes
+      // and the code changes at the window boundary
       Drive g = drive(
           be, {}, KEYS({PIN("5678"), {"confirm", "down", "down", "down", "down", "confirm"}, PIN("5678"), {"back"}}));
       CHECK(g.finished && g.eventsLeft == 0);
@@ -8077,7 +8156,8 @@ int main() {
       CHECK(be.logs.size() == 1 && be.logs[0] == "2\tMail\tFastmail\tJBSWY3DPEHPK3PXP");
     }
     {
-      // K. no device secret, a damaged file and unreadable contents all end in a clear message, never in a crash
+      // K. no device secret, a damaged file and unreadable contents all end in a clear message,
+      // never in a crash
       be.secretOk = false;
       Drive nos = drive(be, {}, KEYS({PIN("5678"), {"confirm"}}));
       CHECK(nos.finished && nos.eventsLeft == 0 && shown(be, "Cannot open the vault") && shown(be, "device secret"));
@@ -8122,8 +8202,8 @@ int main() {
       CHECK(be.logs.size() == 1 && be.logs[0] == "50");
     }
     {
-      // S. first start on a fresh card: the wheel refuses fewer than 4 digits, a short passphrase and a mismatch are
-      // refused too
+      // S. first start on a fresh card: the wheel refuses fewer than 4 digits, a short passphrase
+      // and a mismatch are refused too
       MockBackend fresh;
       fresh.epoch = 1700000000;
       Drive d = drive(fresh, {"12"},
@@ -8145,14 +8225,14 @@ int main() {
       CHECK(fresh.logs.size() == 1 && fresh.logs[0] == "true\tnil\twrong PIN or damaged vault");
     }
     {
-      // W. wheel mechanics: down wraps 0 -> 9, left puts the erased digit back on the wheel, confirm takes the digit
-      // being spun
+      // W. wheel mechanics: down wraps 0 -> 9, left puts the erased digit back on the wheel,
+      // confirm takes the digit being spun
       MockBackend fresh;
       fresh.epoch = 1700000000;
       const std::vector<std::string> W9120 = {"down",  "right", "up", "right", "up",
                                               "right", "left",  "up", "right", "confirm"};
-      // walk: down wraps 0 to 9 and locks it; 1 and 1 follow; left takes the second 1 back onto the wheel, up makes it
-      // 2, lock; confirm adds the digit being spun (0): 9, 1, 2, 0
+      // walk: down wraps 0 to 9 and locks it; 1 and 1 follow; left takes the second 1 back
+      // onto the wheel, up makes it 2, lock; confirm adds the digit being spun (0): 9, 1, 2, 0
       Drive d = drive(fresh, {}, KEYS({{"confirm"}, W9120, W9120, {"back"}}));
       CHECK(d.finished && d.eventsLeft == 0);
       lua(fresh,
@@ -8161,7 +8241,8 @@ int main() {
       CHECK(fresh.logs.size() == 1 && fresh.logs[0] == "true\tfalse\tfalse");
     }
     {
-      // X. twelve digits is the maximum: further "right" presses do nothing and confirm submits what is there
+      // X. twelve digits is the maximum: further "right" presses do nothing and confirm submits
+      // what is there
       MockBackend fresh;
       fresh.epoch = 1700000000;
       std::vector<std::string> twelve(13, "right");  // 12 locked zeros, the 13th press is ignored
@@ -8386,7 +8467,8 @@ int main() {
       CHECK(be.bleObserveCalls == 0 && be.bleObserveStops == 0);
     }
   }
-  if (ota_version_tests()) ++g_fail;  // defined in test_ota.cpp: a separate TU, so OtaVersion.h edits do not recompile this file
+  if (ota_version_tests())
+    ++g_fail;  // defined in test_ota.cpp: a separate TU, so OtaVersion.h changes do not rebuild this file
   printf(g_fail ? "\n%d FAILED\n" : "\nALL PASSED\n", g_fail);
   return g_fail ? 1 : 0;
 }

@@ -1,6 +1,6 @@
-# Host-side CrossLua VM tests (gcc/g++ + ASAN/UBSAN). Incremental: `make -f test/lua_host/Makefile -j` rebuilds only
-# what changed (a mutation run touches ONE src/lua/*.cpp: ~2 s instead of recompiling the 110 s test file). ccache is
-# used when installed. test/lua_host/run.sh is the normal entry point.
+# Host-side CrossLua VM tests (gcc/g++ + ASAN/UBSAN). Incremental: `make -f
+# test/lua_host/Makefile -j` rebuilds only what changed. ccache is used when
+# installed. test/lua_host/run.sh is the normal entry point.
 OUT   ?= $(or $(TMPDIR),/tmp)/crosslua-host
 MBED  ?= $(HOME)/.platformio/packages/framework-espidf/components/mbedtls/mbedtls
 CCACHE := $(shell command -v ccache 2>/dev/null)
@@ -9,14 +9,15 @@ CXX   := $(CCACHE) g++
 
 CFLAGS    = -O1 -g -DLUA_USE_C89 -Ilib/lua -w
 MBEDFLAGS = -O1 -g -w -I$(MBED)/include -I$(MBED)/library -Itest/lua_host -DMBEDTLS_CONFIG_FILE='"mbedtls_host_config.h"'
-# -g1 -fno-var-tracking: the 2400-line main() in test_vm.cpp blows GCC's variable-tracking limit and gets compiled twice
+# -g1 -fno-var-tracking: the 2400-line main() in test_vm.cpp blows GCC's variable-tracking
+# limit and gets compiled twice
 CXXFLAGS  = -std=c++20 -O1 -g1 -fno-var-tracking -Wall -Wextra -Ilib/lua -I$(MBED)/include -Itest/lua_host \
             -DMBEDTLS_CONFIG_FILE='"mbedtls_host_config.h"' -I. -Ilib -Ilib/InflateReader -Ilib/uzlib/src \
             -fsanitize=address,undefined -MMD -MP
 
 CXX_SRC  := test/lua_host/test_vm.cpp test/lua_host/test_ota.cpp $(addprefix src/lua/,LuaVm.cpp LuaApi.cpp LuaFs.cpp LuaJson.cpp LuaNet.cpp LuaZip.cpp LuaCrypto.cpp LuaSock.cpp LuaAudio.cpp LuaMic.cpp LuaEspNow.cpp LuaMonitor.cpp LuaTx.cpp LuaBle.cpp) lib/InflateReader/InflateReader.cpp
 C_SRC    := $(wildcard lib/lua/*.c) lib/uzlib/src/tinflate.c
-MBED_SRC := $(addprefix $(MBED)/library/,sha1.c sha256.c md.c aes.c platform_util.c constant_time.c)
+MBED_SRC := $(addprefix $(MBED)/library/,sha1.c sha256.c md5.c md.c aes.c platform_util.c constant_time.c)
 
 CXX_OBJ  := $(patsubst %.cpp,$(OUT)/obj/%.o,$(CXX_SRC))
 C_OBJ    := $(patsubst %.c,$(OUT)/obj/%.o,$(C_SRC))

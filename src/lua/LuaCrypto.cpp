@@ -1,9 +1,10 @@
-// crypto.* — hashes, HMAC, PBKDF2, random bytes, hex/base64, constant-time compare. See docs/lua/API.md.
+// crypto.* - hashes, HMAC, PBKDF2, random bytes, hex/base64, constant-time compare. See docs/lua/API.md.
 // Everything is mbedtls (the library the firmware already links for OTA hashing, and that biscuit's TOTP / PIN / SD-
 // encryption apps call; on the ESP32-C3 SHA and AES run on the hardware accelerators). The host tests compile the SAME
 // mbedtls 3.x sources (test/lua_host/run.sh). Only random bytes come from the Backend (esp_fill_random on the device).
 #include <mbedtls/aes.h>
 #include <mbedtls/md.h>
+#include <mbedtls/md5.h>
 #include <mbedtls/sha1.h>
 #include <mbedtls/sha256.h>
 
@@ -33,7 +34,7 @@ const uint8_t* dataArg(lua_State* L, int i, size_t* n) {
 }
 
 // ---- one-shot hashes -----------------------------------------------------------------------------------------------
-constexpr size_t DIGEST256 = 32, DIGEST1 = 20;
+constexpr size_t DIGEST256 = 32, DIGEST1 = 20, DIGEST_MD5 = 16;
 int pushDigest(lua_State* L, int rc, const uint8_t* out, size_t n) {
   if (rc != 0) return pushFail(L, "hash failed");
   lua_pushlstring(L, reinterpret_cast<const char*>(out), n);
@@ -53,6 +54,41 @@ int cr_sha1(lua_State* L) {
   uint8_t out[DIGEST1];
   return pushDigest(L, mbedtls_sha1(d, n, out), out, sizeof(out));
 }
+// MD5 is broken as a security hash: it is here for protocols that mandate it (KOReader sync document ids and passwords,
+// Calibre, legacy checksums), never for new designs.
+int cr_md5(lua_State* L) {
+  size_t n;
+  const uint8_t* d = dataArg(L, 1, &n);
+  if (n > MAX_DATA) return pushFail(L, "data must be at most 64 KB (use crypto.hash for more)");
+  uint8_t out[DIGEST_MD5];
+  return pushDigest(L, mbedtls_md5(d, n, out), out, sizeof(out));
+}
+// crypto.crc32(data [, previous]) -> 4-byte big-endian string. The IEEE 802.3 CRC-32 of zip, PNG and gzip. Returned as
+// bytes because a 32-bit Lua integer cannot hold values above 2^31-1; `previous` (a value returned by an earlier call)
+// continues a running checksum across chunks. crypto.hex() shows it as the usual 8 hex digits.
+int cr_crc32(lua_State* L) {
+  size_t n;
+  const uint8_t* d = dataArg(L, 1, &n);
+  if (n > MAX_DATA) return pushFail(L, "data must be at most 64 KB (call again with the previous value for more)");
+  uint32_t crc = 0;
+  if (!lua_isnoneornil(L, 2)) {
+    size_t pl;
+    const uint8_t* p = dataArg(L, 2, &pl);
+    if (pl != 4) return pushFail(L, "previous must be a 4-byte crc32 string");
+    crc = (static_cast<uint32_t>(p[0]) << 24) | (static_cast<uint32_t>(p[1]) << 16) |
+          (static_cast<uint32_t>(p[2]) << 8) | p[3];
+  }
+  crc = ~crc;
+  for (size_t i = 0; i < n; i++) {
+    crc ^= d[i];
+    for (int b = 0; b < 8; b++) crc = (crc >> 1) ^ (0xEDB88320u & (0u - (crc & 1u)));
+  }
+  crc = ~crc;
+  const uint8_t out[4] = {static_cast<uint8_t>(crc >> 24), static_cast<uint8_t>(crc >> 16),
+                          static_cast<uint8_t>(crc >> 8), static_cast<uint8_t>(crc)};
+  lua_pushlstring(L, reinterpret_cast<const char*>(out), sizeof(out));
+  return 1;
+}
 int hmacWith(lua_State* L, mbedtls_md_type_t type, size_t digestLen) {
   size_t kl, n;
   const uint8_t* k = dataArg(L, 1, &kl);
@@ -64,28 +100,33 @@ int hmacWith(lua_State* L, mbedtls_md_type_t type, size_t digestLen) {
 int cr_hmac_sha256(lua_State* L) { return hmacWith(L, MBEDTLS_MD_SHA256, DIGEST256); }
 int cr_hmac_sha1(lua_State* L) { return hmacWith(L, MBEDTLS_MD_SHA1, DIGEST1); }
 
-// ---- incremental hash object: crypto.hash("sha256"|"sha1") -> h; h:update(s) -> h; h:digest() -> bytes -------------
+// ---- incremental hash object: crypto.hash("sha256"|"sha1"|"md5") -> h; h:update(s) -> h; h:digest() -> bytes
+// -------------
 struct HashObj {
-  uint8_t alg;  // 1 = sha1, 2 = sha256
+  uint8_t alg;  // 1 = sha1, 2 = sha256, 3 = md5
   bool done;
   union {
     mbedtls_sha1_context s1;
     mbedtls_sha256_context s256;
+    mbedtls_md5_context m5;
   };
 };
 HashObj* hashArg(lua_State* L) { return static_cast<HashObj*>(luaL_checkudata(L, 1, HASH_MT)); }
 int cr_hash(lua_State* L) {
   const char* alg = luaL_checkstring(L, 1);
-  const bool s1 = !strcmp(alg, "sha1"), s256 = !strcmp(alg, "sha256");
-  if (!s1 && !s256) return pushFail(L, "unknown algorithm (sha1, sha256)");
+  const bool s1 = !strcmp(alg, "sha1"), s256 = !strcmp(alg, "sha256"), m5 = !strcmp(alg, "md5");
+  if (!s1 && !s256 && !m5) return pushFail(L, "unknown algorithm (sha1, sha256, md5)");
   HashObj* h = static_cast<HashObj*>(lua_newuserdatauv(L, sizeof(HashObj), 0));
   memset(h, 0, sizeof(*h));
-  h->alg = s1 ? 1 : 2;
+  h->alg = s1 ? 1 : (s256 ? 2 : 3);
   luaL_setmetatable(L, HASH_MT);  // set first: __gc must see a valid object even if starts() fails
   int rc;
   if (s1) {
     mbedtls_sha1_init(&h->s1);
     rc = mbedtls_sha1_starts(&h->s1);
+  } else if (m5) {
+    mbedtls_md5_init(&h->m5);
+    rc = mbedtls_md5_starts(&h->m5);
   } else {
     mbedtls_sha256_init(&h->s256);
     rc = mbedtls_sha256_starts(&h->s256, 0);
@@ -102,7 +143,9 @@ int hash_update(lua_State* L) {
   const uint8_t* d = dataArg(L, 2, &n);
   if (h->done) return pushFail(L, "hash already finished (digest() was called)");
   if (n > MAX_DATA) return pushFail(L, "chunk must be at most 64 KB");
-  const int rc = h->alg == 1 ? mbedtls_sha1_update(&h->s1, d, n) : mbedtls_sha256_update(&h->s256, d, n);
+  const int rc = h->alg == 1   ? mbedtls_sha1_update(&h->s1, d, n)
+                 : h->alg == 3 ? mbedtls_md5_update(&h->m5, d, n)
+                               : mbedtls_sha256_update(&h->s256, d, n);
   if (rc != 0) return pushFail(L, "hash failed");
   lua_settop(L, 1);  // return the object so calls chain
   return 1;
@@ -112,8 +155,10 @@ int hash_digest(lua_State* L) {
   if (h->done) return pushFail(L, "hash already finished (digest() was called)");
   h->done = true;
   uint8_t out[DIGEST256];
-  const int rc = h->alg == 1 ? mbedtls_sha1_finish(&h->s1, out) : mbedtls_sha256_finish(&h->s256, out);
-  return pushDigest(L, rc, out, h->alg == 1 ? DIGEST1 : DIGEST256);
+  const int rc = h->alg == 1   ? mbedtls_sha1_finish(&h->s1, out)
+                 : h->alg == 3 ? mbedtls_md5_finish(&h->m5, out)
+                               : mbedtls_sha256_finish(&h->s256, out);
+  return pushDigest(L, rc, out, h->alg == 1 ? DIGEST1 : (h->alg == 3 ? DIGEST_MD5 : DIGEST256));
 }
 int hash_gc(lua_State* L) {  // wipes the context (mbedtls_*_free zeroizes)
   HashObj* h = static_cast<HashObj*>(lua_touserdata(L, 1));
@@ -121,6 +166,8 @@ int hash_gc(lua_State* L) {  // wipes the context (mbedtls_*_free zeroizes)
     mbedtls_sha1_free(&h->s1);
   else if (h && h->alg == 2)
     mbedtls_sha256_free(&h->s256);
+  else if (h && h->alg == 3)
+    mbedtls_md5_free(&h->m5);
   return 0;
 }
 
@@ -378,6 +425,8 @@ int cr_aes_cbc_decrypt(lua_State* L) { return aesCbc(L, false); }
 void registerCrypto(lua_State* L, Ctx* c) {
   static const luaL_Reg fns[] = {{"sha1", cr_sha1},
                                  {"sha256", cr_sha256},
+                                 {"md5", cr_md5},
+                                 {"crc32", cr_crc32},
                                  {"hmac_sha1", cr_hmac_sha1},
                                  {"hmac_sha256", cr_hmac_sha256},
                                  {"hash", cr_hash},
