@@ -1,0 +1,1 @@
+{"title": "DNS Lookup", "description": "Resolve host names via the network's DNS server (A lookups)", "permissions": ["network"]}
