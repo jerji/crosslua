@@ -1,0 +1,1 @@
+{"title": "BLE Beacons", "description": "ACTIVE: broadcasts Bluetooth LE beacons (iBeacon layout, a name, or custom manufacturer data) until Back. Transmits.", "permissions": ["bluetooth"]}
