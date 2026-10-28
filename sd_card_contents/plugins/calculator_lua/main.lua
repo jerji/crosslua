@@ -1,106 +1,55 @@
--- Calculator (no radio): type an expression with the on-screen keyboard, get the result.
--- Grammar: expr = term {(+|-) term}; term = factor {(*|/) factor}; factor = [-] (number | '(' expr ')').
--- Floats are single precision on this build (see API.md), so results are shown with limited digits.
+-- Calculator (no radio, no storage). Pad: 5 columns x 4 rows of keys. Arrows move the cursor (it wraps), Confirm presses.
+-- Back exits. Arithmetic: dec.lua (exact decimal). Key rules: calc.lua (crossplay docs/apps/calculator.md).
+local C = require("calc")
 
 local W, H = 0, 0
-local history = {}
+local PAD = {
+  { "C", "+/-", "%", "BS", "/" },
+  { "7", "8", "9", "*", "-" },
+  { "4", "5", "6", "+", "=" },
+  { "1", "2", "3", "0", "." },
+}
+local KEY_W, KEY_H = 90, 74
+local PAD_X, PAD_Y = 0, 0
 
-local function evaluate(src)
-  local pos = 1
-  local function skip() pos = src:find("[^%s]", pos) or (#src + 1) end
-  local expr
-  local function factor()
-    skip()
-    local c = src:sub(pos, pos)
-    if c == "-" then pos = pos + 1; return -factor() end
-    if c == "(" then
-      pos = pos + 1
-      local v = expr()
-      skip()
-      if src:sub(pos, pos) ~= ")" then error("missing )") end
-      pos = pos + 1
-      return v
-    end
-    local num = src:match("^%d+%.?%d*", pos) or src:match("^%.%d+", pos)
-    if not num then error("expected a number at " .. pos) end
-    pos = pos + #num
-    return tonumber(num)
-  end
-  local function term()
-    local v = factor()
-    while true do
-      skip()
-      local op = src:sub(pos, pos)
-      if op ~= "*" and op ~= "/" then return v end
-      pos = pos + 1
-      local r = factor()
-      if op == "*" then v = v * r
-      else
-        if r == 0 then error("divide by zero") end
-        v = v / r
-      end
-    end
-  end
-  expr = function()
-    local v = term()
-    while true do
-      skip()
-      local op = src:sub(pos, pos)
-      if op ~= "+" and op ~= "-" then return v end
-      pos = pos + 1
-      local r = term()
-      if op == "+" then v = v + r else v = v - r end
-    end
-  end
-  local v = expr()
-  skip()
-  if pos <= #src then error("unexpected text at " .. pos) end
-  return v
-end
-
-local function fmt(v)
-  if math.type(v) == "integer" or v == math.floor(v) and math.abs(v) < 2^31 then
-    return string.format("%d", math.tointeger(v) or v)
-  end
-  return string.format("%.6g", v)
-end
-
-local function draw(expr, result, err)
+local function draw(st, cur)
   gfx.clear(); W, H = gfx.size()
+  PAD_X = (W - 5 * KEY_W) // 2
+  PAD_Y = H - 4 * KEY_H - 40
   gfx.rect(0, 0, W, 40, true); gfx.text(14, 10, "Calculator", "ui12", "bw")
-  local y = 60
-  for i = math.max(1, #history - 4), #history do
-    gfx.text(14, y, history[i], "small"); y = y + 22
+  if st.op then gfx.text(14, 52, "pending " .. st.op .. (st.acc and ("  " .. require("dec").format(st.acc, 10)) or ""), "small") end
+  local shown = C.display(st)
+  gfx.text(W - 16, 120, shown, "sans18", "r")
+  for r = 1, 4 do
+    for c = 1, 5 do
+      local k = PAD[r][c]
+      local x = PAD_X + (c - 1) * KEY_W
+      local y = PAD_Y + (r - 1) * KEY_H
+      gfx.rect(x + 4, y + 4, KEY_W - 8, KEY_H - 8, false)
+      local sel = (cur.r == r and cur.c == c)
+      if sel then gfx.rect(x + 4, y + 4, KEY_W - 8, KEY_H - 8, true); gfx.text(x + KEY_W // 2, y + KEY_H // 2 - 10, k, "ui12", "cw")
+      else gfx.text(x + KEY_W // 2, y + KEY_H // 2 - 10, k, "ui12", "c") end
+    end
   end
-  gfx.text(14, 300, expr or "", "ui12")
-  if err then gfx.text(14, 340, "error: " .. err, "ui12")
-  elseif result then gfx.text(14, 340, "= " .. result, "sans18") end
-  gfx.text(14, H - 34, "Confirm = type expression, Back = exit", "small")
   gfx.present()
 end
 
-local function main()
+local ok, err = pcall(function()
   W, H = gfx.size()
-  local last_expr, last_result, last_err = nil, nil, nil
-  draw()
+  local st = C.new()
+  local cur = { r = 3, c = 5 }
+  draw(st, cur)
   while true do
     local e = input.wait()
-    if e == "back" then break end
-    if e == "confirm" then
-      local src = input.text("Expression", "", 80)
-      if src and src ~= "" then
-        last_expr = src
-        local ok, v = pcall(evaluate, src)
-        if ok then last_result, last_err = fmt(v), nil
-        else last_result, last_err = nil, tostring(v):gsub("^.-:%d+: ", "") end
-        history[#history + 1] = src .. (last_result and (" = " .. last_result) or "")
-      end
-      draw(last_expr, last_result, last_err)
-    end
+    if e == "back" then break
+    elseif e == "up" then cur.r = cur.r > 1 and cur.r - 1 or 4
+    elseif e == "down" then cur.r = cur.r < 4 and cur.r + 1 or 1
+    elseif e == "left" then cur.c = cur.c > 1 and cur.c - 1 or 5
+    elseif e == "right" then cur.c = cur.c < 5 and cur.c + 1 or 1
+    elseif e == "confirm" then C.press(st, PAD[cur.r][cur.c]) end
+    draw(st, cur)
   end
-end
-
-local ok, err = pcall(main)
+end)
 if not ok then
   gfx.clear(); gfx.text(10, 10, "err: " .. tostring(err):sub(1, 60), "ui12", "b"); gfx.present()
   while input.wait() ~= "back" do end
