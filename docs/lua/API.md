@@ -377,7 +377,7 @@ key and modifiers. The approval screen labels the permission `BLE`. BLE only: th
 
 | call | notes |
 |---|---|
-| `ble.start([mode])` → true \| nil, err | brings the stack up. `mode` is `"keyboard"` (the default and the only one so far). **~52 KB of RAM** (measured 51,996 B on the X4); needs the radio floor (80 KB free, 48 KB after a radio was used) and **refuses while WiFi, the hotspot, espnow, the sniffer or the injector holds the radio** (and each of those refuses while Bluetooth is up). Also refuses while the Bluetooth page turner has the stack up |
+| `ble.start([mode])` → true \| nil, err | brings the stack up. `mode` is `"keyboard"` (the default) or `"raw"` (see below); one mode at a time. **~52 KB of RAM** (measured 51,996 B on the X4); needs the radio floor (80 KB free, 48 KB after a radio was used) and **refuses while WiFi, the hotspot, espnow, the sniffer or the injector holds the radio** (and each of those refuses while Bluetooth is up). Also refuses while the Bluetooth page turner has the stack up |
 | `ble.stop()` → true | gives the stack back; always allowed. Leaving the app reboots into a clean heap, like every radio app |
 | `ble.scan([ms])` → true \| nil, err | starts a scan that ends by itself after `ms` (500..60000, default 5000); read with `ble.devices()` |
 | `ble.scan_stop()` → true | |
@@ -395,6 +395,31 @@ while true do
   local e = input.wait()
   if e == "key" then local k = input.key(); text = text .. (k.char or "") elseif e == "back" then break end
 end
+```
+
+**Raw mode** (`ble.start("raw")`): NimBLE as a bare observer. Every advertisement is handed over as received, to parse yourself. Same
+permission (`bluetooth`), same RAM and radio exclusivity as keyboard mode. The keyboard calls (`scan`, `devices`, `connect`, `paired`, `forget`)
+refuse in raw mode and the raw calls refuse in keyboard mode, with a message that says which mode they need. Observer only: the
+build has the central and observer roles, not peripheral or broadcaster, so there is no advertising and no acting as a device.
+
+| call | notes |
+|---|---|
+| `ble.observe([ms [, {active=false}]])` → true \| nil, err | listens for advertisements for `ms` (500..600000, default 5000; **0 = until `ble.observe_stop()`**). Clears the table first. **Passive by default: nothing is transmitted**, so devices that put their name in the scan response show no name. `active=true` sends a scan request to every scannable device it hears (that is how names arrive) |
+| `ble.observe_stop()` → true | |
+| `ble.adverts()` → `list, dropped` \| nil, err | one entry per device heard since `observe()` started (first heard first, **at most 32**): `{addr, addr_type, rssi, adv_type, connectable, scannable, adv_len, age_ms, data}`. `data` is the advertising data followed by the scan response as raw bytes (at most 31 + 31), `adv_len` says where the scan response starts. `rssi` and `data` are those of the last packet, `age_ms` is the time since it. `addr_type` is NimBLE's: 0 public, 1 random (2 and 3: resolved private addresses). `adv_type`: 0 ADV_IND, 1 ADV_DIRECT_IND, 2 ADV_SCAN_IND, 3 ADV_NONCONN_IND, 4 SCAN_RSP. `dropped` counts **packets** (not devices) ignored because the table was full |
+| `ble.state()` | in raw mode `mode = "raw"`, `scanning` tells whether the observer is listening, `link` stays `idle` |
+
+Parsing is left to Lua on purpose (a length/type/value walk is ten lines, see `lua_tests_lua/tests/bleraw.lua`). Legacy advertising only: extended
+advertisements (coded PHY, long payloads) are not compiled into this build. Verified on the X4: passive and active scans, `observe(0)` + stop, six
+start/observe/stop cycles with no heap left behind. What nearby devices reveal (addresses, names, manufacturer data) is exactly what a scan sees:
+treat the results as personal data.
+
+```lua
+ble.start("raw"); ble.observe(6000, {active = true}); app.sleep(6500)
+local list = ble.adverts()
+table.sort(list, function(a, b) return a.rssi > b.rssi end)
+for _, d in ipairs(list) do print(d.addr, d.rssi, #d.data) end
+ble.stop()
 ```
 Not yet: advertising/beacons and acting as a keyboard (they need the peripheral role, which upstream's NimBLE config compiles out),
 and a generic GATT client.

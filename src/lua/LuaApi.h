@@ -240,6 +240,27 @@ class Backend {
   virtual void bleState(BleState* s) = 0;
   virtual int blePaired(BleDevice* out, int cap) = 0;  // bonded peers (kept in NVS), at most `cap`
   virtual bool bleForget(const char* addr) = 0;
+  // Mode "raw": the NimBLE observer straight (no HID host). ble.start("raw") brings the stack up; scripts read every advertisement
+  // (advertising data followed by the scan response, as received) and parse it themselves. EXCLUSIVE with mode "keyboard".
+  enum BleMode { BLE_MODE_NONE = 0, BLE_MODE_KEYBOARD = 1, BLE_MODE_RAW = 2 };
+  struct BleAdvert {
+    char addr[18];       // "AA:BB:CC:DD:EE:FF"
+    uint8_t addrType;    // 0 public, 1 random (NimBLE's own numbering: 2 and 3 are "RPA resolved to public/random")
+    int rssi;            // dBm of the last packet
+    uint8_t advType;     // the legacy advertising event type: 0 ADV_IND, 1 ADV_DIRECT_IND, 2 ADV_SCAN_IND, 3 ADV_NONCONN_IND, 4 SCAN_RSP
+    bool connectable, scannable;
+    uint8_t advLen;      // bytes of `data` that came in the advertisement itself (the rest is the scan response)
+    uint8_t len;         // bytes in `data`
+    uint8_t data[62];    // advertisement (<= 31) followed by the scan response (<= 31)
+    uint32_t ageMs;      // milliseconds since the last packet from it
+  };
+  static constexpr int BLE_MAX_ADVERTS = 32;
+  virtual int bleMode() { return BLE_MODE_NONE; }
+  virtual bool bleObserve(int ms, bool active, char* err, size_t errCap) { (void)ms; (void)active; if (errCap) err[0] = 0; return false; }
+  virtual void bleObserveStop() {}
+  virtual bool bleObserving() { return false; }
+  // Snapshot of the table (first seen first), at most `cap`; *dropped = devices that did not fit since the observer started.
+  virtual int bleAdverts(BleAdvert* out, int cap, int* dropped) { (void)out; (void)cap; *dropped = 0; return 0; }
   // Details of the "key" event popEvent() returned last; false for any other event.
   virtual bool eventKey(KeyInfo* k) { (void)k; return false; }
   // Ask the system to bring WiFi up (it may show its own network picker). Non-blocking: the script is parked and

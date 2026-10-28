@@ -511,7 +511,29 @@ struct MockBackend : Backend {
     bleScanned = false;
     return true;
   }
-  void bleStop() override { bleStopCalls++; bleUp = false; bleScanningNow = false; }
+  void bleStop() override { bleStopCalls++; bleUp = false; bleScanningNow = false; bleObservingNow = false; }
+  // raw mode (the observer): a table the tests fill, observed only after bleObserve() like the real stack
+  std::vector<BleAdvert> bleAdvertsSeen;
+  bool bleObservingNow = false, bleObserveFail = false, bleObserveFailSilent = false, bleObserveActive = false;
+  int bleObserveCalls = 0, bleObserveStops = 0, bleDroppedVal = 0, bleObserveMs = -1;
+  int bleMode() override { return !bleUp ? BLE_MODE_NONE : (bleModeStarted == "raw" ? BLE_MODE_RAW : BLE_MODE_KEYBOARD); }
+  bool bleObserve(int ms, bool active, char* err, size_t errCap) override {
+    bleObserveCalls++;
+    if (bleObserveFail || bleObserveFailSilent) { if (!bleObserveFailSilent) snprintf(err, errCap, "observer refused (mock)"); return false; }
+    bleObserveMs = ms;
+    bleObserveActive = active;
+    bleObservingNow = true;
+    return true;
+  }
+  void bleObserveStop() override { bleObserveStops++; bleObservingNow = false; }
+  bool bleObserving() override { return bleObservingNow; }
+  int bleAdverts(BleAdvert* out, int cap, int* dropped) override {
+    if (!bleObservingNow && bleObserveCalls == 0) { *dropped = 0; return 0; }
+    *dropped = bleDroppedVal;
+    int n = 0;
+    for (const BleAdvert& a : bleAdvertsSeen) { if (n >= cap) break; out[n++] = a; }
+    return n;
+  }
   bool bleScan(int ms, char* err, size_t errCap) override {
     if (bleScanFail) { snprintf(err, errCap, "scan refused (mock)"); return false; }
     bleScanMsLog.push_back(ms);
@@ -6168,7 +6190,7 @@ int main() {
         print(ble.start())
       )LUA";
       go(be, script);
-      const std::string M = "nil\tmode must be \"keyboard\"";
+      const std::string M = "nil\tmode must be \"keyboard\" or \"raw\"";
       expect(be, {M, M, "true", "nil\tbluetooth is already running (ble.stop() first)", "true", "true"}, "start");
       CHECK(be.bleStartCalls == 2 && be.bleModeStarted == "keyboard" && be.bleUp);
     }
@@ -7061,6 +7083,161 @@ int main() {
     auto slurp = [](const char* path) { std::ifstream f(path, std::ios::binary); std::stringstream ss; ss << f.rdbuf(); return ss.str(); };
     const std::string a = slurp("sd_card_contents/plugins/totp_lua/vault.lua"), b = slurp("sd_card_contents/plugins/lua_tests_lua/vault.lua");
     CHECK(!a.empty() && a == b);
+  }
+  {
+    TEST("ble raw mode: ble.start(\"raw\"), observe / adverts / observe_stop, mode exclusivity with the keyboard calls, gates and validation");
+    const std::string DENIED = "nil\tbluetooth not permitted: add \"permissions\": [\"bluetooth\"] to this app's manifest.json (and approve it)";
+    const std::string NOTRUN = "nil\tbluetooth is not running (call ble.start() first)";
+    const std::string NEEDKB = "nil\tthis needs ble.start(\"keyboard\") (bluetooth is running in raw mode)";
+    const std::string NEEDRAW = "nil\tthis needs ble.start(\"raw\") (bluetooth is running in keyboard mode)";
+    const std::string RANGE = "nil\tms must be 0 or an integer 500..600000";
+    auto go = [&](MockBackend& be, const char* script) {
+      LuaVm vm;
+      CHECK(vm.open(128 * 1024));
+      registerApi(vm, be);
+      CHECK(vm.load("t", script, strlen(script)));
+      CHECK(run(vm, be, 100000) == Status::Finished);
+    };
+    auto expect = [&](MockBackend& be, std::vector<std::string> want, const char* tag) {
+      if (be.logs.size() != want.size()) { printf("    raw %s: %zu logs, want %zu\n", tag, be.logs.size(), want.size()); for (auto& l : be.logs) printf("      '%s'\n", l.c_str()); }
+      CHECK(be.logs.size() == want.size());
+      for (size_t i = 0; i < want.size() && i < be.logs.size(); i++) {
+        CHECK(be.logs[i] == want[i]);
+        if (be.logs[i] != want[i]) printf("    raw %s #%zu got '%s' want '%s'\n", tag, i + 1, be.logs[i].c_str(), want[i].c_str());
+      }
+    };
+    {
+      MockBackend be;  // the keyboard calls are refused in raw mode, and nothing reaches the backend
+      be.blePermitted = true;
+      go(be, R"LUA(
+        print(ble.start("raw"))
+        local s = ble.state()
+        print(s.running, s.mode, s.link, s.scanning)
+        print(ble.scan())
+        print(ble.devices())
+        print(ble.connect("AA:BB:CC:DD:EE:FF"))
+        print(ble.paired())
+        print(ble.forget("AA:BB:CC:DD:EE:FF"))
+        print(ble.scan_stop())
+        print(ble.disconnect())
+      )LUA");
+      expect(be, {"true", "true\traw\tidle\tfalse", NEEDKB, NEEDKB, NEEDKB, NEEDKB, NEEDKB, "true", "true"}, "keyboard calls in raw mode");
+      CHECK(be.bleModeStarted == "raw" && be.bleScanMsLog.empty() && be.bleConnectLog.empty() && be.bleScanStops == 0 && be.bleDisconnects == 0);
+    }
+    {
+      MockBackend be;  // and the raw calls are refused in keyboard mode, or when nothing runs
+      be.blePermitted = true;
+      go(be, R"LUA(
+        print(ble.observe())
+        print(ble.adverts())
+        print(ble.start())
+        print(ble.observe())
+        print(ble.adverts())
+        print(ble.observe_stop())
+      )LUA");
+      expect(be, {NOTRUN, NOTRUN, "true", NEEDRAW, NEEDRAW, "true"}, "raw calls in keyboard mode");
+      CHECK(be.bleObserveCalls == 0 && be.bleObserveStops == 0);
+    }
+    {
+      MockBackend be;  // observe(): argument validation never reaches the backend; the defaults are 5000 ms and passive
+      be.blePermitted = true;
+      go(be, R"LUA(
+        print(ble.start("raw"))
+        print(ble.observe("1000"))
+        print(ble.observe(1000.5))
+        print(ble.observe(499))
+        print(ble.observe(600001))
+        print(ble.observe(1.5))
+        print(ble.observe(-1))
+        print(ble.observe(5000, 7))
+        print(ble.observe(5000, {active = 1}))
+      )LUA");
+      expect(be, {"true", RANGE, RANGE, RANGE, RANGE, RANGE, RANGE, "nil\toptions must be a table like {active=true}", "nil\tactive must be a boolean"}, "validation");
+      CHECK(be.bleObserveCalls == 0);
+      be.logs.clear();
+      go(be, "print(ble.observe(0)); print(ble.observe(500)); print(ble.observe(600000)); print(ble.observe())");
+      expect(be, {"true", "true", "true", "true"}, "accepted values");
+      CHECK(be.bleObserveCalls == 4 && be.bleObserveMs == 5000 && !be.bleObserveActive);
+      be.logs.clear();
+      go(be, "print(ble.observe(1000, {active = true}))");
+      CHECK(be.bleObserveMs == 1000 && be.bleObserveActive);
+      be.logs.clear();
+      go(be, "print(ble.observe(1000, {active = false, junk = 1}))");
+      CHECK(be.bleObserveMs == 1000 && !be.bleObserveActive);
+    }
+    {
+      MockBackend be;  // a backend failure surfaces its own text; a silent one gets the generic text
+      be.blePermitted = true;
+      be.bleObserveFail = true;
+      go(be, "print(ble.start('raw')); print(ble.observe())");
+      expect(be, {"true", "nil\tobserver refused (mock)"}, "backend failure");
+      be.logs.clear();
+      be.bleObserveFailSilent = true;
+      go(be, "print(ble.observe())");
+      expect(be, {"nil\tcannot observe"}, "silent failure");
+    }
+    {
+      MockBackend be;  // the advertisement table: shape, order, binary-safe data, the drop count, the observing flag
+      be.blePermitted = true;
+      auto mk = [](const char* addr, uint8_t type, int rssi, uint8_t advType, bool conn, bool scan, uint8_t advLen, uint32_t age, std::vector<uint8_t> data) {
+        crosslua::Backend::BleAdvert a;
+        memset(&a, 0, sizeof(a));
+        snprintf(a.addr, sizeof(a.addr), "%s", addr);
+        a.addrType = type; a.rssi = rssi; a.advType = advType; a.connectable = conn; a.scannable = scan; a.advLen = advLen; a.ageMs = age;
+        a.len = static_cast<uint8_t>(data.size());
+        if (!data.empty()) memcpy(a.data, data.data(), data.size());
+        return a;
+      };
+      std::vector<uint8_t> big(62);
+      for (size_t i = 0; i < big.size(); i++) big[i] = static_cast<uint8_t>(i * 3 + 1);
+      be.bleAdvertsSeen = {mk("AA:BB:CC:00:11:22", 1, -62, 0, true, true, 4, 1234, {0x02, 0x01, 0x06, 0x00, 0xFF, 0x80, 0x00}),
+                           mk("11:22:33:44:55:66", 0, -90, 3, false, false, 31, 0, big), mk("FE:ED:00:00:00:01", 3, 0, 2, false, true, 0, 99999, {})};
+      be.bleDroppedVal = 7;
+      go(be, R"LUA(
+        print(ble.start("raw"))
+        local l, dr = ble.adverts()
+        print(#l, dr)
+        print(ble.observe(2000, {active = true}))
+        print(ble.state().scanning)
+        l, dr = ble.adverts()
+        print(#l, dr)
+        local a, b, c = l[1], l[2], l[3]
+        print(a.addr, a.addr_type, a.rssi, a.adv_type, a.connectable, a.scannable, a.adv_len, a.age_ms, #a.data, crypto.hex(a.data))
+        print(b.addr, b.addr_type, b.rssi, b.adv_type, b.connectable, b.scannable, b.adv_len, b.age_ms, #b.data, b.data:byte(1), b.data:byte(-1))
+        print(c.addr, c.addr_type, c.rssi, c.adv_type, c.connectable, c.scannable, c.adv_len, c.age_ms, #c.data, c.data == "")
+        print(ble.observe_stop())
+        print(ble.state().scanning)
+        print(ble.stop())
+        print(ble.adverts())
+      )LUA");
+      expect(be, {"true", "0\t0", "true", "true", "3\t7", "AA:BB:CC:00:11:22\t1\t-62\t0\ttrue\ttrue\t4\t1234\t7\t02010600ff8000",
+                  "11:22:33:44:55:66\t0\t-90\t3\tfalse\tfalse\t31\t0\t62\t1\t184", "FE:ED:00:00:00:01\t3\t0\t2\tfalse\ttrue\t0\t99999\t0\ttrue", "true", "false",
+                  "true", NOTRUN},
+             "adverts");
+      CHECK(be.bleObserveStops == 1 && be.bleStopCalls == 1 && be.bleObserveMs == 2000 && be.bleObserveActive);
+    }
+    {
+      MockBackend be;  // at most 32 entries come back however many the backend holds
+      be.blePermitted = true;
+      crosslua::Backend::BleAdvert a;
+      memset(&a, 0, sizeof(a));
+      for (int i = 0; i < 40; i++) { snprintf(a.addr, sizeof(a.addr), "00:00:00:00:00:%02X", i); be.bleAdvertsSeen.push_back(a); }
+      go(be, "print(ble.start('raw')); print(ble.observe()); local l = ble.adverts(); print(#l, l[32].addr, l[33])");
+      expect(be, {"true", "true", "32\t00:00:00:00:00:1F\tnil"}, "cap");
+    }
+    {
+      MockBackend be;  // gates: not permitted, no bluetooth in this firmware: every raw call says so, nothing reaches the backend
+      be.blePermitted = false;
+      const char* script = "print(ble.observe()); print(ble.adverts()); print(ble.observe_stop())";
+      go(be, script);
+      expect(be, {DENIED, DENIED, DENIED}, "denied");
+      be.logs.clear();
+      be.blePermitted = true;
+      be.bleSupportedVal = false;
+      go(be, script);
+      expect(be, {"nil\tno bluetooth on this device", "nil\tno bluetooth on this device", "nil\tno bluetooth on this device"}, "unsupported");
+      CHECK(be.bleObserveCalls == 0 && be.bleObserveStops == 0);
+    }
   }
   printf(g_fail ? "\n%d FAILED\n" : "\nALL PASSED\n", g_fail);
   return g_fail ? 1 : 0;

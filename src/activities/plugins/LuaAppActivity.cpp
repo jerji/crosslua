@@ -28,6 +28,9 @@
 #include <HalMemory.h>
 #include <HalPowerManager.h>
 #include <BleKeyboardHost.h>
+#if FREEINK_CAP_BLE_HID_HOST
+#include <NimBLEDevice.h>  // raw mode: the observer talks to NimBLE itself (the library the SDK host already links)
+#endif
 #include <DeviceSecret.h>
 
 #include "activities/plugins/LuaBluetoothHold.h"
@@ -114,6 +117,79 @@ constexpr size_t EVENT_QUEUE_MAX = 16;
 }  // namespace
 
 // ---------------------------------------------------------------------------
+#if FREEINK_CAP_BLE_HID_HOST
+// ble.start("raw"): one table of advertisers, filled on NimBLE's host task and copied out by the script's thread under a spinlock.
+// NimBLE itself keeps nothing (setMaxResults(0) erases a device once its callback ran), so its memory stays flat in a crowd.
+class RawObserver final : public NimBLEScanCallbacks {
+ public:
+  bool alloc() {
+    if (tab_) return true;
+    tab_ = static_cast<crosslua::Backend::BleAdvert*>(calloc(crosslua::Backend::BLE_MAX_ADVERTS, sizeof(crosslua::Backend::BleAdvert)));
+    return tab_ != nullptr;
+  }
+  void clear() {
+    portENTER_CRITICAL(&mux_);
+    count_ = 0;
+    dropped_ = 0;
+    portEXIT_CRITICAL(&mux_);
+  }
+  void release() {
+    portENTER_CRITICAL(&mux_);
+    crosslua::Backend::BleAdvert* t = tab_;
+    tab_ = nullptr;
+    count_ = 0;
+    dropped_ = 0;
+    portEXIT_CRITICAL(&mux_);
+    free(t);
+  }
+  int snapshot(crosslua::Backend::BleAdvert* out, int cap, int* dropped) {
+    portENTER_CRITICAL(&mux_);
+    const int n = count_ < cap ? count_ : cap;
+    if (tab_ && n > 0) memcpy(out, tab_, n * sizeof(crosslua::Backend::BleAdvert));
+    const uint32_t now = millis();
+    for (int i = 0; i < n; i++) out[i].ageMs = now - seenAt_[i];
+    *dropped = dropped_;
+    portEXIT_CRITICAL(&mux_);
+    return tab_ ? n : 0;
+  }
+  void onResult(const NimBLEAdvertisedDevice* d) override {
+    crosslua::Backend::BleAdvert e;
+    memset(&e, 0, sizeof(e));
+    const std::string a = d->getAddress().toString();
+    for (size_t i = 0; i < a.size() && i < sizeof(e.addr) - 1; i++) e.addr[i] = static_cast<char>(toupper(static_cast<unsigned char>(a[i])));
+    e.addrType = d->getAddressType();
+    e.rssi = d->getRSSI();
+    e.advType = d->getAdvType();
+    e.connectable = d->isConnectable();
+    e.scannable = d->isScannable();
+    const std::vector<uint8_t>& pl = d->getPayload();
+    e.len = static_cast<uint8_t>(pl.size() < sizeof(e.data) ? pl.size() : sizeof(e.data));
+    if (e.len) memcpy(e.data, pl.data(), e.len);
+    const uint16_t al = d->getAdvLength();
+    e.advLen = static_cast<uint8_t>(al < e.len ? al : e.len);
+    portENTER_CRITICAL(&mux_);
+    if (tab_) {
+      int i = 0;
+      while (i < count_ && strcmp(tab_[i].addr, e.addr) != 0) i++;
+      if (i == count_ && count_ >= crosslua::Backend::BLE_MAX_ADVERTS) {
+        dropped_++;  // packets from devices that did not fit, not a count of devices
+      } else {
+        if (i == count_) count_++;
+        tab_[i] = e;
+        seenAt_[i] = millis();
+      }
+    }
+    portEXIT_CRITICAL(&mux_);
+  }
+
+ private:
+  portMUX_TYPE mux_ = portMUX_INITIALIZER_UNLOCKED;
+  crosslua::Backend::BleAdvert* tab_ = nullptr;
+  uint32_t seenAt_[crosslua::Backend::BLE_MAX_ADVERTS] = {};
+  int count_ = 0, dropped_ = 0;
+};
+#endif
+
 class LuaAppActivity::Backend final : public crosslua::Backend {
  public:
   Backend(GfxRenderer& r, MappedInputManager& in, std::string name, std::string dir, std::string entry)
@@ -134,7 +210,11 @@ class LuaAppActivity::Backend final : public crosslua::Backend {
   std::deque<std::pair<bool, crosslua::Backend::KeyInfo>> evKey;  // parallel to `events`: (is a key event, its details)
   bool haveKey = false;                   // the event popEvent() returned last was a Bluetooth key press
   crosslua::Backend::KeyInfo lastKey = {};
-  bool bleUp_ = false;                    // the Bluetooth stack (the SDK's BleKeyboardHost) is up
+  bool bleUp_ = false;                    // the Bluetooth stack (the SDK's BleKeyboardHost, or NimBLE itself in raw mode) is up
+  int bleMode_ = 0;                       // crosslua::Backend::BleMode of the running stack
+#if FREEINK_CAP_BLE_HID_HOST
+  RawObserver rawObs_;
+#endif
   int touchX = 0, touchY = 0;             // last finger position seen (a release has no coordinates of its own)
   std::string openBookPath;           // set by app.open_book(); the activity hands it to the reader
   std::string restartEntry;          // set by app.restart(); the activity starts a fresh VM from this script
@@ -755,7 +835,7 @@ class LuaAppActivity::Backend final : public crosslua::Backend {
     bleTarget_[0] = 0;
   }
   bool bleStart(const char* mode, char* err, size_t errCap) override {
-    (void)mode;  // "keyboard" is the only mode so far
+    const bool raw = mode && strcmp(mode, "raw") == 0;
     if (BleHid.isStopping()) {
       snprintf(err, errCap, "bluetooth is still shutting down: try again in a moment");
       return false;
@@ -772,9 +852,20 @@ class LuaAppActivity::Backend final : public crosslua::Backend {
     radioEverStarted_ = true;
     powerManager.setPowerSaving(false);  // begin() and end() must run at the normal CPU frequency; while the stack is up
                                          // LuaAppActivity::skipLoopDelay() keeps the main loop from clocking down
-    if (!BleHid.begin("CrossLua")) {
-      snprintf(err, errCap, "the Bluetooth stack did not start");
-      return false;
+    if (raw) {
+#if FREEINK_CAP_BLE_HID_HOST
+      if (!NimBLEDevice::init("CrossLua")) {
+        snprintf(err, errCap, "the Bluetooth stack did not start");
+        return false;
+      }
+      bleMode_ = crosslua::Backend::BLE_MODE_RAW;
+#endif
+    } else {
+      if (!BleHid.begin("CrossLua")) {
+        snprintf(err, errCap, "the Bluetooth stack did not start");
+        return false;
+      }
+      bleMode_ = crosslua::Backend::BLE_MODE_KEYBOARD;
     }
     bleUp_ = true;
     g_bluetoothHeld.store(true);
@@ -784,8 +875,18 @@ class LuaAppActivity::Backend final : public crosslua::Backend {
   }
   void bleStop() override {
     if (!bleUp_) return;
-    for (int i = 0; i < 4 && !BleHid.end(1000); i++) {
-    }  // each call waits at most 1 s; a later call carries on where the last stopped
+    if (bleMode_ == crosslua::Backend::BLE_MODE_RAW) {
+#if FREEINK_CAP_BLE_HID_HOST
+      NimBLEDevice::getScan()->stop();
+      NimBLEDevice::getScan()->clearResults();
+      NimBLEDevice::deinit(true);  // the NimBLE host + controller RAM goes back to the heap
+      rawObs_.release();
+#endif
+    } else {
+      for (int i = 0; i < 4 && !BleHid.end(1000); i++) {
+      }  // each call waits at most 1 s; a later call carries on where the last stopped
+    }
+    bleMode_ = crosslua::Backend::BLE_MODE_NONE;
     bleUp_ = false;
     g_bluetoothHeld.store(false);
     evKey.clear();
@@ -910,6 +1011,59 @@ class LuaAppActivity::Backend final : public crosslua::Backend {
         return true;
       }
     return false;
+  }
+  // --- raw mode: the observer ---
+  int bleMode() override { return bleUp_ ? bleMode_ : crosslua::Backend::BLE_MODE_NONE; }
+  bool bleObserve(int ms, bool active, char* err, size_t errCap) override {
+#if FREEINK_CAP_BLE_HID_HOST
+    if (!bleUp_ || bleMode_ != crosslua::Backend::BLE_MODE_RAW) {
+      snprintf(err, errCap, "bluetooth is not running in raw mode");
+      return false;
+    }
+    NimBLEScan* sc = NimBLEDevice::getScan();
+    if (sc->isScanning()) sc->stop();
+    if (!rawObs_.alloc()) {
+      snprintf(err, errCap, "not enough memory for the observer");
+      return false;
+    }
+    rawObs_.clear();
+    sc->setScanCallbacks(&rawObs_, true);  // true: every packet, so the signal strength and the data stay current
+    sc->setMaxResults(0);                  // NimBLE keeps nothing: our table is the only copy
+    sc->setActiveScan(active);
+    sc->setInterval(100);
+    sc->setWindow(90);
+    sc->setScanResponseTimeout(500);  // an active scan reports a scannable device when its response arrives, or after this
+    if (!sc->start(static_cast<uint32_t>(ms))) {
+      snprintf(err, errCap, "the scan did not start");
+      return false;
+    }
+    return true;
+#else
+    (void)ms; (void)active;
+    snprintf(err, errCap, "no bluetooth on this device");
+    return false;
+#endif
+  }
+  void bleObserveStop() override {
+#if FREEINK_CAP_BLE_HID_HOST
+    if (bleUp_ && bleMode_ == crosslua::Backend::BLE_MODE_RAW) NimBLEDevice::getScan()->stop();
+#endif
+  }
+  bool bleObserving() override {
+#if FREEINK_CAP_BLE_HID_HOST
+    return bleUp_ && bleMode_ == crosslua::Backend::BLE_MODE_RAW && NimBLEDevice::getScan()->isScanning();
+#else
+    return false;
+#endif
+  }
+  int bleAdverts(BleAdvert* out, int cap, int* dropped) override {
+#if FREEINK_CAP_BLE_HID_HOST
+    return rawObs_.snapshot(out, cap, dropped);
+#else
+    (void)out; (void)cap;
+    *dropped = 0;
+    return 0;
+#endif
   }
   bool eventKey(crosslua::Backend::KeyInfo* k) override {
     if (!haveKey) return false;
