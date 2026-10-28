@@ -1,0 +1,1 @@
+{"title": "BLE Spam (Swift Pair)", "description": "ACTIVE: broadcasts Swift Pair pairing beacons (Windows pairing prompts) with a chosen name until Back. Transmits.", "permissions": ["bluetooth"]}
