@@ -20,8 +20,12 @@ struct Parsed {
   int rev = 0;  // CrossLua revision; 0 when the string has no "-crosslua.N"
 };
 
+// "v2.0.0-crosslua.1" and "2.0.0-crosslua.1" are the same version: the release workflow names assets without the "v".
+inline const char* skipV(const char* v) { return (v != nullptr && (v[0] == 'v' || v[0] == 'V')) ? v + 1 : v; }
+
 inline Parsed parse(const char* v) {
   Parsed p;
+  v = skipV(v);
   if (v == nullptr) return p;
   sscanf(v, "%d.%d.%d", &p.major, &p.minor, &p.patch);
   const char* tag = strstr(v, "-crosslua.");

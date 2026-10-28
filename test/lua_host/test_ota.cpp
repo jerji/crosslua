@@ -5,6 +5,7 @@
 #include "src/network/OtaVersion.h"
 
 #include <cstdio>
+#include <cstring>
 
 static int fails = 0;
 #define CHECK(c) \
@@ -46,6 +47,13 @@ int ota_version_tests() {
   CHECK(p1.major == 9 && p1.minor == 9 && p1.patch == 9 && p1.rev == 12);
   const auto p2 = parse("7.8.9");
   CHECK(p2.major == 7 && p2.minor == 8 && p2.patch == 9 && p2.rev == 0);
+  // a leading "v" on a tag is ignored (assets are named without it)
+  CHECK(parse("v9.9.9-crosslua.7").rev == 7 && parse("v9.9.9-crosslua.7").major == 9);
+  CHECK(isNewer("v9.9.9-crosslua.6", "9.9.9-crosslua.5"));
+  CHECK(parse("V9.9.9-crosslua.2").major == 9 && parse("V9.9.9-crosslua.2").rev == 2);
+  CHECK(!isNewer("v9.9.9-crosslua.5", "9.9.9-crosslua.5"));
+  CHECK(std::strcmp(ota_version::skipV("v1.2.3"), "1.2.3") == 0 && std::strcmp(ota_version::skipV("1.2.3"), "1.2.3") == 0);
+  CHECK(ota_version::skipV(nullptr) == nullptr);
   CHECK(parse("garbage").major == 0 && parse(nullptr).rev == 0);
   if (fails) printf("OTA version tests: %d FAILED\n", fails);
   return fails;
