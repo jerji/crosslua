@@ -1,0 +1,1 @@
+{"title": "WiFi Heat Map", "description": "Walk a grid, sample one AP's signal at each spot, see the map, export CSV. Passive, receive only.", "permissions": ["network", "monitor"]}
