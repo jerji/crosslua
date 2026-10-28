@@ -18,15 +18,15 @@ local function footer(text)
 end
 
 -- Vertical menu: up/down move, confirm picks (returns index), back returns nil.
+local menu_cur = 1   -- persists across menu() calls so actions don't reset the highlight
 local function menu(title, items, hint)
-  local cur = 1
   while true do
     gfx.clear()
     W, H = gfx.size()
     header(title)
     local y = 60
     for i, label in ipairs(items) do
-      if i == cur then
+      if i == menu_cur then
         gfx.rect(10, y - 4, W - 20, LH + 4, true)
         gfx.text(18, y, label, "ui12", "w")
       else
@@ -38,11 +38,11 @@ local function menu(title, items, hint)
     gfx.present()
     local e = input.wait()
     if e == "up" then
-      cur = cur > 1 and cur - 1 or #items
+      menu_cur = menu_cur > 1 and menu_cur - 1 or #items
     elseif e == "down" then
-      cur = cur < #items and cur + 1 or 1
+      menu_cur = menu_cur < #items and menu_cur + 1 or 1
     elseif e == "confirm" then
-      return cur
+      return menu_cur
     elseif e == "back" then
       return nil
     end
