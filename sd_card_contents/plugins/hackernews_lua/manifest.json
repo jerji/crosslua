@@ -1,1 +1,1 @@
-{"title": "Hacker News", "description": "Front page and SAVED shelf: read stories, keep them on the card for offline.", "permissions": ["network"], "storage": {"write": ["HackerNews"]}}
+{"title": "Hacker News", "description": "Front page and SAVED shelf: read stories, keep them on the card for offline.", "permissions": ["network"], "storage": {"read": ["HackerNews"], "write": ["HackerNews"]}}
