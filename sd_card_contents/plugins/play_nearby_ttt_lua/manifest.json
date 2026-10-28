@@ -1,0 +1,1 @@
+{"title": "Play Nearby: Tic-tac-toe", "description": "Two-player tic-tac-toe over ESP-NOW with acks and retransmits. One device hosts (X), the other joins (O).", "permissions": ["network", "espnow"]}
