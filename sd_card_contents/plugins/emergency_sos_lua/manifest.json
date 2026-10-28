@@ -1,0 +1,1 @@
+{"title": "Emergency SOS", "description": "ESP-NOW SOS beacon: broadcast or send to one heard device, and show SOS messages nearby. Transmits until Back.", "permissions": ["network", "espnow"]}
