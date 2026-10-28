@@ -479,8 +479,9 @@ class Backend {
   virtual void frontlightSet(int brightness, int warmth, int on) = 0;
   // Raw DEFLATE (zlib=false) or zlib-wrapped (zlib=true) inflate into a malloc'd buffer the caller free()s.
   // Input up to 64 KB, output capped at maxOut bytes; refuses anything bigger.
-  virtual bool inflate(const char* data, size_t n, bool zlib, size_t maxOut, char** out, size_t* outLen, char* err,
-                       size_t errCap) = 0;
+  virtual bool inflate(const char* data, size_t n, bool zlib, size_t maxOut, bool stopAtMax, char** out,
+                       size_t* outLen, char* err, size_t errCap) = 0;  // stopAtMax: success once maxOut bytes are
+                                                                       // produced, even if the stream is not done
   // Outline (filled=false) or filled rounded rectangle.
   virtual void drawRoundedRect(int x, int y, int w, int h, int radius, bool black, bool filled) = 0;
   // Decode a PNG/JPEG (absolute SD path) into the CURRENT frame, fitted (never upscaled) and centred in the box

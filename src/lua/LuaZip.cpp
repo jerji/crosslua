@@ -156,17 +156,28 @@ int zip_read(lua_State* L) {
 
 }  // namespace
 
-// zip.inflate(bytes [, zlib]) -> string | nil, err. Decompress a raw DEFLATE stream (gzip member bodies,
-// .dict.dz) or a zlib-wrapped one. Input <= 64 KB, output <= 96 KB; one entry at a time, like zip.read.
+// zip.inflate(bytes [, zlib [, max_out]]) -> string | nil, err. Decompress a raw DEFLATE stream (gzip member
+// bodies, .dict.dz) or a zlib-wrapped one. max_out (optional) stops decompression at that many output bytes and
+// returns them even when the stream is not cleanly finished — the StarDict .dict.dz chunks are partial deflate
+// streams, so stop at a chunk's known uncompressed size. Input <= 64 KB, output <= max_out (default 96 KB).
 int zip_inflate(lua_State* L) {
   size_t n = 0;
   const char* data = luaL_checklstring(L, 1, &n);
   const bool zlib = lua_toboolean(L, 2);
+  size_t maxOut = 96 * 1024;
+  bool stopAtMax = false;
+  if (!lua_isnoneornil(L, 3)) {
+    const lua_Number mo = luaL_checknumber(L, 3);
+    if (mo < 1 || mo > 96 * 1024 || mo != static_cast<int>(mo))
+      return pushFail(L, "max_out must be an integer 1..98304");
+    maxOut = static_cast<size_t>(mo);
+    stopAtMax = true;  // an explicit max_out means "stop there", not "error beyond it"
+  }
   if (n < 1 || n > 64 * 1024) return pushFail(L, "input must be 1..65536 bytes");
   char err[96] = {0};
   char* out = nullptr;
   size_t outLen = 0;
-  if (!be(L).inflate(data, n, zlib, 96 * 1024, &out, &outLen, err, sizeof(err))) return pushFail(L, err);
+  if (!be(L).inflate(data, n, zlib, maxOut, stopAtMax, &out, &outLen, err, sizeof(err))) return pushFail(L, err);
   lua_pushlstring(L, out, outLen);
   free(out);
   return 1;

@@ -149,7 +149,7 @@ paths only (no `..`, no leading `/`).
 |---|---|
 | `zip.list(path [, max=64])` → `{ {name, size}… }, total` \| nil, err | `path` is any fs path (`sd:Books/a.epub`, `data:x.zip`). `max` 1…128; `total` is the real entry count; `size` is the uncompressed size |
 | `zip.read(path, entry [, max_bytes=32768])` → string \| nil, err | inflates one entry. Refuses entries over `max_bytes` (hard cap 65536) and when free RAM is short (inflate needs ~48 KB transient, so call it with a small Lua heap) |
-| `zip.inflate(bytes [, zlib])` → string \| nil, err | decompresses a raw DEFLATE stream (gzip member bodies, StarDict `.dict.dz` chunks) or, with `zlib=true`, a zlib-wrapped one. Input 1..65536 bytes, output at most 96 KB; one call at a time like `zip.read` |
+| `zip.inflate(bytes [, zlib [, max_out]])` → string \| nil, err | decompresses a raw DEFLATE stream (gzip member bodies, StarDict `.dict.dz` chunks) or, with `zlib=true`, a zlib-wrapped one. Input 1..65536 bytes, output at most 96 KB; one call at a time like `zip.read`. `max_out` (optional, 1..98304) stops decompression at that many output bytes and returns them even when the stream is not cleanly finished — pass a `.dict.dz` chunk's known uncompressed size and prefix the chunk, instead of erroring on a partial deflate stream |
 | `app.open_book(path)` → false, err \| (never returns) | `sd:` or `data:` file only. Parks the app, frees its memory and opens the file in the reader, replacing the app — save your state first |
 
 Typical EPUB metadata read (2 small entries, no RAM to speak of): `zip.read(p, "META-INF/container.xml")` → `full-path` of the OPF →

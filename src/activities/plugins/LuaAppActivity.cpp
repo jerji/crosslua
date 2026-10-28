@@ -2423,8 +2423,8 @@ class LuaAppActivity::Backend final : public crosslua::Backend {
     if (warmth >= 0 && Frontlight.hasColorTemperature()) Frontlight.setWarmth(static_cast<uint8_t>(warmth));
     if (on >= 0) Frontlight.setOn(on == 1);
   }
-  bool inflate(const char* data, size_t n, bool zlib, size_t maxOut, char** out, size_t* outLen, char* err,
-               size_t errCap) override {
+  bool inflate(const char* data, size_t n, bool zlib, size_t maxOut, bool stopAtMax, char** out, size_t* outLen,
+               char* err, size_t errCap) override {
     *out = nullptr;
     *outLen = 0;
     if (zlib) {
@@ -2458,6 +2458,7 @@ class LuaAppActivity::Backend final : public crosslua::Backend {
         snprintf(err, errCap, "corrupt deflate stream");
         return false;
       }
+      if (stopAtMax && have >= maxOut) break;  // caller asked for exactly this many: stop mid-stream, success
       if (cap >= maxOut) {
         free(buf);
         snprintf(err, errCap, "inflated data over %u bytes", (unsigned)maxOut);

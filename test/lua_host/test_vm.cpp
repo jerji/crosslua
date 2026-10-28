@@ -1135,8 +1135,8 @@ struct MockBackend : Backend {
     if (on >= 0) flOn = on == 1;
   }
   // The real InflateReader code (same as the firmware) over the generated vectors above.
-  bool inflate(const char* data, size_t n, bool zlib, size_t maxOut, char** out, size_t* outLen, char* err,
-               size_t errCap) override {
+  bool inflate(const char* data, size_t n, bool zlib, size_t maxOut, bool stopAtMax, char** out, size_t* outLen,
+               char* err, size_t errCap) override {
     *out = nullptr;
     *outLen = 0;
     if (zlib) {
@@ -1170,6 +1170,7 @@ struct MockBackend : Backend {
         snprintf(err, errCap, "corrupt deflate stream");
         return false;
       }
+      if (stopAtMax && have >= maxOut) break;
       if (cap >= maxOut) {
         free(buf);
         snprintf(err, errCap, "inflated data over %zu bytes", maxOut);
@@ -2846,13 +2847,21 @@ int main() {
       print(zip.inflate(("x"):rep(65537)))
       print(zip.inflate("ab", true))     -- too short to be zlib
       print(#zip.inflate(RAW) == 900)
+      -- max_out: stop mid-stream at exactly N bytes (StarDict .dict.dz chunk math), no clean-end required
+      print(#zip.inflate(RAW, false, 100))      -- 100 of 900: partial, success (no "over" error, no clean end)
+      print(#zip.inflate(RAW, false, 900))      -- exactly the full stream
+      print(#zip.inflate(RAW, false, 901))      -- stream Done before the cap: still 900
+      local x = zip.inflate(RAW, false, 100)
+      print(x == zip.inflate(RAW):sub(1, 100))  -- the first 100 bytes are a faithful prefix
+      print(zip.inflate(RAW, false, 0))         -- validation: out of range
+      print(zip.inflate(RAW, false, 98305))     -- validation: out of range
     )LUA";
     CHECK(vm.load("t", script, strlen(script)));
     CHECK(run(vm, be, 200000) == Status::Finished);
     if (getenv("DUMP_LOGS"))
       for (size_t i = 0; i < be.logs.size(); i++) printf("   [z%zu] %s\n", i, be.logs[i].c_str());
-    CHECK(be.logs.size() == 8);
-    if (be.logs.size() == 8) {
+    CHECK(be.logs.size() == 14);
+    if (be.logs.size() == 14) {
       CHECK(be.logs[0] == "900\tThe quick brown fox");
       CHECK(be.logs[1] == "250\tzlib-wrapped payload:");
       CHECK(be.logs[2] == "nil\tcorrupt deflate stream" && be.logs[3] == "nil\tcorrupt deflate stream");
@@ -2860,6 +2869,9 @@ int main() {
       CHECK(be.logs[5] == "nil\tinput must be 1..65536 bytes");
       CHECK(be.logs[6] == "nil\tnot a zlib stream");
       CHECK(be.logs[7] == "true");
+      CHECK(be.logs[8] == "100" && be.logs[9] == "900" && be.logs[10] == "900" && be.logs[11] == "true");
+      CHECK(be.logs[12] == "nil\tmax_out must be an integer 1..98304");
+      CHECK(be.logs[13] == "nil\tmax_out must be an integer 1..98304");
     }
   }
   {
