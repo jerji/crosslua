@@ -1,0 +1,1 @@
+{"title": "Home Assistant", "description": "Simple HA front end: see and toggle the entities you list (lights, switches, covers). Token kept in an encrypted vault.", "permissions": ["network"]}
