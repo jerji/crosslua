@@ -51,7 +51,7 @@ word. Order = leverage per effort, cheapest first. Everything here is NOT built 
 | 6 | `fs.volume()` (SD free/total), `fs.rmdir` (recursive) | disk-full warnings, cache clearing, archive/restore | S | **both done**: `fs.rmdir` (recursive, guards) + `fs.volume` → `{total, used, free}` bytes (device-verified) |
 | 7 | `wifi.scan` fields: BSSID, channel, auth mode, hidden | scanners, pickers, heat maps | S | **done**: rows are `{ssid, rssi, encrypted, bssid, channel, auth, hidden}` |
 | 8 | `net.mdns_advertise` (+ the UDP discovery companions use) | Calibre/transfer discovery | S | ✔ only `mdns_query` exists |
-| 9 | small getters: `system.reboot`, `system.language`, `system.mem`, `device.caps().model`, `time.tz`, `system.panic_info` | diagnostics, localisation | S | |
+| 9 | small getters: `system.reboot`, `system.language`, `system.mem`, `device.caps().model`, `time.tz`, `system.panic_info` | diagnostics, localisation | S | `system.reboot` + `system.language` **done**; `system.mem` ≈ `system.heap()`/`system.lua_mem()` (already exists); `device.caps().model`, `time.tz`, `system.panic_info` still open |
 | 10 | `wifi.set_mac` | MAC rotation | S | |
 | 11 | `gfx.wrap` / `gfx.char_width` / hyphenation helper | every text app hand-rolls line breaking | S | |
 | 12 | `crypto.aes_gcm` (+ `x25519`, `hkdf`) | encrypted logs, app-to-app crypto | S-M | **`aes_gcm` done** (NIST-vector verified); `x25519`/`hkdf` still open |

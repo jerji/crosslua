@@ -119,6 +119,7 @@ struct MockBackend : Backend {
   int battery() override { return 77; }
   BatteryStatus bat = {};  // fs.volume-style mock: .supported=false -> "no battery on this device"
   BatteryStatus batteryStatus() override { return bat; }
+  const char* language() override { return "English"; }
   void log(const char* m) override { logs.push_back(m); }
   std::string appNameVal = "test";
   bool secretOk = true;
@@ -1605,6 +1606,15 @@ int main() {
           "print(system.millis(), f, m, system.battery(), app.name(), app.dir(), w, h, b, u > 0)");
     CHECK(run(vm, be) == Status::Finished);
     CHECK(be.logs[0] == "5000\t123456\t100000\t77\ttest\t/plugins/test\t800\t480\t98304\ttrue");
+  }
+  {
+    TEST("system.language: UI language name");
+    LuaVm vm;
+    MockBackend be;
+    setup(vm, be, "print(system.language())");
+    CHECK(run(vm, be) == Status::Finished);
+    CHECK(be.logs.size() == 1);
+    if (be.logs.size() == 1) CHECK(be.logs[0] == "English");
   }
   {
     TEST("system.battery_info: full fields, omission of unknown, no-battery");

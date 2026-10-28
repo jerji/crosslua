@@ -324,6 +324,11 @@ int sys_battery(lua_State* L) {
   lua_pushinteger(L, be(L).battery());
   return 1;
 }
+// system.language() -> the UI language's native display name (e.g. "English", "Français")
+int sys_language(lua_State* L) {
+  lua_pushstring(L, be(L).language());
+  return 1;
+}
 
 // Pushes nil, err (the "errors are returned, not thrown" convention).
 static int pushErr2(lua_State* L, const char* msg) {
@@ -971,6 +976,7 @@ void registerApi(LuaVm& vm, Backend& backend) {
                                  {"lua_mem", sys_lua_mem},
                                  {"battery", sys_battery},
                                 {"battery_info", sys_battery_info},
+                                {"language", sys_language},
                                  {"mac", sys_mac},
                                  {"usb", sys_usb},
                                  {"dev_floor", sys_dev_floor},

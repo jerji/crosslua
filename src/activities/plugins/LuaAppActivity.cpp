@@ -11,6 +11,7 @@
 #include <HalMemory.h>
 #include <HalPowerManager.h>
 #include <BatteryMonitor.h>
+#include <I18n.h>
 #include <Imu.h>
 #include <LedManager.h>
 #include <Microphone.h>
@@ -550,6 +551,7 @@ class LuaAppActivity::Backend final : public crosslua::Backend {
     if (st.externalPowerKnown) s.externalPower = st.externalPower ? 1 : 0;
     return s;
   }
+  const char* language() override { return I18N.getLanguageName(I18N.getLanguage()); }
   int64_t epochNow() override { return trustedtime::trustedNow(); }
   bool localDate(int64_t epoch, int out[8]) override {
     const time_t t = static_cast<time_t>(epoch);

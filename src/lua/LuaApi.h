@@ -66,6 +66,9 @@ class Backend {
     int externalPower = -1;   // -1 unknown, 0 absent, 1 present (a full battery stops charging while still powered)
   };
   virtual BatteryStatus batteryStatus() = 0;
+  // The UI language's native display name (e.g. "English", "Français"). Points at a
+  // static table entry — valid for the process lifetime.
+  virtual const char* language() = 0;
   // Wall clock. epochNow() = UTC seconds, or 0 when the clock is not trustworthy (never synced / no RTC).
   virtual int64_t epochNow() = 0;
   // Local broken-down time for `epoch` -> out[0..7] = year, month(1-12), day(1-31), hour, min, sec, wday(1=Sunday),
