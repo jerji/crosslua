@@ -76,6 +76,11 @@ struct MockBackend : Backend {
   const char* popEvent() override {
     havePos = false;  // an empty poll or a button event has no position
     haveKey = false;  // ...and no key details either
+    // an "@ms" token holds every later event back until the mock clock reaches ms (a user who walks away and comes back)
+    while (!events.empty() && events.front()[0] == '@') {
+      if (now >= static_cast<uint32_t>(std::stoul(events.front().substr(1)))) events.pop_front();
+      else return nullptr;
+    }
     if (events.empty()) return nullptr;
     static std::string hold;
     hold = events.front();
@@ -103,7 +108,15 @@ struct MockBackend : Backend {
   size_t minFreeHeap() override { return 100000; }
   int battery() override { return 77; }
   void log(const char* m) override { logs.push_back(m); }
-  const char* appName() override { return "test"; }
+  std::string appNameVal = "test";
+  bool secretOk = true;
+  uint8_t secretBytes[32] = {0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31};
+  const char* appName() override { return appNameVal.c_str(); }
+  bool deviceKeyMaterial(uint8_t out[32]) override {
+    if (!secretOk) return false;
+    memcpy(out, secretBytes, 32);
+    return true;
+  }
   const char* appDir() override { return "/plugins/test"; }
   void requestExit() override { exitReq = true; }
   const char* dataDir() override { return "/.crosslua/data/test"; }
@@ -6457,6 +6470,591 @@ int main() {
       if (be.logs[i] != want[i]) printf("    wifi-side #%zu got '%s' want '%s'\n", i + 1, be.logs[i].c_str(), want[i]);
     }
     CHECK(!be.apUp && !be.enUp && !be.monUp && !be.txUp && !be.wifiUp);
+  }
+  {
+    TEST("crypto.device_key: per-app per-label HMAC of the device secret (vectors from python hmac), validation, no secret = clean error");
+    auto go = [&](MockBackend& be, const char* script) {
+      LuaVm vm;
+      CHECK(vm.open(128 * 1024));
+      registerApi(vm, be);
+      CHECK(vm.load("t", script, strlen(script)));
+      CHECK(run(vm, be, 100000) == Status::Finished);
+    };
+    auto expect = [&](MockBackend& be, std::vector<std::string> want, const char* tag) {
+      if (be.logs.size() != want.size()) { printf("    devkey %s: %zu logs, want %zu\n", tag, be.logs.size(), want.size()); for (auto& l : be.logs) printf("      '%s'\n", l.c_str()); }
+      CHECK(be.logs.size() == want.size());
+      for (size_t i = 0; i < want.size() && i < be.logs.size(); i++) {
+        CHECK(be.logs[i] == want[i]);
+        if (be.logs[i] != want[i]) printf("    devkey %s #%zu got '%s' want '%s'\n", tag, i + 1, be.logs[i].c_str(), want[i].c_str());
+      }
+    };
+    const std::string V_TEST_VAULT = "c08ad8310a9ea74608eab2b302a362638dc2c614014ecc5fe68cc371102d547b";  // hmac(secret=00..1f, "crosslua-device-key:v1\0test\0vault")
+    const std::string V_TEST_OTHER = "323a2c241e4433cb50bc7cf2611d7c1eee357d65148fac55cd7a218ec657b514";
+    const std::string V_NOTES_VAULT = "122c871a70f675c58e0a4808e46f0db25324015248f7ace702da550783dfadc6";  // app "Notes_Lua" is lower-cased
+    const std::string V_OTHERAPP_VAULT = "5deed0b4c3793805b7bc455ed3b2532bb56a617e1ef326c7b9a42f0fd01ca53e";
+    {
+      MockBackend be;
+      const char* script = R"LUA(
+        print(crypto.hex(crypto.device_key("vault")))
+        print(crypto.hex(crypto.device_key("other")))
+        print(#crypto.device_key("vault"))
+        print(crypto.device_key("vault") == crypto.device_key("vault"))
+        print(crypto.device_key("vault") == crypto.device_key("other"))
+      )LUA";
+      go(be, script);
+      expect(be, {V_TEST_VAULT, V_TEST_OTHER, "32", "true", "false"}, "vectors");
+    }
+    {
+      MockBackend be;  // the app name is part of the key and is case-folded (FAT ignores case)
+      be.appNameVal = "Notes_Lua";
+      go(be, "print(crypto.hex(crypto.device_key(\"vault\")))");
+      be.appNameVal = "notes_lua";
+      go(be, "print(crypto.hex(crypto.device_key(\"vault\")))");
+      be.appNameVal = "other";
+      go(be, "print(crypto.hex(crypto.device_key(\"vault\")))");
+      expect(be, {V_NOTES_VAULT, V_NOTES_VAULT, V_OTHERAPP_VAULT}, "app name");
+    }
+    {
+      MockBackend be;  // a different device secret gives a different key (a card copied to another device cannot derive it)
+      be.secretBytes[0] ^= 1;
+      go(be, "print(crypto.hex(crypto.device_key(\"vault\")))");
+      CHECK(be.logs.size() == 1 && be.logs[0] != V_TEST_VAULT && be.logs[0].size() == 64);
+    }
+    {
+      MockBackend be;  // label validation
+      const char* script = R"LUA(
+        local E = "label must be 1..64 bytes without NUL"
+        local k, e = crypto.device_key("")
+        print(k, e)
+        k, e = crypto.device_key(("x"):rep(65))
+        print(k, e)
+        print(#crypto.device_key(("x"):rep(64)))
+        print(#crypto.device_key("a"))
+        k, e = crypto.device_key("a\0b")
+        print(k, e)
+        print((pcall(crypto.device_key)))
+        print((pcall(crypto.device_key, {})))
+      )LUA";
+      go(be, script);
+      const std::string E = "nil\tlabel must be 1..64 bytes without NUL";
+      expect(be, {E, E, "32", "32", E, "false", "false"}, "label");
+    }
+    {
+      MockBackend be;  // no device secret: a clean error, never a key derived from zeros
+      be.secretOk = false;
+      go(be, "print(crypto.device_key(\"vault\"))");
+      expect(be, {"nil\tno device secret available (the key storage could not be read)"}, "no secret");
+    }
+    {
+      MockBackend be;  // an unusable app name
+      be.appNameVal = std::string(101, 'a');
+      go(be, "print(crypto.device_key(\"vault\"))");
+      be.appNameVal = std::string(100, 'a');
+      go(be, "print(#crypto.device_key(\"vault\"))");
+      be.appNameVal = "";
+      go(be, "print(crypto.device_key(\"vault\"))");
+      expect(be, {"nil\tthis app's folder name is too long to derive a key from", "32", "nil\tthis app's folder name is too long to derive a key from"}, "app name length");
+    }
+  }
+  {
+    TEST("vault.lua: matches an independent implementation (python hmac/pbkdf2 + openssl AES), roundtrip, PIN change, validation, tampering, device binding");
+    // python: dk = hmac(secret 00..1f, "crosslua-device-key:v1\0test\0vault-v1"); pre = hmac(dk, "1234"); master = pbkdf2(pre, salt a0..af, 1000, 32);
+    // enc/mac = hmac(master, "vault-enc\1"/"vault-mac\1"); AES-256-CBC (openssl) over "hello vault\n"*3; HMAC over header+ciphertext.
+    const std::string HEX =
+        "58564c5401000003e8a0a1a2a3a4a5a6a7a8a9aaabacadaeafc0c1c2c3c4c5c6c7c8c9cacbcccdcecfa67e0b8c8c6eb4e897edd3aa08f1a6c33426e692fac06a50271cc718"
+        "3ca42ca02936bc7bc0a6bf8680ba8501918a7dbcdbbb253d0274c99c0f3a76fdec6a2c591bbfcae528508018fe1ccc5291ae1a8c";
+    auto go = [&](MockBackend& be, const std::string& script) {
+      loadApp(be, "totp_lua");  // /plugins/test/vault.lua
+      LuaVm vm;
+      CHECK(vm.open(768 * 1024));
+      registerApi(vm, be);
+      CHECK(vm.load("t", script.data(), script.size()));
+      CHECK(run(vm, be, 2000000) == Status::Finished);
+    };
+    auto expect = [&](MockBackend& be, std::vector<std::string> want, const char* tag) {
+      if (be.logs.size() != want.size()) { printf("    vault %s: %zu logs, want %zu\n", tag, be.logs.size(), want.size()); for (auto& l : be.logs) printf("      '%s'\n", l.c_str()); }
+      CHECK(be.logs.size() == want.size());
+      for (size_t i = 0; i < want.size() && i < be.logs.size(); i++) {
+        CHECK(be.logs[i] == want[i]);
+        if (be.logs[i] != want[i]) printf("    vault %s #%zu got '%s' want '%s'\n", tag, i + 1, be.logs[i].c_str(), want[i].c_str());
+      }
+    };
+    const std::string BAD = "nil\twrong PIN or damaged vault";
+    const std::string PINMSG = "nil\tthe PIN must be 4..64 characters";
+    const std::string ITER = "nil\titerations must be 1000..20000";
+    {
+      MockBackend be;  // reference vector: byte-identical to the independent implementation, and the python-made file opens
+      go(be, "local EXPECTED = '" + HEX + R"LUA('
+        local vault = require("vault")
+        local salt = crypto.unhex("a0a1a2a3a4a5a6a7a8a9aaabacadaeaf")
+        local iv = crypto.unhex("c0c1c2c3c4c5c6c7c8c9cacbcccdcecf")
+        local pt = ("hello vault\n"):rep(3)
+        print(crypto.hex(vault._seal_for_test("1234", salt, iv, 1000, pt)) == EXPECTED)
+        fs.write("data:ref.bin", crypto.unhex(EXPECTED))
+        local v, e = vault.unlock("data:ref.bin", "1234")
+        print(v and v.data == pt, e)
+        print(vault.unlock("data:ref.bin", "1235"))
+        print(vault.unlock("data:ref.bin", 1234))
+      )LUA");
+      expect(be, {"true", "true\tnil", BAD, BAD}, "reference");
+    }
+    {
+      MockBackend be;  // roundtrip: fresh IV per save (same salt), new salt on a PIN change, the old PIN stops working, lock() is final
+      go(be, R"LUA(
+        local vault = require("vault")
+        local v, e = vault.create("data:v.bin", "4321", "secret one", 1000)
+        print(v ~= nil, e)
+        local blob1 = fs.read("data:v.bin")
+        print(#blob1 == 41 + 16 + 32, blob1:sub(1, 4))  -- header + one padded AES block + mac
+        local v2 = vault.create("data:v2.bin", "4321", "secret one", 1000)  -- same PIN and text: salt and IV still differ
+        local b2 = fs.read("data:v2.bin")
+        print(b2:sub(10, 25) ~= blob1:sub(10, 25), b2:sub(26, 41) ~= blob1:sub(26, 41))
+        v.data = "secret two"
+        print(v:save())
+        local blob2 = fs.read("data:v.bin")
+        print(blob1:sub(10, 25) == blob2:sub(10, 25), blob1:sub(26, 41) ~= blob2:sub(26, 41))
+        local u = vault.unlock("data:v.bin", "4321")
+        print(u.data)
+        print(u:change_pin("12"))
+        print(vault.unlock("data:v.bin", "4321") ~= nil)
+        print(u:change_pin("9876"))
+        local blob3 = fs.read("data:v.bin")
+        print(blob3:sub(10, 25) ~= blob2:sub(10, 25))
+        print(vault.unlock("data:v.bin", "4321"))
+        local w = vault.unlock("data:v.bin", "9876")
+        print(w.data)
+        print(w:lock(), w:is_locked(), w.data, w:save(), w:change_pin("1111"))
+        print(w:save())
+        print(vault.create("data:v.bin", "4321", "x", 1000))
+        print(vault.exists("data:v.bin"), vault.exists("data:none.bin"))
+      )LUA");
+      expect(be, {"true\tnil", "true\tXVLT", "true\ttrue", "true", "true\ttrue", "secret two", PINMSG, "true", "true", "true", BAD, "secret two",
+                  "true\ttrue\tnil\tnil\tnil\tthe vault is locked", "nil\tthe vault is locked", "nil\ta vault already exists there", "true\tfalse"},
+             "roundtrip");
+    }
+    {
+      MockBackend be;  // argument validation and the shapes of unreadable files
+      go(be, R"LUA(
+        local vault = require("vault")
+        print(vault.create("data:a.bin", "123", "x", 1000))
+        print(vault.create("data:a.bin", ("p"):rep(65), "x", 1000))
+        print(vault.create("data:a.bin", 1234, "x", 1000))
+        print(vault.create("data:a.bin", "1234", "x", 999))
+        print(vault.create("data:a.bin", "1234", "x", 20001))
+        print(vault.create("data:a.bin", "1234", "x", 1500.5))
+        print(vault.create("data:a.bin", "1234", ("x"):rep(24 * 1024 + 1), 1000))
+        print(vault.exists("data:a.bin"))
+        local ok = vault.create("data:a.bin", ("p"):rep(64), ("x"):rep(24 * 1024), 1000)
+        print(ok ~= nil)
+        local ok2 = vault.create("data:b.bin", "1234", "", 1000)
+        print(ok2 ~= nil, ok2.data == "")
+        print(vault.unlock("data:missing.bin", "1234"))
+        fs.write("data:junk.bin", "short")
+        print(vault.unlock("data:junk.bin", "1234"))
+      )LUA");
+      expect(be, {PINMSG, PINMSG, PINMSG, ITER, ITER, ITER, "nil\tthe vault holds at most 24 KB", "false", "true", "true\ttrue", "nil\tno vault",
+                  "nil\tnot a vault file"},
+             "validation");
+    }
+    {
+      MockBackend be;  // tampering: every byte of the file is authenticated, the header checks run before any key work
+      go(be, "local EXPECTED = '" + HEX + R"LUA('
+        local vault = require("vault")
+        local good = crypto.unhex(EXPECTED)
+        local function try(name, bytes) fs.write("data:" .. name, bytes); return vault.unlock("data:" .. name, "1234") end
+        local function flip(s, i) return s:sub(1, i - 1) .. string.char(s:byte(i) ~ 1) .. s:sub(i + 1) end
+        print((try("ok.bin", good)) ~= nil)
+        print(try("mac.bin", flip(good, #good)))
+        print(try("ct.bin", flip(good, 45)))
+        print(try("salt.bin", flip(good, 12)))
+        print(try("iv.bin", flip(good, 30)))
+        print(try("iter.bin", good:sub(1, 5) .. string.pack(">I4", 1001) .. good:sub(10)))
+        print(try("trunc.bin", good:sub(1, #good - 1)))
+        print(try("magic.bin", flip(good, 1)))
+        print(try("ver.bin", good:sub(1, 4) .. "\2" .. good:sub(6)))
+        print(try("iterlo.bin", good:sub(1, 5) .. string.pack(">I4", 999) .. good:sub(10)))
+        print(try("iterhi.bin", good:sub(1, 5) .. string.pack(">I4", 20001) .. good:sub(10)))
+        print(try("short.bin", good:sub(1, 88)))
+      )LUA");
+      expect(be, {"true", BAD, BAD, BAD, BAD, BAD, BAD, "nil\tnot a vault file", "nil\tunsupported vault version", "nil\tunsupported vault settings",
+                  "nil\tunsupported vault settings", "nil\tnot a vault file"},
+             "tamper");
+    }
+    {
+      MockBackend be;  // device binding: the same file under another device secret does not open; no secret is an honest error
+      go(be, "local vault = require('vault'); print(vault.create('data:d.bin', '4321', 'bound', 1000) ~= nil)");
+      be.secretBytes[0] ^= 1;
+      go(be, "local vault = require('vault'); print(vault.unlock('data:d.bin', '4321'))");
+      be.secretBytes[0] ^= 1;
+      go(be, "local vault = require('vault'); local v = vault.unlock('data:d.bin', '4321'); print(v and v.data)");
+      be.secretOk = false;
+      go(be, "local vault = require('vault'); print(vault.unlock('data:d.bin', '4321'))\nprint(vault.create('data:e.bin', '4321', 'x', 1000))");
+      const std::string NOSEC = "nil\tno device secret available (the key storage could not be read)";
+      expect(be, {"true", BAD, "bound", NOSEC, NOSEC}, "device binding");
+    }
+  }
+  {
+    TEST("totp.lua: RFC 6238 vectors + python-generated codes (digits/period/SHA1/SHA256), base32, validation, otpauth:// parsing");
+    auto go = [&](MockBackend& be, const std::string& script) {
+      loadApp(be, "totp_lua");
+      LuaVm vm;
+      CHECK(vm.open(512 * 1024));
+      registerApi(vm, be);
+      CHECK(vm.load("t", script.data(), script.size()));
+      CHECK(run(vm, be, 2000000) == Status::Finished);
+    };
+    auto expect = [&](MockBackend& be, std::vector<std::string> want, const char* tag) {
+      if (be.logs.size() != want.size()) { printf("    totp %s: %zu logs, want %zu\n", tag, be.logs.size(), want.size()); for (auto& l : be.logs) printf("      '%s'\n", l.c_str()); }
+      CHECK(be.logs.size() == want.size());
+      for (size_t i = 0; i < want.size() && i < be.logs.size(); i++) {
+        CHECK(be.logs[i] == want[i]);
+        if (be.logs[i] != want[i]) printf("    totp %s #%zu got '%s' want '%s'\n", tag, i + 1, be.logs[i].c_str(), want[i].c_str());
+      }
+    };
+    {
+      MockBackend be;  // RFC 6238 appendix B (8 digits; the 20000000000 row needs a 64-bit time, so it is not used)
+      go(be, R"LUA(
+        local totp = require("totp")
+        local s1, s256 = "12345678901234567890", "12345678901234567890123456789012"
+        for _, t in ipairs{59, 1111111109, 1111111111, 1234567890, 2000000000} do
+          print(t, totp.code(s1, t, {digits = 8}), totp.code(s256, t, {digits = 8, alg = "SHA256"}))
+        end
+      )LUA");
+      expect(be, {"59\t94287082\t46119246", "1111111109\t07081804\t68084774", "1111111111\t14050471\t67062674", "1234567890\t89005924\t91819424",
+                  "2000000000\t69279037\t90698825"},
+             "rfc");
+    }
+    {
+      MockBackend be;  // codes from an independent python implementation (hmac + struct), incl. a leading zero and a 45 s period
+      go(be, R"LUA(
+        local totp = require("totp")
+        local sec = totp.b32decode("JBSWY3DPEHPK3PXP")
+        print(crypto.hex(sec))
+        print(totp.code(sec, 1700000000))
+        for _, c in ipairs{{6, 30, "SHA1"}, {7, 30, "SHA1"}, {8, 30, "SHA1"}, {6, 60, "SHA1"}, {6, 30, "SHA256"}, {8, 45, "SHA256"}} do
+          local o = {digits = c[1], period = c[2], alg = c[3]}
+          print(c[1], c[2], c[3], totp.code(sec, 1700000000, o), totp.code(sec, 1700000029, o), totp.code(sec, 1700000030, o))
+        end
+      )LUA");
+      expect(be, {"48656c6c6f21deadbeef", "324550", "6\t30\tSHA1\t324550\t367665\t367665", "7\t30\tSHA1\t2324550\t2367665\t2367665",
+                  "8\t30\tSHA1\t02324550\t02367665\t02367665", "6\t60\tSHA1\t508648\t508648\t508648", "6\t30\tSHA256\t049486\t315597\t315597",
+                  "8\t45\tSHA256\t64158300\t59961940\t59961940"},
+             "python");
+    }
+    {
+      MockBackend be;  // base32: case, separators, padding, bad input
+      go(be, R"LUA(
+        local totp = require("totp")
+        print(crypto.hex(totp.b32decode("jbsw y3dp-ehpk 3pxp")))
+        print(totp.b32decode("MZXW6==="), totp.b32decode("MZXW6"))
+        print(totp.b32decode("MZXW6YQ="))
+        print(totp.b32decode("A"))
+        print(totp.b32decode("AB1D"))
+        print(totp.b32decode(""))
+        print(totp.b32decode("===="))
+        print(totp.b32decode(5))
+      )LUA");
+      expect(be, {"48656c6c6f21deadbeef", "foo\tfoo", "foob", "nil\tnot base32", "nil\tnot base32", "nil\tempty secret", "nil\tempty secret", "nil\tnot base32"}, "base32");
+    }
+    {
+      MockBackend be;  // code() validation and remaining()
+      go(be, R"LUA(
+        local totp = require("totp")
+        local s = "12345678901234567890"
+        print(totp.code(s, 59, {digits = 5}))
+        print(totp.code(s, 59, {digits = 9}))
+        print(totp.code(s, 59, {period = 0}))
+        print(totp.code(s, 59, {period = 301}))
+        print(totp.code(s, 59, {period = 30.5}))
+        print(totp.code(s, 59, {alg = "SHA512"}))
+        print(totp.code(s, -1))
+        print(totp.code(s, 59.5))
+        print(totp.code("", 59))
+        print(totp.code(5, 59))
+        print(totp.code(s, 59, {alg = "sha256"}) ~= nil)
+        print(totp.code(s, 59, {period = 300}) ~= nil, totp.code(s, 59, {period = 1}) ~= nil)
+        print(totp.remaining(1700000000, 30), totp.remaining(60, 30), totp.remaining(59, 30), totp.remaining(7), totp.remaining(10, 45))
+      )LUA");
+      const std::string D = "nil\tdigits must be 6, 7 or 8", P = "nil\tperiod must be 1..300 seconds", T = "nil\ttime must be a non-negative integer";
+      expect(be, {D, D, P, P, P, "nil\tunsupported algorithm (SHA1 and SHA256 only)", T, T, "nil\tempty secret", "nil\tempty secret", "true", "true\ttrue",
+                  "10\t30\t1\t23\t35"},
+             "validation");
+    }
+    {
+      MockBackend be;  // otpauth:// links
+      go(be, R"LUA(
+        local totp = require("totp")
+        local function show(u)
+          local r, e = totp.parse_uri(u)
+          if r then print(r.name, r.issuer, r.secret, r.digits, r.period, r.alg) else print(nil, e) end
+        end
+        show("otpauth://totp/Example%3Aalice%40example.com?secret=jbsw%20y3dp-ehpk-3pxp&issuer=Example&algorithm=sha256&digits=8&period=45")
+        show("otpauth://totp/GitHub:bob?secret=JBSWY3DPEHPK3PXP")
+        show("otpauth://totp/plainlabel?secret=JBSWY3DPEHPK3PXP&issuer=Acme+Corp")
+        show("otpauth://totp/Old:me?secret=JBSWY3DPEHPK3PXP&issuer=New")
+        show("  otpauth://totp/x?secret=JBSWY3DPEHPK3PXP\n")
+        show("otpauth://totp/?secret=JBSWY3DPEHPK3PXP&issuer=Zed")
+        show("otpauth://hotp/x?secret=JBSWY3DPEHPK3PXP")
+        show("otpauth://totp/x?issuer=Zed")
+        show("otpauth://totp/x?secret=0189")
+        show("otpauth://totp/x?secret=JBSWY3DPEHPK3PXP&digits=5")
+        show("otpauth://totp/x?secret=JBSWY3DPEHPK3PXP&period=500")
+        show("otpauth://totp/x?secret=JBSWY3DPEHPK3PXP&algorithm=SHA512")
+        show(42)
+      )LUA");
+      expect(be,
+             {"alice@example.com\tExample\tJBSWY3DPEHPK3PXP\t8\t45\tSHA256", "bob\tGitHub\tJBSWY3DPEHPK3PXP\t6\t30\tSHA1",
+              "plainlabel\tAcme Corp\tJBSWY3DPEHPK3PXP\t6\t30\tSHA1", "me\tNew\tJBSWY3DPEHPK3PXP\t6\t30\tSHA1", "x\t\tJBSWY3DPEHPK3PXP\t6\t30\tSHA1",
+              "Zed\tZed\tJBSWY3DPEHPK3PXP\t6\t30\tSHA1", "nil\tnot an otpauth://totp/ link", "nil\tno secret in the link", "nil\tnot base32",
+              "nil\tdigits must be 6, 7 or 8", "nil\tperiod must be 1..300 seconds", "nil\tunsupported algorithm (SHA1 and SHA256 only)",
+              "nil\tnot an otpauth://totp/ link"},
+             "uri");
+    }
+  }
+  {
+    TEST("totp_lua app: digit-wheel PIN, setup, wrong PIN, add, import, delete, change PIN, lock, idle lock, no clock (the real main.lua, scripted keys and typed text)");
+    struct Drive { std::vector<std::string> titles; std::vector<int> modes; bool finished = false; size_t textsLeft = 0, eventsLeft = 0; };
+    // keys that enter a numeric PIN on the wheel: up x digit, right to lock it in, confirm after the last one
+    auto PIN = [](const std::string& d) {
+      std::vector<std::string> k;
+      for (size_t i = 0; i < d.size(); i++) {
+        for (int j = 0; j < d[i] - '0'; j++) k.push_back("up");
+        k.push_back(i + 1 < d.size() ? "right" : "confirm");
+      }
+      return k;
+    };
+    auto KEYS = [](std::initializer_list<std::vector<std::string>> parts) {
+      std::deque<std::string> out;
+      for (auto& p : parts) for (auto& e : p) out.push_back(e);
+      return out;
+    };
+    // an "@ms" token waits (on the mock clock, through the app's own timeouts) until ms have passed; a screen that waits for a key
+    // with no timeout drops the token, like a user who walks away and comes back
+    auto drive = [&](MockBackend& be, std::deque<std::string> texts, std::deque<std::string> keys) {
+      Drive d;
+      std::string src = loadApp(be, "totp_lua");
+      be.calls.clear();
+      be.exitReq = false;
+      be.now = 0;  // every run starts at the same instant: the clock is 20 s into a 30 s window
+      be.events = keys;
+      LuaVm vm;
+      CHECK(vm.open(768 * 1024));
+      registerApi(vm, be);
+      CHECK(vm.load("totp", src.data(), src.size()));
+      for (int i = 0; i < 20000; i++) {
+        Status s = vm.status();
+        if (s == Status::Error) { printf("  [lua error] %s\n", vm.error().c_str()); break; }
+        if (s == Status::Finished || be.exitReq) { d.finished = true; break; }
+        if (s == Status::Waiting) {
+          if (be.textAsked) {
+            be.textAsked = false;
+            d.titles.push_back(be.textTitle);
+            d.modes.push_back(be.textMode);
+            if (texts.empty()) { vm.resume("text:cancel"); }
+            else { std::string r = "text:ok:" + texts.front(); texts.pop_front(); vm.resume(r.c_str()); }
+          } else if (!be.events.empty() && be.events.front()[0] == '@') {
+            const uint32_t target = static_cast<uint32_t>(std::stoul(be.events.front().substr(1)));
+            if (be.now < target && vm.timeoutMs() >= 0) { be.now += static_cast<uint32_t>(vm.timeoutMs()); vm.resume(nullptr); }
+            else be.events.pop_front();
+          } else if (vm.wakesOnEvent() && !be.events.empty()) {
+            std::string e = be.events.front();
+            be.events.pop_front();
+            vm.resume(e.c_str());
+          } else if (vm.timeoutMs() >= 0) {
+            be.now += static_cast<uint32_t>(vm.timeoutMs());
+            vm.resume(nullptr);
+          } else break;  // would wait forever
+        } else vm.resume();
+      }
+      d.textsLeft = texts.size();
+      d.eventsLeft = be.events.size();
+      return d;
+    };
+    auto shown = [&](MockBackend& be, const std::string& s) {
+      for (auto& c : be.calls) if (c.find(s) != std::string::npos) return true;
+      return false;
+    };
+    auto lastAt = [&](MockBackend& be, const std::string& s) {
+      for (int i = static_cast<int>(be.calls.size()) - 1; i >= 0; i--) if (be.calls[i].find(s) != std::string::npos) return i;
+      return -1;
+    };
+    auto lua = [&](MockBackend& be, const std::string& script) {
+      loadApp(be, "totp_lua");
+      be.logs.clear();
+      be.exitReq = false;  // the previous app run ended with app.exit()
+      LuaVm vm;
+      CHECK(vm.open(512 * 1024));
+      registerApi(vm, be);
+      CHECK(vm.load("t", script.data(), script.size()));
+      CHECK(run(vm, be, 2000000) == Status::Finished);
+    };
+    auto vec = [](std::vector<std::string> v) { return v; };
+    MockBackend be;
+    be.epoch = 1700000000;  // clock: 20 s into a 30 s window (python: 324550 now, 367665 after the boundary)
+    {
+      // A. first start: intro, PIN twice on the wheel, add one account by typing
+      Drive d = drive(be, {"GitHub", "", "JBSWY3DPEHPK3PXP"}, KEYS({{"confirm"}, PIN("1234"), PIN("1234"), {"confirm", "confirm", "confirm", "back"}}));
+      CHECK(d.finished && d.textsLeft == 0 && d.eventsLeft == 0);
+      CHECK(d.titles == vec({"Account name", "Issuer (optional)", "Secret (base32)"}) && d.modes[0] == 0);
+      CHECK(shown(be, ":GitHub:") && shown(be, ":324 550:") && shown(be, ":10 s:"));
+      lua(be, "local vault = require('vault'); local v = vault.unlock('data:vault.bin', '1234'); local db = json.decode(v.data); print(#db.accounts, db.accounts[1].name, db.accounts[1].secret, db.accounts[1].digits, db.accounts[1].period, db.accounts[1].alg)");
+      CHECK(be.logs.size() == 1 && be.logs[0] == "1\tGitHub\tJBSWY3DPEHPK3PXP\t6\t30\tSHA1");
+    }
+    {
+      // B. next start: wrong PIN, message, right PIN, the list shows the account
+      Drive d = drive(be, {}, KEYS({PIN("0000"), {"confirm"}, PIN("1234"), {"back"}}));
+      CHECK(d.finished && d.textsLeft == 0 && d.eventsLeft == 0 && d.titles.empty());
+      CHECK(shown(be, "Wrong PIN") && shown(be, ":GitHub:"));
+      CHECK(shown(be, "Spin each digit") && shown(be, ":*:"));  // the wheel was drawn and locked digits are masked
+    }
+    {
+      // C. back on the wheel leaves the app; left on the first digit offers the keyboard (a passphrase is the same string)
+      Drive c = drive(be, {}, {"back"});
+      CHECK(c.finished && c.eventsLeft == 0 && !shown(be, ":GitHub:"));
+      Drive k = drive(be, {"1234"}, {"left", "back"});
+      CHECK(k.finished && k.eventsLeft == 0 && k.titles == vec({"Enter PIN (passphrase)"}) && k.modes[0] == 1 && shown(be, ":GitHub:"));
+    }
+    {
+      // D. import: two bad lines are skipped, the file is deleted, the account is stored
+      lua(be, "fs.write('data:import.txt', 'otpauth://totp/Acme:bob?secret=JBSWY3DPEHPK3PXP&issuer=Acme\\nhello\\n  \t\\notpauth://hotp/x?secret=JBSWY3DPEHPK3PXP\\n')");
+      Drive d = drive(be, {}, KEYS({PIN("1234"), {"confirm", "down", "confirm", "confirm", "back"}}));
+      CHECK(d.finished && d.eventsLeft == 0);
+      CHECK(shown(be, ":Added 1, skipped 2.:") && shown(be, ":import.txt was deleted from the card.:"));
+      lua(be, "print(fs.exists('data:import.txt')); local vault = require('vault'); local db = json.decode(vault.unlock('data:vault.bin', '1234').data); print(#db.accounts, db.accounts[2].name, db.accounts[2].issuer)");
+      CHECK(be.logs.size() == 2 && be.logs[0] == "false" && be.logs[1] == "2\tbob\tAcme");
+      // importing again with no file explains where to put it; importing the same link again adds nothing
+      Drive d2 = drive(be, {}, KEYS({PIN("1234"), {"confirm", "down", "confirm", "confirm", "back"}}));
+      CHECK(d2.finished && d2.eventsLeft == 0 && shown(be, "import.txt"));
+      lua(be, "fs.write('data:import.txt', 'otpauth://totp/Acme:bob?secret=JBSWY3DPEHPK3PXP&issuer=Acme\\n')");
+      Drive d3 = drive(be, {}, KEYS({PIN("1234"), {"confirm", "down", "confirm", "confirm", "back"}}));
+      CHECK(d3.finished && d3.eventsLeft == 0 && shown(be, ":Added 0, skipped 1.:"));
+    }
+    {
+      // E. delete: "Keep it" changes nothing, "Delete it" removes the selected account (the last row, however often down is pressed)
+      Drive keep = drive(be, {}, KEYS({PIN("1234"), {"confirm", "down", "down", "confirm", "confirm", "back"}}));
+      CHECK(keep.finished && keep.eventsLeft == 0);
+      lua(be, "local vault = require('vault'); print(#json.decode(vault.unlock('data:vault.bin', '1234').data).accounts)");
+      CHECK(be.logs.size() == 1 && be.logs[0] == "2");
+      Drive del = drive(be, {}, KEYS({PIN("1234"), {"down", "down", "down", "confirm", "down", "down", "confirm", "down", "confirm", "back"}}));
+      CHECK(del.finished && del.eventsLeft == 0);
+      lua(be, "local vault = require('vault'); local db = json.decode(vault.unlock('data:vault.bin', '1234').data); print(#db.accounts, db.accounts[1].name)");
+      CHECK(be.logs.size() == 1 && be.logs[0] == "1\tGitHub");
+    }
+    {
+      // F. change PIN: a short passphrase and a mismatch are refused (vault unchanged), then it works and the old PIN stops working
+      const std::vector<std::string> TO_CHANGE = {"confirm", "down", "down", "down", "confirm"};
+      Drive d1 = drive(be, {"12"}, KEYS({PIN("1234"), TO_CHANGE, {"left", "confirm", "back"}}));
+      CHECK(d1.finished && d1.eventsLeft == 0 && d1.titles == vec({"New PIN (passphrase)"}) && shown(be, "PIN too short"));
+      Drive d2 = drive(be, {}, KEYS({PIN("1234"), TO_CHANGE, PIN("5678"), PIN("5679"), {"confirm", "back"}}));
+      CHECK(d2.finished && d2.eventsLeft == 0 && shown(be, "PINs differ"));
+      lua(be, "local vault = require('vault'); print(vault.unlock('data:vault.bin', '1234') ~= nil)");
+      CHECK(be.logs.size() == 1 && be.logs[0] == "true");
+      Drive d3 = drive(be, {}, KEYS({PIN("1234"), TO_CHANGE, PIN("5678"), PIN("5678"), {"confirm", "back"}}));
+      CHECK(d3.finished && d3.eventsLeft == 0 && shown(be, "PIN changed"));
+      lua(be, "local vault = require('vault'); print(vault.unlock('data:vault.bin', '1234')); local v = vault.unlock('data:vault.bin', '5678'); print(#json.decode(v.data).accounts)");
+      CHECK(be.logs.size() == 2 && be.logs[0] == "nil\twrong PIN or damaged vault" && be.logs[1] == "1");
+    }
+    {
+      // G. "Lock now" asks for the PIN again; H. an idle app locks itself after two minutes and the code changes at the window boundary
+      Drive g = drive(be, {}, KEYS({PIN("5678"), {"confirm", "down", "down", "down", "down", "confirm"}, PIN("5678"), {"back"}}));
+      CHECK(g.finished && g.eventsLeft == 0);
+      Drive h = drive(be, {}, KEYS({PIN("5678"), {"@125000", "back"}}));
+      CHECK(h.finished && h.eventsLeft == 0);
+      CHECK(shown(be, ":324 550:") && shown(be, ":367 665:"));  // before and after the first boundary (python values)
+      CHECK(be.now >= 120000 && lastAt(be, ":Enter PIN:") > lastAt(be, ":GitHub:"));  // the PIN wheel is on screen after the list: it locked
+    }
+    {
+      // I. without a trusted clock the list says so and shows no codes
+      be.epoch = 0;
+      Drive d = drive(be, {}, KEYS({PIN("5678"), {"back"}}));
+      CHECK(d.finished && d.eventsLeft == 0 && shown(be, "The clock is not set") && shown(be, ":GitHub:") && !shown(be, ":324 550:"));
+      be.epoch = 1700000000;
+    }
+    {
+      // J. typed input: a bad secret, a duplicate, and a lower-case secret with spaces (normalised)
+      Drive bad = drive(be, {"Bad", "", "not base32!"}, KEYS({PIN("5678"), {"confirm", "confirm", "confirm", "back"}}));
+      CHECK(bad.finished && bad.eventsLeft == 0 && shown(be, "Bad secret"));
+      Drive dup = drive(be, {"GitHub", "", "JBSWY3DPEHPK3PXP"}, KEYS({PIN("5678"), {"confirm", "confirm", "confirm", "back"}}));
+      CHECK(dup.finished && dup.eventsLeft == 0 && shown(be, "Not added") && shown(be, ":already there:"));
+      Drive ok = drive(be, {"Mail", "Fastmail", "jbsw y3dp ehpk 3pxp"}, KEYS({PIN("5678"), {"confirm", "confirm", "confirm", "back"}}));
+      CHECK(ok.finished && ok.eventsLeft == 0 && shown(be, ":Added:"));
+      lua(be, "local vault = require('vault'); local db = json.decode(vault.unlock('data:vault.bin', '5678').data); print(#db.accounts, db.accounts[2].name, db.accounts[2].issuer, db.accounts[2].secret)");
+      CHECK(be.logs.size() == 1 && be.logs[0] == "2\tMail\tFastmail\tJBSWY3DPEHPK3PXP");
+    }
+    {
+      // K. no device secret, a damaged file and unreadable contents all end in a clear message, never in a crash
+      be.secretOk = false;
+      Drive nos = drive(be, {}, KEYS({PIN("5678"), {"confirm"}}));
+      CHECK(nos.finished && nos.eventsLeft == 0 && shown(be, "Cannot open the vault") && shown(be, "device secret"));
+      be.secretOk = true;
+      lua(be, "local b = fs.read('data:vault.bin'); fs.write('data:vault.bak', b); fs.write('data:vault.bin', b:sub(1, #b - 1) .. string.char(b:byte(#b) ~ 1))");
+      Drive dmg = drive(be, {}, KEYS({PIN("5678"), {"confirm", "back"}}));
+      CHECK(dmg.finished && dmg.eventsLeft == 0 && shown(be, "Wrong PIN"));
+      lua(be, "fs.write('data:vault.bin', fs.read('data:vault.bak'))");
+      lua(be, "local vault = require('vault'); local v = vault.unlock('data:vault.bin', '5678'); v.data = '[[[['; print(v:save())");
+      Drive junk = drive(be, {}, KEYS({PIN("5678"), {"confirm"}}));
+      CHECK(junk.finished && junk.eventsLeft == 0 && shown(be, "Vault unreadable"));
+    }
+    {
+      // L. a vault whose JSON has no accounts is "unreadable" too
+      lua(be, "local vault = require('vault'); local v = vault.unlock('data:vault.bin', '5678'); v.data = '{\"foo\":1}'; print(v:save())");
+      Drive nojson = drive(be, {}, KEYS({PIN("5678"), {"confirm"}}));
+      CHECK(nojson.finished && nojson.eventsLeft == 0 && shown(be, "Vault unreadable") && !shown(be, "Authenticator error"));
+      lua(be, "local vault = require('vault'); local v = vault.unlock('data:vault.bin', '5678'); v.data = json.encode({accounts = {{name = 'GitHub', issuer = '', secret = 'JBSWY3DPEHPK3PXP', digits = 6, period = 30, alg = 'SHA1'}, {name = 'Mail', issuer = 'Fastmail', secret = 'JBSWY3DPEHPK3PXP', digits = 6, period = 30, alg = 'SHA1'}}}); print(v:save())");
+    }
+    {
+      // M. the account cap (50) and an 8-digit account in the list
+      lua(be, "local t = {'otpauth://totp/n1?secret=JBSWY3DPEHPK3PXP&digits=8&issuer=Big'}; for i = 2, 60 do t[#t + 1] = 'otpauth://totp/n' .. i .. '?secret=JBSWY3DPEHPK3PXP' end; fs.write('data:import.txt', table.concat(t, '\\n'))");
+      Drive d = drive(be, {}, KEYS({PIN("5678"), {"confirm", "down", "confirm", "confirm", "back"}}));
+      CHECK(d.finished && d.eventsLeft == 0 && shown(be, ":Added 48, skipped 12.:"));
+      CHECK(shown(be, ":0232 4550:"));  // python: 8-digit SHA1 code at t=1700000000 is 02324550
+      lua(be, "local vault = require('vault'); print(#json.decode(vault.unlock('data:vault.bin', '5678').data).accounts)");
+      CHECK(be.logs.size() == 1 && be.logs[0] == "50");
+    }
+    {
+      // S. first start on a fresh card: the wheel refuses fewer than 4 digits, a short passphrase and a mismatch are refused too
+      MockBackend fresh;
+      fresh.epoch = 1700000000;
+      Drive d = drive(fresh, {"12"}, KEYS({{"confirm"}, {"confirm"}, {"left"}, {"confirm"}, PIN("1234"), PIN("9999"), {"confirm"}, PIN("5555"), PIN("5555"), {"back"}}));
+      CHECK(d.finished && d.eventsLeft == 0 && d.textsLeft == 0 && d.titles == vec({"Choose a PIN (passphrase)"}));
+      CHECK(shown(fresh, "At least 4 digits.") && shown(fresh, "PIN too short") && shown(fresh, "PINs differ"));
+      lua(fresh, "local vault = require('vault'); print(vault.unlock('data:vault.bin', '5555') ~= nil, vault.unlock('data:vault.bin', '1234'))");
+      CHECK(fresh.logs.size() == 1 && fresh.logs[0] == "true\tnil\twrong PIN or damaged vault");
+    }
+    {
+      // W. wheel mechanics: down wraps 0 -> 9, left puts the erased digit back on the wheel, confirm takes the digit being spun
+      MockBackend fresh;
+      fresh.epoch = 1700000000;
+      const std::vector<std::string> W9120 = {"down", "right", "up", "right", "up", "right", "left", "up", "right", "confirm"};
+      // walk: down wraps 0 to 9 and locks it; 1 and 1 follow; left takes the second 1 back onto the wheel, up makes it 2, lock;
+      // confirm adds the digit being spun (0): 9, 1, 2, 0
+      Drive d = drive(fresh, {}, KEYS({{"confirm"}, W9120, W9120, {"back"}}));
+      CHECK(d.finished && d.eventsLeft == 0);
+      lua(fresh, "local vault = require('vault'); print(vault.unlock('data:vault.bin', '9120') ~= nil, vault.unlock('data:vault.bin', '9111') ~= nil, vault.unlock('data:vault.bin', '9100') ~= nil)");
+      CHECK(fresh.logs.size() == 1 && fresh.logs[0] == "true\tfalse\tfalse");
+    }
+    {
+      // X. twelve digits is the maximum: further "right" presses do nothing and confirm submits what is there
+      MockBackend fresh;
+      fresh.epoch = 1700000000;
+      std::vector<std::string> twelve(13, "right");  // 12 locked zeros, the 13th press is ignored
+      twelve.push_back("confirm");
+      Drive d = drive(fresh, {}, KEYS({{"confirm"}, twelve, twelve, {"back"}}));
+      CHECK(d.finished && d.eventsLeft == 0);
+      lua(fresh, "local vault = require('vault'); print(vault.unlock('data:vault.bin', ('0'):rep(12)) ~= nil, vault.unlock('data:vault.bin', ('0'):rep(13)) ~= nil)");
+      CHECK(fresh.logs.size() == 1 && fresh.logs[0] == "true\tfalse");
+    }
+    {
+      // Y. up wraps 9 -> 0: ten presses are a full turn, so four of them make the PIN 0000
+      MockBackend fresh;
+      fresh.epoch = 1700000000;
+      std::vector<std::string> turns;
+      for (int i = 0; i < 4; i++) { for (int j = 0; j < 10; j++) turns.push_back("up"); turns.push_back(i < 3 ? "right" : "confirm"); }
+      Drive d = drive(fresh, {}, KEYS({{"confirm"}, turns, turns, {"back"}}));
+      CHECK(d.finished && d.eventsLeft == 0);
+      lua(fresh, "local vault = require('vault'); print(vault.unlock('data:vault.bin', '0000') ~= nil)");
+      CHECK(fresh.logs.size() == 1 && fresh.logs[0] == "true");
+    }
   }
   printf(g_fail ? "\n%d FAILED\n" : "\nALL PASSED\n", g_fail);
   return g_fail ? 1 : 0;

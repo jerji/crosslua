@@ -21,6 +21,9 @@ The headline features, all verified on hardware:
   has been tried (see the API notes).
 - **Files**: sandboxed `fs` with SD-card storage grants (per-folder, user-approved), `fs.stat`/detailed listing, ZIP reading.
 - **Device**: microphone recording, WAV playback, haptics, frontlight, IMU, environment sensors, LED, buzzer, battery, clock.
+- **Secrets**: `crypto.device_key(label)` gives each app a key bound to the device (derived from the secret upstream keeps in NVS),
+  and `vault.lua` turns it plus a PIN into an encrypted file. The bundled **Authenticator** (`totp_lua`) is a TOTP app on top:
+  digit-wheel PIN, `otpauth://` import, auto-lock. How it is built and what it does not protect against: [docs/lua/VAULT.md](docs/lua/VAULT.md).
 - **Safety**: every sensitive API sits behind a manifest permission and a native approval dialog that always shows the full list
   (a recording device is never enabled silently).
 

@@ -28,6 +28,7 @@
 #include <HalMemory.h>
 #include <HalPowerManager.h>
 #include <BleKeyboardHost.h>
+#include <DeviceSecret.h>
 
 #include "activities/plugins/LuaBluetoothHold.h"
 #include <HalStorage.h>
@@ -71,6 +72,8 @@
 #include "lua/PermText.h"
 #include "lua/LuaInternal.h"
 #include "lua/LuaVm.h"
+
+static bool g_inDeepSleepCall = false;  // true while system.sleep() is inside upstream enterDeepSleep()
 
 namespace {
 
@@ -219,6 +222,7 @@ class LuaAppActivity::Backend final : public crosslua::Backend {
     return app + " wants access to your files";
   }
   void randomBytes(uint8_t* out, size_t n) override { esp_fill_random(out, n); }
+  bool deviceKeyMaterial(uint8_t out[32]) override { return ::deviceSecret(*reinterpret_cast<uint8_t(*)[32]>(out)); }  // upstream's NVS secret
   int grantCount() override { return approved_ ? static_cast<int>(requested_.size()) : 0; }
   const char* grantPath(int i, bool* write) override {
     *write = requested_[i].write;
@@ -303,7 +307,9 @@ class LuaAppActivity::Backend final : public crosslua::Backend {
       return false;
     }
     extern void enterDeepSleep(bool fromTimeout);
+    g_inDeepSleepCall = true;  // goToSleep() pumps loop() right here: it must not resume the VM that is blocked in this very call
     enterDeepSleep(false);
+    g_inDeepSleepCall = false;
     snprintf(err, errCap, "the device refused to enter deep sleep");
     return false;
   }
@@ -2426,7 +2432,7 @@ void LuaAppActivity::step() {
 
 void LuaAppActivity::loop() {
   Activity::loop();
-  if (leaving_) return;
+  if (leaving_ || g_inDeepSleepCall) return;
   if (pendingGrantPrompt_) {
     pendingGrantPrompt_ = false;
     askGrants();

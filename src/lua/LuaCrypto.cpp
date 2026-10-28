@@ -162,6 +162,39 @@ int cr_pbkdf2(lua_State* L) {
   lua_pushlstring(L, reinterpret_cast<const char*>(out), static_cast<size_t>(len));
   return 1;
 }
+// crypto.device_key(label) -> 32-byte binary string | nil, err. A key bound to THIS device and THIS app:
+//   HMAC-SHA256(key = device secret, msg = "crosslua-device-key:v1" 0x00 lower(app name) 0x00 label)
+// so the raw secret never reaches a script, another app (a different folder name) cannot derive this app's keys, and a card
+// copied to another device derives different keys. Use it as an extra input to a key derivation (see lib/vault.lua), never as the
+// only protection: a flash dump of the device recovers the secret.
+constexpr size_t MAX_LABEL = 64, MAX_APPNAME = 100;
+int cr_device_key(lua_State* L) {
+  size_t ln;
+  const char* label = luaL_checklstring(L, 1, &ln);
+  if (ln < 1 || ln > MAX_LABEL || memchr(label, 0, ln)) return pushFail(L, "label must be 1..64 bytes without NUL");
+  const char* app = be(L).appName();
+  const size_t an = strlen(app);
+  if (an < 1 || an > MAX_APPNAME) return pushFail(L, "this app's folder name is too long to derive a key from");
+  uint8_t secret[32];
+  if (!be(L).deviceKeyMaterial(secret)) return pushFail(L, "no device secret available (the key storage could not be read)");
+  static const char DOMAIN[] = "crosslua-device-key:v1";
+  uint8_t msg[sizeof(DOMAIN) + 1 + MAX_APPNAME + 1 + MAX_LABEL];
+  size_t m = 0;
+  memcpy(msg + m, DOMAIN, sizeof(DOMAIN) - 1);
+  m += sizeof(DOMAIN) - 1;
+  msg[m++] = 0;
+  for (size_t i = 0; i < an; i++) msg[m++] = static_cast<uint8_t>((app[i] >= 'A' && app[i] <= 'Z') ? app[i] + 32 : app[i]);  // FAT ignores case
+  msg[m++] = 0;
+  memcpy(msg + m, label, ln);
+  m += ln;
+  uint8_t out[DIGEST256];
+  const int rc = mbedtls_md_hmac(mbedtls_md_info_from_type(MBEDTLS_MD_SHA256), secret, sizeof(secret), msg, m, out);
+  memset(secret, 0, sizeof(secret));  // plain memset can be elided, but the secret also lives in NVS and the caller's RAM: best effort
+  const int r = pushDigest(L, rc, out, sizeof(out));
+  memset(out, 0, sizeof(out));
+  return r;
+}
+
 int cr_random(lua_State* L) {
   const lua_Number n = luaL_checknumber(L, 1);
   if (n < 1 || n > 256 || n != static_cast<int>(n)) return pushFail(L, "n must be an integer 1..256");
@@ -326,7 +359,7 @@ void registerCrypto(lua_State* L, Ctx* c) {
                                  {"random", cr_random},     {"hex", cr_hex},           {"unhex", cr_unhex},
                                  {"b64encode", cr_b64encode}, {"b64decode", cr_b64decode}, {"equal", cr_equal},
                                  {"aes_cbc_encrypt", cr_aes_cbc_encrypt}, {"aes_cbc_decrypt", cr_aes_cbc_decrypt},
-                                 {nullptr, nullptr}};
+                                 {"device_key", cr_device_key}, {nullptr, nullptr}};
   regTable(L, c, "crypto", fns);
   if (luaL_newmetatable(L, HASH_MT)) {
     static const luaL_Reg methods[] = {{"update", hash_update}, {"digest", hash_digest}, {nullptr, nullptr}};

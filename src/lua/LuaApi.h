@@ -271,6 +271,9 @@ class Backend {
   // --- storage grants: manifest "storage": {"read": [...], "write": [...]}. Only grants the user APPROVED are visible
   // here (an unapproved request reads as zero grants). Paths are normalised, relative, never hidden; "" = the whole card.
   virtual void randomBytes(uint8_t* out, size_t n) = 0;  // hardware RNG
+  // The device's random 32-byte secret (upstream's deviceSecret(): kept in NVS, survives SD swaps, never on the card). It never
+  // reaches a script: crypto.device_key() derives a per-app, per-label key from it. false when the key storage is unreadable.
+  virtual bool deviceKeyMaterial(uint8_t out[32]) = 0;
   // DEV BUILDS ONLY (CROSSLUA_DEV): change the heap-guard floor at runtime to MEASURE a safe value. Release builds: false.
   virtual bool devSetFloor(size_t bytes) { (void)bytes; return false; }
   // net.read copies data OUT of the network stack's buffers, which is what relieves memory pressure: for that one allocation
