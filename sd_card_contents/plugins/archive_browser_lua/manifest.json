@@ -1,0 +1,1 @@
+{"title": "Archive Browser", "description": "Browse .zip files in Books: list entries and read small text entries. Read-only.", "storage": {"read": ["Books"]}}
