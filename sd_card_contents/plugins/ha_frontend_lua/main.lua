@@ -1,7 +1,8 @@
 -- Home Assistant browser (network). Path: MAIN MENU > ROOMS (areas) or TYPES (domains) > list > entity > action.
 -- Back goes up one level; Back at the top exits. Up/Down move, Confirm opens or runs, Left/Right page a long list.
 -- Setup (first run, or after the vault is reset): server URL and a long-lived token, stored in the vault (PIN).
--- The server certificate is NOT typed: put it at HomeAssistant/ca.pem on the card. Without it the token is not sent.
+-- Homelab mode: http and https are both allowed. https is only verified if HomeAssistant/ca.pem is on the card; the
+-- screen shows a warning when it is not.
 -- Entity lists come from the template endpoint, so the device reads only the short list it is showing.
 local vault = require("vault")
 local ha = require("ha")
@@ -41,6 +42,7 @@ local function draw()
   end
   if #f.items == 0 then gfx.text(16, y, "(nothing here)", "ui12") end
   gfx.text(14, H - 60, clip(note, 60), "small")
+  if ha.warning then gfx.text(14, H - 84, clip(ha.warning, 60), "small", "b") end
   gfx.text(14, H - 34, "Up/Down move, Confirm open, Back up", "small")
   gfx.present()
 end
@@ -162,7 +164,7 @@ local function setup()
   if url == "" then return nil end
   local token = txt("Long-lived access token", "", 300, "password")
   if token == "" then return nil end
-  local c = { url = url:gsub("/+$", ""), token = token }
+  local c = { url = (url:gsub("/+$", "")), token = token }
   return c
 end
 
@@ -206,6 +208,7 @@ local ok, err = pcall(function()
     while input.wait() ~= "back" do end
     v:lock(); return
   end
+  if ha.warning then note = ha.warning end
   stack[1] = menu_frame()
   draw()
   while true do

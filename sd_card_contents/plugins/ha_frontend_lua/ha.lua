@@ -1,24 +1,37 @@
--- Home Assistant REST client for the browse app. Every request pins the server certificate to the PEM the user puts on
--- the card (ca = "sd:HomeAssistant/ca.pem"). Without that file the token is NOT sent: the API docs say a Home Assistant
--- long-lived token is admin and must not go in a request without a ca pin. Lists come from the template endpoint
--- (POST /api/template) so the device never downloads the whole state table.
+-- Home Assistant REST client for the browse app (homelab mode). http:// and https:// are both allowed. An https
+-- request is pinned to HomeAssistant/ca.pem only when that file exists; otherwise it is unverified and the screen warns.
+-- Lists come from the template endpoint (POST /api/template) so the device never downloads the whole state table.
 local M = {}
 local CA = "sd:HomeAssistant/ca.pem"
 
--- cfg = { url = "https://host:port", token = "..." }
+-- Homelab mode: http:// and https:// are both allowed. https is NOT verified unless a certificate is on the card
+-- (HomeAssistant/ca.pem), and the screen says so. Trust-on-first-use needs a binding that reads the server's
+-- certificate; the API has none yet, so it is not implemented.
+M.warning = nil          -- shown under the list when the connection is not verified
+M.pinned = false
+
+-- cfg = { url = "http(s)://host:port", token = "..." }
 function M.check(cfg)
   if not cfg or not cfg.url or cfg.url == "" then return nil, "No server URL saved." end
-  if cfg.url:sub(1, 8) ~= "https://" then return nil, "Only https:// servers are allowed (the token must be pinned)." end
-  local pem = fs.read(CA, 0, 16384)
-  if not pem or #pem < 32 then return nil, "Put your server certificate at HomeAssistant/ca.pem on the card." end
+  if cfg.url:sub(1, 7) == "http://" then
+    M.warning = "WARNING: plain http. The token travels unencrypted."
+  elseif cfg.url:sub(1, 8) == "https://" then
+    local pem = fs.read(CA, 0, 16384)
+    M.pinned = (pem ~= nil and #pem >= 32)
+    if M.pinned then M.warning = nil else M.warning = "WARNING: https certificate not verified." end
+  else
+    return nil, "URL must start with http:// or https://"
+  end
   return true
 end
 
 local function request(cfg, method, path, body)
   local opts = {
-    url = cfg.url .. path, method = method, ca = CA, max_body = 8192,
+    url = cfg.url .. path, method = method, max_body = 8192,
     headers = { Authorization = "Bearer " .. cfg.token },
   }
+  -- pin only when the certificate file exists (http:// cannot take ca at all)
+  if M.pinned and cfg.url:sub(1, 8) == "https://" then opts.ca = CA end
   if body then opts.body = json.encode(body); opts.content_type = "application/json" end
   local r, err = http.request(opts)
   if not r then return nil, tostring(err) end
