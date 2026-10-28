@@ -1,0 +1,1 @@
+{"title": "Text Reader", "description": "Read .txt and .md files from the Books folder, page by page, resume where you left off.", "storage": {"read": ["Books"]}}
