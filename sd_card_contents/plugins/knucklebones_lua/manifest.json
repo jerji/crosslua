@@ -1,1 +1,1 @@
-{"title": "Knucklebones", "description": "Roll a die, drop it in one of your three columns. Matching values in the opponent's facing column are destroyed. Columns score v*n*n. Match ends when either grid fills. vs CPU or hot-seat."}
+{"title": "Knucklebones", "description": "Roll a die, drop it in one of your three columns. Matching values in the opponent's facing column are destroyed. Columns score v*n*n. Match ends when either grid fills. VS CPU, or PLAY NEARBY with a second device over ESP-NOW.", "permissions": ["network", "espnow"]}
