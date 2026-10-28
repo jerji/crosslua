@@ -1,1 +1,1 @@
-{"title": "Sea Salt & Paper", "description": "58-card collector game vs an AI that remembers the discard piles. First to 40 wins."}
+{"title": "Sea Salt & Paper", "description": "58-card collector game vs an AI that remembers the discard piles, or PLAY NEARBY with a second device over ESP-NOW. First to 40 wins.", "permissions": ["network", "espnow"]}

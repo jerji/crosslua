@@ -104,20 +104,21 @@ local function pileAt(pile) return M.PLACE.PILEA + pile end
 local function otherSeat(seat) return seat ~ 1 end
 
 -- ------------------------------------------------------------- the rng
--- A xorshift32 kept strictly inside [0, 2^31) after every step, so the exact
--- same shuffle comes out of the device's 32-bit Lua and the host's 64-bit
--- one. The sequence differs from the C++'s (which keeps the full 32 bits),
--- which does not matter: nothing crosses a wire here, only determinism
--- across platforms does.
+-- The xorshift32 of SeaSaltCore.cpp, bit for bit: every step is masked back
+-- to 32 bits, so the same seed deals the same deck here as on the C++ build.
+-- A link relies on it: a device replaying a peer's move must draw the card
+-- the C++ build would.
+local M32 = 0xFFFFFFFF
+
 local function nextRandom(state)
-  state = (state ~ ((state << 13) & 0x7FFFFFFF)) & 0x7FFFFFFF
-  state = (state ~ (state >> 17)) & 0x7FFFFFFF
-  state = (state ~ ((state << 5) & 0x7FFFFFFF)) & 0x7FFFFFFF
+  state = (state ~ (state << 13)) & M32
+  state = state ~ (state >> 17)
+  state = (state ~ (state << 5)) & M32
   return state
 end
 
 local function streamFor(seed, stream)
-  local s = (seed ~ ((0x9E3779B9 * (stream + 1)) & 0x7FFFFFFF)) & 0x7FFFFFFF
+  local s = (seed ~ ((0x9E3779B9 * (stream + 1)) & M32)) & M32
   return s ~= 0 and s or 0x1234567  -- xorshift dies on zero
 end
 
@@ -126,10 +127,10 @@ end
 -- for fidelity with the C++ port).
 local function stealStream(g)
   local s = streamFor(g.seed, 64 + g.seqNext)
-  s = (s ~ ((0x85EBCA6B * (g.deckNext + 1)) & 0x7FFFFFFF)) & 0x7FFFFFFF
-  s = (s ~ ((0xC2B2AE35 * (g.turn + 1)) & 0x7FFFFFFF)) & 0x7FFFFFFF
+  s = (s ~ ((0x85EBCA6B * (g.deckNext + 1)) & M32)) & M32
+  s = (s ~ ((0xC2B2AE35 * (g.turn + 1)) & M32)) & M32
   s = nextRandom(s)
-  return s ~= 0 and s or 0x1234567
+  return s ~= 0 and s or 0x9E3779B9
 end
 
 -- ------------------------------------------------------------- set-up
@@ -139,7 +140,8 @@ function M.cardAt(g, index)  -- index 0-based from the deal cursor
   for i = 1, M.CARDS do order[i] = i end
   local state = streamFor(g.seed, 0)
   for i = M.CARDS, 2, -1 do
-    local j = (nextRandom(state) % i) + 1
+    state = nextRandom(state)  -- the state advances every draw, as in the C++ (by reference)
+    local j = (state % i) + 1
     order[i], order[j] = order[j], order[i]
   end
   return order[index + 1]
@@ -198,6 +200,8 @@ local function countIn(g, where, kind)
   end
   return n
 end
+
+M.countIn = countIn  -- exported for linkturn.lua (the table side of a transport line)
 
 local function countPlace(g, where)
   local n = 0

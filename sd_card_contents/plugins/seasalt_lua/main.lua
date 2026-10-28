@@ -22,7 +22,14 @@
 -- your unrevealed hand.
 
 local game = require("game")
-local brain = require("brain")
+-- The Navigator and the PLAY NEARBY modules load on first use: a radio session
+-- needs most of the device's Lua heap, so a solo game does not carry them.
+local brain, nearby, wire, linkturn
+local function loadBrain()
+  brain = brain or require("brain")
+  return brain
+end
+local GAME_ID = 0x0901  -- SeaSalt in crossplay's GameId registry (LinkPlay.h)
 
 local W, H = gfx.size()
 local COLS, CELLW, CARDH = 6, 80, 88
@@ -73,6 +80,15 @@ local stats_counted = false
 local played, won = 0, 0
 local menu_sel, how_page, call_sel, ro_sel = 1, 1, 1, 1
 
+-- PLAY NEARBY. `link` is nil when solo. Inside a match the local game always
+-- has me as seat 0; `flip` maps the blob (first mover = seat 0) onto that.
+-- `transport` = I hold the transport turn (may send); `again` = I said PLAY AGAIN.
+local link = nil
+local soloGame = nil  -- the solo game, kept aside while linked
+local linkedPlay      -- defined with the PLAY NEARBY section; routeMenu calls it
+
+local function myTurn() return g.turn == 0 and (link == nil or link.transport) end
+
 -- ------------------------------------------------------------ persistence
 
 local function loadStats()
@@ -90,6 +106,7 @@ local function saveStats()
 end
 
 local function saveGame()
+  if link then return end  -- a linked match never overwrites the solo save
   if not has_save or g.phase == game.PHASE.GAMEOVER then
     if fs.exists("data:seasalt.sav") then fs.remove("data:seasalt.sav") end
     return
@@ -226,6 +243,10 @@ end
 
 local function ruleLine()
   local st = g.step
+  if link and not myTurn() then
+    gfx.text(W // 2, 126, "THEIR TURN. THE BOARD MOVES WHEN THEY DO.", "small", "bc")
+    return
+  end
   if report ~= "" and g.turn == 0 then
     gfx.text(W // 2, 126, report, "small", "bc")
     return
@@ -275,7 +296,7 @@ local function buildItems()
     for c = 1, game.CARDS do
       if g.place[c] == game.PLACE.HAND0 then items[#items + 1] = { t = "card", card = c } end
     end
-    if g.turn == 0 then
+    if myTurn() then
       if st == game.STEP.TAKE then
         if game.canTake(g) then
           items[#items + 1] = { t = "pill", act = "deck", label = "DRAW DECK" }
@@ -369,12 +390,16 @@ end
 
 local function hintText()
   local st = g.step
+  if link and not myTurn() then return report ~= "" and report or "THEIR TURN. WAIT FOR THEM TO FINISH." end
   if st == game.STEP.CHOOSEKEEP then return "TAP (CONFIRM) THE ONE YOU KEEP. THE OTHER GOES ON A PILE." end
   if st == game.STEP.CHOOSEPILE then return "THE REJECTED CARD IS PUBLIC. CHOOSE WHICH PILE COVERS." end
   if st == game.STEP.CRABPILE then return "CRABS DIG THROUGH A PILE WITHOUT SHUFFLING IT." end
   if st == game.STEP.CRABPICK then return "TAKE ANY ONE CARD FROM THE PILE, WITHOUT SHOWING IT." end
   if st == game.STEP.PLAY and #sel == 2 then
-    if game.isPair(sel[1], sel[2]) then return PAIR_HINTS[game.kindOf(sel[1]) + 1] end
+    if game.isPair(sel[1], sel[2]) then
+      local k = game.kindOf(sel[1])
+      return PAIR_HINTS[k >= 3 and 4 or k + 1]  -- swimmer and shark share one hint
+    end
     return "THESE TWO DO NOT PAIR. A PAIR IS TWO ALIKE, OR SWIMMER AND SHARK."
   end
   if st == game.STEP.PLAY and #sel == 1 then return HINTS[game.kindOf(sel[1]) + 1] end
@@ -396,7 +421,7 @@ end
 
 local function drawBoard()
   gfx.clear()
-  header("SEA SALT", "R" .. g.round .. "  " .. g.score[1] .. " - " .. g.score[2])
+  header("SEA SALT", (g.phase == game.PHASE.LASTCHANCE and "LAST CHANCE  " or ("R" .. g.round .. "  ")) .. g.score[1] .. " - " .. g.score[2])
   facts()
   ruleLine()
   local items = buildItems()
@@ -412,6 +437,7 @@ local function menuItems()
   local items = {}
   if has_save then items[#items + 1] = { label = "CONTINUE", act = "continue" } end
   items[#items + 1] = { label = "NEW GAME", act = "new" }
+  items[#items + 1] = { label = "PLAY NEARBY", act = "nearby" }
   items[#items + 1] = { label = "HOW TO PLAY", act = "how" }
   return items
 end
@@ -437,7 +463,7 @@ local function drawMenu()
     gfx.text(36, y + 13, it.label, "ui12", i == menu_sel and "bw" or "b")
   end
   if has_save then
-    gfx.text(16, my + 3 * 56 + 6, "ROUND " .. g.round .. "  " .. g.score[1] .. " - " .. g.score[2], "small")
+    gfx.text(16, my + #items * 56 + 6, "ROUND " .. g.round .. "  " .. g.score[1] .. " - " .. g.score[2], "small")
   end
   gfx.text(W // 2, H - 50, "FIRST TO 40 WINS. TIE GOES TO THE LAST TURN.", "small", "c")
   gfx.text(W // 2, H - 28, "Up/Down: move   Confirm: select   Back: exit", "small", "c")
@@ -460,6 +486,12 @@ local function drawCall()
   end
   gfx.text(W // 2, H - 40, "Back: keep playing", "small", "c")
   present()
+end
+
+local function roundOverOptions(over)
+  if not link then return over and { "PLAY AGAIN", "MENU" } or { "NEXT ROUND", "MENU" } end
+  if over then return { link.again and "WAITING FOR THEM" or "PLAY AGAIN", "LEAVE" } end
+  return { linkturn.action(g, link.transport) == "deal" and "NEXT ROUND" or "WAITING FOR THEM", "LEAVE" }
 end
 
 local function drawRoundOver()
@@ -504,7 +536,7 @@ local function drawRoundOver()
     gfx.text(W // 2, y, w == 0 and "YOU WIN THE MATCH" or (w == 1 and "THEY WIN THE MATCH" or "IT'S A TIE"), "sans16", "bc")
     y = y + 40
   end
-  local opts = over and { "PLAY AGAIN", "MENU" } or { "NEXT ROUND", "MENU" }
+  local opts = roundOverOptions(over)
   ro_sel = math.min(ro_sel, #opts)
   for i, o in ipairs(opts) do
     local yy = y + (i - 1) * 60
@@ -512,6 +544,9 @@ local function drawRoundOver()
     gfx.text(W // 2, yy + 15, o, "ui12", i == ro_sel and "bwc" or "bc")
   end
   gfx.text(W // 2, y + 2 * 60 + 8, "Back: menu", "small", "c")
+  if link and over and link.S.peerAgain and not link.again then
+    gfx.text(W // 2, y + 2 * 60 + 34, "THEY WANT ANOTHER GAME", "ui12", "c")
+  end
   present()
 end
 
@@ -584,7 +619,7 @@ local function runAI()
   while g.phase ~= game.PHASE.ROUNDOVER and g.phase ~= game.PHASE.GAMEOVER and
       g.turn == 1 and guard < 200 do
     guard = guard + 1
-    local d = brain.decide(game.observe(g, 1), "navigator")
+    local d = loadBrain().decide(game.observe(g, 1), "navigator")
     local ok = applyDecision(d)
     if not ok then break end
     if d.act == "layDuo" then
@@ -611,6 +646,14 @@ local function runAI()
   end
 end
 
+-- Over a link, my transport turn goes on when the game turn leaves me or the
+-- round does: that state is the packet. A boat pair keeps the turn, so nothing
+-- is sent and I keep playing, which is the rulebook's extra turn.
+local function linkSend()
+  link.S:sendState(system.millis(), wire.pack(g, link.flip))
+  link.transport = false
+end
+
 -- Shared exit of a successful human action: re-derive the view, and hand
 -- the turn to the brain when it is theirs.
 local function countMatchEnd()
@@ -625,6 +668,20 @@ local function afterHumanAction()
   sel = {}
   report = ""
   local ph = g.phase
+  if link then
+    if g.turn ~= 0 or ph == game.PHASE.ROUNDOVER or ph == game.PHASE.GAMEOVER then linkSend() end
+    if ph == game.PHASE.GAMEOVER then countMatchEnd() end
+    if ph == game.PHASE.ROUNDOVER or ph == game.PHASE.GAMEOVER then
+      screen = "roundover"
+      ro_sel = 1
+      drawRoundOver()
+    else
+      screen = "board"
+      cur = 1
+      drawBoard()
+    end
+    return
+  end
   if ph == game.PHASE.ROUNDOVER or ph == game.PHASE.GAMEOVER then
     if ph == game.PHASE.GAMEOVER then countMatchEnd() end
     screen = "roundover"
@@ -701,6 +758,7 @@ local function moveCursor(delta, items)
 end
 
 local function activateItem(it)
+  if link and not myTurn() then return end  -- their turn: the board only shows
   if it.t == "card" then
     local st = g.step
     if st == game.STEP.CRABPICK then
@@ -794,6 +852,8 @@ local function routeMenu(ev)
       continueGame()
     elseif act == "new" then
       startNewGame()
+    elseif act == "nearby" then
+      linkedPlay()
     else
       how_page = 1
       screen = "howto"
@@ -855,6 +915,204 @@ local function routeHowTo(ev)
     screen = "menu"
     drawMenu()
   end
+end
+
+-- ----------------------------------------------------------- PLAY NEARBY
+-- Two devices over ESP-NOW (nearby.lua). The blob is the C++ Game (wire.lua),
+-- always in the first mover's seat order. linkturn.lua says who may act; the
+-- transport turn alternates strictly and is handed on by each send.
+
+local function loadLink()
+  nearby = nearby or require("nearby")
+  wire = wire or require("wire")
+  linkturn = linkturn or require("linkturn")
+end
+
+local function linkWaitScreen()
+  gfx.clear()
+  header("SEA SALT")
+  gfx.text(W // 2, 220, "LOOKING FOR A PLAYER", "sans18", "bc")
+  gfx.text(W // 2, 256, "Turn on PLAY NEARBY on the other device.", "ui12", "c")
+  gfx.text(W // 2, H - 40, "Back: cancel", "small", "c")
+  present()
+end
+
+local function linkEndScreen(S)
+  gfx.clear()
+  header("SEA SALT")
+  gfx.text(W // 2, 220, S.reason == "lost" and "LOST CONNECTION" or "THEY LEFT", "sans18", "bc")
+  gfx.text(W // 2, H - 40, "Confirm or Back: menu", "small", "c")
+  present()
+end
+
+-- Their state arrived: adopt it, say what they did, and pass it on at once if
+-- the rules have nothing for me (see linkturn.lua).
+local function linkTake()
+  local blob = link.S:takeState()
+  if not blob then return false end
+  -- At GAME OVER, what arrives is the next match, sent by its first mover: this
+  -- device is the second mover. (A device that asked for the rematch set this itself.)
+  if g.phase == game.PHASE.GAMEOVER then link.flip = true end
+  local incoming = wire.unpack(blob, link.flip)
+  if not incoming then
+    link.S.phase, link.S.reason = "ended", "lost"  -- not a Sea Salt game: stop, do not guess
+    return true
+  end
+  report = linkturn.describe(g, incoming, NAMES)
+  g = incoming
+  sel = {}
+  cur = 1
+  link.transport = true
+  if g.phase == game.PHASE.PLAYING or g.phase == game.PHASE.LASTCHANCE then
+    link.again, link.S.peerAgain = false, false  -- a new match is under way
+  end
+  if g.phase == game.PHASE.GAMEOVER then countMatchEnd() end
+  if linkturn.action(g, true) == "pass" then linkSend() end
+  if g.phase == game.PHASE.ROUNDOVER or g.phase == game.PHASE.GAMEOVER then
+    screen = "roundover"
+    ro_sel = 1
+  else
+    screen = "board"
+  end
+  return true
+end
+
+local function redrawLink()
+  if screen == "roundover" then drawRoundOver() else drawBoard() end
+end
+
+-- Both said PLAY AGAIN: a new match. The device holding the transport turn
+-- deals and sends first (the same rule C++ uses for onRematch).
+local function maybeRematch()
+  if g.phase ~= game.PHASE.GAMEOVER or not (link.again and link.S.peerAgain) then return end
+  local youFirst = link.transport
+  link.flip = not youFirst
+  link.again, link.S.peerAgain = false, false
+  link.transport = youFirst
+  g = game.newGame(nextSeed(), 0)
+  stats_counted = false
+  sel = {}
+  report = ""
+  cur = 1
+  screen = "board"
+  if youFirst then linkSend() end
+  drawBoard()
+end
+
+local function askAgain()
+  if link.again then return end
+  link.again = true
+  link.S:say(system.millis(), nearby.NOTE_PLAY_AGAIN)
+  maybeRematch()
+  if link and screen == "roundover" then drawRoundOver() end
+end
+
+-- The round is banked and it is my transport turn: deal the next one and send.
+local function nextLinkRound()
+  local starter = g.ender ~= game.NO_SEAT and (g.ender ~ 1) or (g.roundStarter ~ 1)
+  local s0, s1, rd = g.score[1], g.score[2], g.round
+  game.deal(g, nextSeed(), starter)
+  g.score[1], g.score[2], g.round = s0, s1, rd + 1
+  report = ""
+  sel = {}
+  cur = 1
+  screen = "board"
+  linkSend()
+  drawBoard()
+end
+
+local function leaveLink()
+  link.S:stop(system.millis())
+  link = nil
+  g = soloGame or game.newGame(nextSeed(), 0)
+  soloGame = nil
+  stats_counted = g.phase == game.PHASE.GAMEOVER
+  sel = {}
+  report = ""
+  screen = "menu"
+  menu_sel = 1
+  drawMenu()
+end
+
+local function linkRoute(ev)
+  if screen == "search" then
+    if ev == "back" then leaveLink() end
+  elseif screen == "linkend" then
+    if ev == "back" or ev == "confirm" then leaveLink() end
+  elseif screen == "board" then
+    if ev == "back" then leaveLink() else routeBoard(ev) end
+  elseif screen == "call" then
+    routeCall(ev)
+  elseif screen == "roundover" then
+    if ev == "back" then
+      leaveLink()
+    elseif ev == "up" or ev == "down" then
+      ro_sel = 3 - ro_sel
+      drawRoundOver()
+    elseif ev == "confirm" then
+      if ro_sel == 2 then
+        leaveLink()
+      elseif g.phase == game.PHASE.GAMEOVER then
+        askAgain()
+      elseif linkturn.action(g, link.transport) == "deal" then
+        nextLinkRound()
+      end
+    end
+  end
+end
+
+local function linkLoop()
+  linkWaitScreen()
+  while link do
+    local now = system.millis()
+    link.S:pump(now)
+    link.S:tick(now)
+    if link.S:takeMatch() then
+      -- the first mover is seat 0 in the blob, and opens the match with a send
+      link.flip = not link.S.iFirst
+      link.transport = link.S.iFirst
+      link.again = false
+      g = game.newGame(nextSeed(), 0)
+      stats_counted = false
+      sel = {}
+      report = ""
+      cur = 1
+      screen = "board"
+      if link.transport then linkSend() end
+      drawBoard()
+    end
+    if link.S.phase == "play" and linkTake() then redrawLink() end
+    if link.S.phase == "play" then maybeRematch() end
+    if link.S.phase == "ended" and screen ~= "linkend" then
+      screen = "linkend"
+      linkEndScreen(link.S)
+    end
+    local ev = input.wait(100)  -- never block: the peer must hear our heartbeat
+    if ev and link then linkRoute(ev) end
+  end
+end
+
+function linkedPlay()
+  loadLink()
+  local S = nearby.new(GAME_ID, "PUP " .. string.sub(system.mac(), 16, 17))
+  local ok, err = S:start()
+  if not ok then
+    gfx.clear()
+    header("SEA SALT")
+    gfx.text(16, 100, "RADIO WILL NOT START", "sans16", "b")
+    gfx.text(16, 130, tostring(err):sub(1, 60), "ui12", "b")
+    gfx.text(16, 160, "Back: menu", "ui12", "b")
+    present()
+    while input.wait() ~= "back" do end
+    return
+  end
+  soloGame = g
+  link = { S = S, flip = false, transport = false, again = false }
+  g = game.newGame(nextSeed(), 0)
+  sel = {}
+  report = ""
+  screen = "search"
+  linkLoop()
 end
 
 local function run()
