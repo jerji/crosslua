@@ -127,13 +127,21 @@ int wifi_scan(lua_State* L) {
   if (n < 0) return pushFail(L, err);
   lua_createtable(L, n, 0);
   for (int i = 0; i < n; i++) {
-    lua_createtable(L, 0, 3);
+    lua_createtable(L, 0, 7);
     lua_pushstring(L, out[i].ssid);
     lua_setfield(L, -2, "ssid");
     lua_pushinteger(L, out[i].rssi);
     lua_setfield(L, -2, "rssi");
     lua_pushboolean(L, out[i].encrypted);
     lua_setfield(L, -2, "encrypted");
+    lua_pushstring(L, out[i].bssid);
+    lua_setfield(L, -2, "bssid");
+    lua_pushinteger(L, out[i].channel);
+    lua_setfield(L, -2, "channel");
+    lua_pushstring(L, out[i].auth);
+    lua_setfield(L, -2, "auth");
+    lua_pushboolean(L, out[i].hidden);
+    lua_setfield(L, -2, "hidden");
     lua_rawseti(L, -2, i + 1);
   }
   lua_pushinteger(L, total);

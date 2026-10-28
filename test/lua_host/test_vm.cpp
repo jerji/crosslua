@@ -1071,7 +1071,11 @@ struct MockBackend : Backend {
     return true;
   }
   // ---- batch A mock: scan/time/rename/mac/qr/frontlight/inflate/rounded -------------------------
-  std::vector<Backend::WifiScanInfo> nets{{"NetA", -40, true}, {"", -60, false}, {"NetC", -75, true}};
+  std::vector<Backend::WifiScanInfo> nets{
+      {"NetA", -40, true, "AA:BB:CC:DD:EE:01", 6, "wpa2", false},
+      {"", -60, false, "AA:BB:CC:DD:EE:02", 11, "open", true},  // hidden network: empty ssid
+      {"NetC", -75, true, "AA:BB:CC:DD:EE:03", 1, "wpa2/wpa3", false},
+  };
   bool syncOk = true;
   std::string mac_ = "AA:BB:CC:DD:EE:FF";
   std::string qrSeen;  // "text|x|y|side"
@@ -2746,7 +2750,7 @@ int main() {
     be.library = true;
     const char* script = R"LUA(
       local function show(...) print(...) end
-      local l, total = wifi.scan(2); show(#l, total, l[1].ssid, l[1].rssi, l[2].ssid, l[2].encrypted)
+      local l, total = wifi.scan(2); show(#l, total, l[1].ssid, l[1].rssi, l[1].bssid, l[1].channel, l[1].auth, l[1].hidden, l[2].ssid, l[2].encrypted, l[2].hidden)
       show(wifi.scan(0)); show(wifi.scan(99))  -- nil, err
       show(time.now() == nil)
       show(time.sync()); show(time.now() > 1700000000)
@@ -2791,7 +2795,7 @@ int main() {
     (void)want;  // expectations are asserted incrementally below
     CHECK(be.logs.size() >= 31);
     if (be.logs.size() >= 31) {
-      CHECK(be.logs[0] == "2\t3\tNetA\t-40\t\tfalse");
+      CHECK(be.logs[0] == "2\t3\tNetA\t-40\tAA:BB:CC:DD:EE:01\t6\twpa2\tfalse\t\tfalse\ttrue");
       CHECK(be.logs[1] == "nil\tmax must be 1..50" && be.logs[2] == "nil\tmax must be 1..50");
       CHECK(be.logs[3] == "true");
       CHECK(be.logs[4] == "true" && be.logs[5] == "true");

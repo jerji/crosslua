@@ -116,6 +116,32 @@ constexpr uint32_t EXIT_HOLD_MS = 1000;    // hold Back this long to force-quit 
 constexpr uint32_t BUTTON_HOLD_MS = 500;  // hold a nav button this long -> "<name>_hold" (Back reserved for force-quit)
 constexpr size_t EVENT_QUEUE_MAX = 16;
 
+// Human-readable auth mode for a scan row; empty/unsupported modes fall back to "unknown".
+const char* wifiAuthName(wifi_auth_mode_t m) {
+  switch (m) {
+    case WIFI_AUTH_OPEN:
+      return "open";
+    case WIFI_AUTH_WEP:
+      return "wep";
+    case WIFI_AUTH_WPA_PSK:
+      return "wpa";
+    case WIFI_AUTH_WPA2_PSK:
+      return "wpa2";
+    case WIFI_AUTH_WPA_WPA2_PSK:
+      return "wpa/wpa2";
+    case WIFI_AUTH_WPA2_ENTERPRISE:
+      return "enterprise";
+    case WIFI_AUTH_WPA3_PSK:
+      return "wpa3";
+    case WIFI_AUTH_WPA2_WPA3_PSK:
+      return "wpa2/wpa3";
+    case WIFI_AUTH_WAPI_PSK:
+      return "wapi";
+    default:
+      return "unknown";
+  }
+}
+
 }  // namespace
 
 // ---------------------------------------------------------------------------
@@ -2282,6 +2308,13 @@ class LuaAppActivity::Backend final : public crosslua::Backend {
       out[c].ssid[sizeof(out[c].ssid) - 1] = '\0';
       out[c].rssi = WiFi.RSSI(i);
       out[c].encrypted = WiFi.encryptionType(i) != WIFI_AUTH_OPEN;
+      out[c].hidden = s.length() == 0;  // a hidden network's beacon carries no SSID
+      const String b = WiFi.BSSIDstr(i);
+      strncpy(out[c].bssid, b.c_str(), sizeof(out[c].bssid) - 1);
+      out[c].bssid[sizeof(out[c].bssid) - 1] = '\0';
+      out[c].channel = WiFi.channel(i);
+      strncpy(out[c].auth, wifiAuthName(WiFi.encryptionType(i)), sizeof(out[c].auth) - 1);
+      out[c].auth[sizeof(out[c].auth) - 1] = '\0';
       c++;
     }
     WiFi.scanDelete();

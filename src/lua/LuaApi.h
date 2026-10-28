@@ -462,6 +462,10 @@ class Backend {
     char ssid[33];
     int rssi;
     bool encrypted;
+    char bssid[18];  // "AA:BB:CC:DD:EE:FF", or empty when the backend can't read it
+    int channel;     // 1..14, 0 = unknown
+    char auth[20];   // "open" "wep" "wpa" "wpa2" "wpa/wpa2" "enterprise" "wpa3" "wpa2/wpa3" "wapi" "unknown"
+    bool hidden;     // hidden network: the beacon advertises no SSID
   };
   // Blocking scan (a few seconds). Fills up to max entries, *total = networks found. -1 with err on failure.
   virtual int wifiScan(WifiScanInfo* out, int maxEntries, int* total, char* err, size_t errCap) = 0;
