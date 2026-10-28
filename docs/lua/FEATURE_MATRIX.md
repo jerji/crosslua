@@ -2,7 +2,7 @@
 
 Sources: per-fork surveys in `/root/x4/scratch/features/{crossplay,biscuit,ruby,avesO3,crosspoint-native}.md`
 (subagent read-throughs, LOC counts measured) plus a direct read of Grimoire's API doc and its 8 spells + launcher
-(72 unique API calls, see `docs/lua/GRIMOIRE.md`). This file deduplicates their "API gaps" lists into ONE runtime
+(72 unique API calls, see `docs/lua/GRIMOIRE.md`). A second audit pass over the same firmwares (2026-10-28, findings checked against `src/lua`) is merged in the "Next up" section below. This file deduplicates their "API gaps" lists into ONE runtime
 roadmap, ordered by how many features each primitive unblocks and how cheap/safe it is on the X4 (no PSRAM, ~96 KB
 Lua heap). Verdicts in the per-fork files; here only the gaps.
 
@@ -32,6 +32,63 @@ Lua heap). Verdicts in the per-fork files; here only the gaps.
 | `input.text()` modal keyboard (sub-activity, like the WiFi picker) | search/forms in apps: biscuit password manager, Grimoire settings UI | `KeyboardEntryActivity` exists; same parked-VM pattern as `wifi.connect`. |
 | `gfx.save_bmp(path)` (screenshot from inside an app) | tests, bug reports, sharing | **done**: binds `ScreenshotUtil::saveFramebufferAsBmp` (streams, no heap). 240 ms, pixel-identical round trip on the X4, 7 mutants caught. |
 | `epub.meta(path)` → `{title, author}` (no layout) | AvesO3 library, "about this book" apps | **done**: binds the firmware's `Epub::loadMetadata` (metadata-only OPF parse, no cache). Language is not exposed (that parse path does not return it). Measured on the X4: ~17 ms, ~55 KB heap peak, no leak; 10 mutants caught. |
+
+## Next up — ordered build list (second-pass audit, 2026-10-28)
+
+Eight read-through audits of the same five firmwares (a second look, challenging the first pass) produced about 340 findings, which collapse to
+the ~29 primitives and the app batches below. **✔ = the claim was checked against `src/lua`** (registered functions, signatures); the rest is the audit's
+word. Order = leverage per effort, cheapest first. Everything here is NOT built yet unless it says so.
+
+### Primitives
+
+| # | primitive | unlocks | effort | notes |
+|---|---|---|---|---|
+| 1 | `crypto.md5` (+ `crc32`) | KOReader sync (document id + `x-auth-key`), Calibre | S | ✔ `crypto.hash` is sha1/sha256 only; mbedtls MD5 is already linked |
+| 2 | `wifi.join(ssid, password)` or `wifi.connect{ssid=, password=}` | network pickers, provisioning apps | S | ✔ `wifi.connect` only takes `{tls}` and auto-joins the saved network |
+| 3 | button hold: `input.held_ms()` or hold events | games (flag/hold-to-delete), long-press menus | S | ✔ button events are release-only; only touch has `"long"` |
+| 4 | `led.flash(r, g, b [, n [, on_ms [, off_ms]]])` | notification patterns | S | ✔ was listed as done by mistake; `LedManager::flash` exists |
+| 5 | `system.battery()` detail: charging, millivolts, mA | power screens | S | percent only today |
+| 6 | `fs.volume()` (SD free/total), `fs.rmdir` (recursive) | disk-full warnings, cache clearing, archive/restore | S | `fs.remove` only removes empty folders |
+| 7 | `wifi.scan` fields: BSSID, channel, auth mode, hidden | scanners, pickers, heat maps | S | ✔ rows are `{ssid, rssi, encrypted}` today |
+| 8 | `net.mdns_advertise` (+ the UDP discovery companions use) | Calibre/transfer discovery | S | ✔ only `mdns_query` exists |
+| 9 | small getters: `system.reboot`, `system.language`, `system.mem`, `device.caps().model`, `time.tz`, `system.panic_info` | diagnostics, localisation | S | |
+| 10 | `wifi.set_mac` | MAC rotation | S | |
+| 11 | `gfx.wrap` / `gfx.char_width` / hyphenation helper | every text app hand-rolls line breaking | S | |
+| 12 | `crypto.aes_gcm` (+ `x25519`, `hkdf`) | encrypted logs, app-to-app crypto | S-M | mbedtls GCM is linked |
+| 13 | `decimal.*` (decNumber) | exact Calculator (Lua floats are 32-bit) | S | |
+| 14 | **`xml.parse` (expat, already linked)** | OPDS/RSS/Atom, EPUB NCX/nav, TOC, AO3 niceties | M | **requested by 6 of the 8 audits: the most wanted primitive** |
+| 15 | BLE generic GATT client (+ a "remote" page-turner mode) | GATT browser, sensors, remotes | M | central role works with the current sdkconfig, one connection, small MTU; advertising/peripheral needs an sdkconfig change |
+| 16 | **firmware-state bridge**: read-only `epub.progress`, recent books, reading stats, library index | AO3, reading stats, shelves, Ruby-style apps | M | **design decision**: apps cannot see the firmware's hidden folders by design, and this wall blocks the most app ideas after xml |
+| 17 | settings API: `system.setting(name [, value])` over an allowlist (sleep-screen mode, sleep timeout, orientation) | sleep-screen designer, "Live" photo, settings hub | M | needs an upstream hook; decide together with #16 |
+| 18 | `gfx.load_font(path)` (`.cpfont` everywhere, TTF only on PSRAM boards) | custom/CJK/serif fonts | M | ✔ 7 fixed fonts today |
+| 19 | dictionary: native `dict.lookup` **or** a Lua StarDict | reference apps | M | ✔ `zip.inflate` (64 KB in / 96 KB out) already covers `.dict.dz` chunks, so the Lua route works today |
+| 20 | `epub.toc`, more `epub.meta` (language, series, isbn), `xtc.meta` | library-grade apps | M | the TOC is XML: after #14 |
+| 21 | input gestures: swipe/pinch, capacitive home key, slide switch | touch boards | M | UNTESTED hardware |
+| 22 | `device.orientation` + rotated text | landscape apps | M | |
+| 23 | `audio.play_data` (PCM from memory) | chimes, synth | M | |
+| 24 | `zip.create` / deflate compress, `zstd.decompress` | backups, gzip from a Lua HTTP server | M | inflate only today |
+| 25 | `wifi.softap` and ESP-NOW at the same time | biscuit's SOS beacon | M | today they refuse each other (radio arbitration) |
+| 26 | `gfx.image` GIF (first frame) | | S | |
+| 27 | 4-level grayscale `gfx` model | X3 panel, 2-bit XTCH pages, anti-aliased text | L | X3-class boards only |
+| 28 | RTC alarm wake (`device.wake_in`) | alarm clock | L | needs upstream wake-source plumbing |
+| 29 | sleep-enter hook / retained frame | background sync | M | upstream hook |
+
+### Apps that need no new native code (each gets a spec before it is written)
+
+| batch | uses | blocked by |
+|---|---|---|
+| **PLAY NEARBY**: 11 games over ESP-NOW (link protocol first, then one game each) | `espnow.*` (verified) | #3 for hold-based games |
+| passive WiFi sniffer (channel hop, EAPOL lock, classify) | `wifi.monitor_*` | none |
+| recon suite: probe sniffer, deauth detector, crowd density, network monitor | `wifi.monitor_*`, `wifi.tx_*` | #7 for richer scans |
+| comms suite: mesh chat, dead drop, bulletin board, captive portal | `espnow`, `wifi.softap`, `net.listen`, UDP | none |
+| security suite: password manager, PIN, SD encryption, quick-wipe | `crypto`, vault.lua (**TOTP done**) | none |
+| reader-adjacent: TXT/MD reader, file browser + viewers, event logger, library shelf with covers | `fs`, `epub.meta`, `gfx.image` | #16 for real progress |
+| KOReader sync, Instapaper | `http.request{ca=}`, `gfx.qr`, `json` | #1 (md5) |
+| StarDict dictionary | `zip.inflate`, `fs` range reads | none |
+| AO3 (plan exists) | `zip.*`, `http.request` | #16 |
+| sleep-screen designer / wallpapers / "Live" photo | `gfx.save_bmp`, `system.sleep` | root write grant, #17 |
+| BLE scanner (raw observer + AD parser) | `ble.observe/adverts` | none (GATT browser: #15) |
+| creature/dashboard, tilt gestures, screenshot action | `device.motion`, `gfx.save_bmp` | none |
 
 ## Principle: touch upstream as little as possible
 New features live in CrossLua-owned files (`src/lua/`, `src/activities/plugins/LuaAppActivity.*`, `lib/lua/`) and call existing SDK/firmware APIs
@@ -95,17 +152,20 @@ with a `Bearer` token). Audit of what `http.request` could do before this work: 
 
 ## Tier 3 — later / niche / heavy
 
+Open items first (ordered build list above), finished or mostly-finished rows below the rule.
+
 | primitive | unlocks | why later |
 |---|---|---|
-| BLE `scan`/`central`/`peripheral`/`hid` (Grimoire `ble.*`, `hid.*`) | ~12 biscuit apps, Grimoire BLE spells | **Keyboard mode done** (`ble.start/stop/scan/devices/connect/disconnect/state/paired/forget` + `input.key()`, `"bluetooth"` permission with approval label `BLE`): scan, connect-cancel, WiFi exclusivity and start/stop cycles verified on the X4 (stack 52 KB, no per-cycle leak); host tests with 55 mutants; **typing from a real keyboard is the one unverified piece**. **Not done:** a generic GATT client (read/write/notify) and everything that advertises (beacons, acting as a keyboard, contact exchange, phone tether): those need the NimBLE peripheral/broadcaster roles, which `[ble_page_turner]` in `platformio.ini` compiles out for every firmware env: enabling them is an upstream sdkconfig change, so it needs Angel's go. |
-| `wifi.monitor` promiscuous + native PCAP writer, `wifi.tx` raw | biscuit recon/offense suite, Ruby sniffer | **`wifi.monitor_*` done and verified** (`"monitor"` permission with approval, polled 8-slot ring, native PCAP writer verified with scapy; radio exclusive with WiFi/hotspot/espnow; nothing upstream touched). `wifi.tx_*` **done and verified** (`"tx"` permission with approval, dialog label `INJECT`; coexists with the monitor on one channel; frames captured on the air byte for byte from Lua-injected frames). |
-| `espnow.send/recv` | crossplay PLAY NEARBY (11 games), biscuit mesh chat/SOS | **done** (`espnow.start/send/recv/info/stop`, `"espnow"` permission with approval; polled 6-slot ring, radio exclusive with WiFi/hotspot, nothing upstream touched). |
-| `wifi.softap` + captive DNS, `http.server` | biscuit dead-drop/bulletin/portal, crossplay web apps | **softap done and verified with a real client** (`wifi.softap`, `wifi.softap_info`, `"hotspot"` permission with approval; `net.*` works over it; WPA2 + DHCP + HTTP from a laptop-class client). The HTTP server and the captive-portal DNS are Lua libraries over `net.listen`/`net.udp_*`, not native code (nothing upstream touched). |
-| `xml.parse` (expat binding) | OPDS feeds, OPF/NCX niceties | String-pattern scraping suffices for AO3/M2; revisit for OPDS. |
+| `xml.parse` (expat binding) | OPDS feeds, OPF/NCX niceties | **Now #14 in "Next up"**: the most requested primitive of the second-pass audit. String-pattern scraping was enough for AO3, not for OPDS/RSS/TOC. |
 | `gfx.load_font(path)` TTF | custom fonts | Hard; FreeInkFont subsystem is deep. |
 | deep sleep with wake-timers/retained frame | sleep screens, alarms | **`system.sleep(seconds)` + `system.last_wake()` done and verified** (arms the timer, enters upstream's own sleep flow read-only; the power button also wakes; a timer wake is a fresh boot, `last_wake()` reports it; no permission needed). Retained frame not exposed. |
 | decimal arithmetic for Calculator | biscuit/crossplay Calculator | Lua can do string-based decimal add/sub; only worth it if the Calculator gets ported. |
 | App categories / launcher for Lua apps (**parked, undecided**) | a flat Plugins list will not scale past a few dozen apps | Options discussed, no decision yet. **Mechanism is settled:** category = manifest `"category"` field only (not sub-folders: the Plugin Hub and `x4push` install flat at `/plugins/<name>`, data dirs are keyed by app name, `app.dir()` would change). **A.** native "Lua apps" screen (C++): fast, no VM RAM, but more C++ UI + one upstream entry point, not replaceable. **B (recommended).** a launcher that is itself a Lua app (`apps_lua`): zero upstream UI edits, replaceable, Recent/Favorites in plain Lua; needs new `app.list()` + `app.launch(name)` behind a `"launcher"` permission with an approval screen, costs ~15-20 KB RAM while browsing, one extra step; the flat list stays unless a tiny optional filter hides Lua apps (`"listed": false`). **C.** edit `PluginCatalogActivity` in place: one list, but risky (paging/index/uninstall-return logic in a 1,740-line upstream file, merge pain). Optional later: `/.crosslua/categories.json` override so users can re-sort without editing manifests. |
+| **done or mostly done** | | |
+| BLE `scan`/`central`/`peripheral`/`hid` (Grimoire `ble.*`, `hid.*`) | ~12 biscuit apps, Grimoire BLE spells | **Keyboard mode done** (`ble.start/stop/scan/devices/connect/disconnect/state/paired/forget` + `input.key()`, `"bluetooth"` permission with approval label `BLE`): scan, connect-cancel, WiFi exclusivity and start/stop cycles verified on the X4 (stack 52 KB, no per-cycle leak); host tests with 55 mutants; **typing from a real keyboard is the one unverified piece**. **Not done:** a generic GATT client (read/write/notify) and everything that advertises (beacons, acting as a keyboard, contact exchange, phone tether): those need the NimBLE peripheral/broadcaster roles, which `[ble_page_turner]` in `platformio.ini` compiles out for every firmware env: enabling them is an upstream sdkconfig change, so it needs Angel's go. **Raw mode also done** (`ble.start("raw")` + `observe/adverts/observe_stop`, verified on the X4). **Still open:** generic GATT client (#15), advertising / peripheral / acting as a keyboard (needs an sdkconfig change: the build has the central and observer roles only). |
+| `wifi.monitor` promiscuous + native PCAP writer, `wifi.tx` raw | biscuit recon/offense suite, Ruby sniffer | **`wifi.monitor_*` done and verified** (`"monitor"` permission with approval, polled 8-slot ring, native PCAP writer verified with scapy; radio exclusive with WiFi/hotspot/espnow; nothing upstream touched). `wifi.tx_*` **done and verified** (`"tx"` permission with approval, dialog label `INJECT`; coexists with the monitor on one channel; frames captured on the air byte for byte from Lua-injected frames). |
+| `espnow.send/recv` | crossplay PLAY NEARBY (11 games), biscuit mesh chat/SOS | **done** (`espnow.start/send/recv/info/stop`, `"espnow"` permission with approval; polled 6-slot ring, radio exclusive with WiFi/hotspot, nothing upstream touched). |
+| `wifi.softap` + captive DNS, `http.server` | biscuit dead-drop/bulletin/portal, crossplay web apps | **softap done and verified with a real client** (`wifi.softap`, `wifi.softap_info`, `"hotspot"` permission with approval; `net.*` works over it; WPA2 + DHCP + HTTP from a laptop-class client). The HTTP server and the captive-portal DNS are Lua libraries over `net.listen`/`net.udp_*`, not native code (nothing upstream touched). |
 
 ## Tier 4 — developer tooling (requested)
 
