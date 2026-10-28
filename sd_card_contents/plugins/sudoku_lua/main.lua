@@ -485,26 +485,29 @@ end
 -- panel before the pass starts, so the main loop is never pinned for a whole
 -- carve and Back cancels between passes.
 local function beginGame()
-  local level = menuLevel
-  generating = true
-  drawBoard()
-  local out = {}
-  local work = sudoku.newWork()
-  while true do
-    if sudoku.generate(out, level, work, rng, 24) then break end
-    local ev = input.poll()
-    if ev == "back" then
-      generating = false
-      screen = "menu"
-      menuSel = 3
-      drawMenu()
-      return
-    end
-    app.sleep(40)
-  end
-  generating = false
+  -- Angel's pattern: generate in a worker, save to the card, reload with new state.
+  -- Write the level and restart into sudoku_gen.lua (a fresh VM: none of this file's memory carries over).
+  fs.write("data:sudoku.job", tostring(menuLevel) .. "\n")
+  app.restart("sudoku_gen.lua")
+end
+
+-- a finished job waits in data:sudoku.job: parse it and start play
+local function loadGenerated()
+  local text = fs.read("data:sudoku.job") or ""
+  if text == "" then return false end
+  fs.write("data:sudoku.job", "")          -- consumed either way
+  local level = tonumber(text:match("^%d+"))
+  local givens, sols = text:match("%d+\n([%d,]+)\n([%d,]+)")
+  if not level or not givens or not sols then return false end
+  local given, solution = {}, {}
+  local gi, si = 0, 0
+  for v in givens:gmatch("%d+") do gi = gi + 1; given[gi] = tonumber(v) end
+  for v in sols:gmatch("%d+") do si = si + 1; solution[si] = tonumber(v) end
+  if gi ~= 81 or si ~= 81 then return false end
+  local puzzle = { given = given, solution = solution, level = level, seed = 0, clues = 0 }
+  for i = 1, 81 do if given[i] ~= 0 then puzzle.clues = puzzle.clues + 1 end end
   game = sudoku.newGame()
-  sudoku.startGame(game, out)
+  sudoku.startGame(game, puzzle)
   hasGame = true
   resultRecorded = false
   newBest = false
@@ -514,7 +517,7 @@ local function beginGame()
   save()
   lastTick = system.millis()
   screen = "board"
-  drawBoard()
+  return true
 end
 
 local function handleBoard(ev)
@@ -647,7 +650,10 @@ local function __main()
   rec = sudoku.newRecord()
   rng = sudoku.newRng(seed())
   loadSave()
-  drawMenu()
+  if not loadGenerated() and hasGame then
+    screen = "board"          -- a save resumed: open straight onto the board
+  end
+  if screen == "board" then drawBoard() else drawMenu() end
   while true do
     local ev = input.wait()
     local now = system.millis()
