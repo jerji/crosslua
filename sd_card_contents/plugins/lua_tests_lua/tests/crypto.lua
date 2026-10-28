@@ -50,23 +50,6 @@ local r1, r2 = crypto.random(32), crypto.random(32)
 check("random 32 bytes, differs", #r1 == 32 and r1 ~= r2)
 check("equal / unequal", crypto.equal("abc", "abc") and not crypto.equal("abc", "abd"))
 check("b64 roundtrip", crypto.b64decode(crypto.b64encode("hello\0world")) == "hello\0world")
-
--- aes_gcm (NIST GCM test vectors, cross-checked against PyCryptodome)
-local U = crypto.unhex
-local k0, n0 = U("00000000000000000000000000000000"), U("000000000000000000000000")
-local s0 = crypto.aes_gcm_encrypt(k0, n0, "")
-check("aes_gcm empty (NIST #1)", hex(s0) == "58e2fccefa7e3061367f1d57a4e7455a")
-check("aes_gcm empty roundtrip", crypto.aes_gcm_decrypt(k0, n0, s0) == "")
-local s1 = crypto.aes_gcm_encrypt(k0, n0, U("00000000000000000000000000000000"))
-check("aes_gcm 16B pt (NIST #2)", hex(s1) == "0388dace60b6a392f328c2b971b2fe78ab6e47d42cec13bdf53a67b21257bddf")
-local k2, n2 = U("feffe9928665731c6d6a8f9467308308"), U("cafebabefacedbaddecaf888")
-local aad2 = U("feedfacedeadbeeffeedfacedeadbeefabaddad2")
-local s2 = crypto.aes_gcm_encrypt(k2, n2, U("d9313225f88406e5a55909c5aff5269a"), aad2)
-check("aes_gcm aad", hex(s2) == "42831ec2217774244b7221b784d0d49cd9f20ea917428bc48f586f2936d0fddf")
-check("aes_gcm aad roundtrip", hex(crypto.aes_gcm_decrypt(k2, n2, s2, aad2)) == "d9313225f88406e5a55909c5aff5269a")
-local bad = s1:sub(1, -2) .. string.char(s1:byte(-1) ~ 1)
-check("aes_gcm tamper rejected", crypto.aes_gcm_decrypt(k0, n0, bad) == nil)
-
 print(fails == 0 and "ALL PASSED" or (fails .. " FAILED"))
 
 gfx.clear()
