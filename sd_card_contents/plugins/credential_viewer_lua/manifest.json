@@ -1,0 +1,1 @@
+{"title": "Credential Viewer", "description": "Read-only viewer for the captive portal's Captures/portal_creds.csv. Scroll with up/down.", "storage": {"read": ["Captures"]}}
