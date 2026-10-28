@@ -354,16 +354,21 @@ class Backend {
     (void)cap;
     return 0;
   }
-  // Advertising (raw mode, the broadcaster role): ble.advertise() broadcasts a name and/or manufacturer data as an
-  // advertisement (a beacon). The observer and the broadcaster share the one stack, so you can scan while you
-  // advertise. name/data are optional (at most one may be empty, not both). data <= 31 bytes.
+  // Advertising (raw mode, the broadcaster role): ble.advertise() broadcasts a name, manufacturer data, and/or a
+  // service-data AD (16-bit uuid + serviceDara bytes, as for Fast Pair 0xFE2C) as an advertisement (a beacon). The
+  // observer and the broadcaster share the one stack, so you can scan while you advertise. serviceUuid=0 means none;
+  // serviceDataLen>0 requires serviceUuid. data <= 31 bytes, serviceData <= 27 bytes.
   virtual bool bleAdvertise(const char* name, const uint8_t* data, size_t dataLen, bool connectable, int intervalMs,
-                            char* err, size_t errCap) {
+                            uint16_t serviceUuid, const uint8_t* serviceData, size_t serviceDataLen, char* err,
+                            size_t errCap) {
     (void)name;
     (void)data;
     (void)dataLen;
     (void)connectable;
     (void)intervalMs;
+    (void)serviceUuid;
+    (void)serviceData;
+    (void)serviceDataLen;
     if (errCap) err[0] = 0;
     return false;
   }

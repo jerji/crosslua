@@ -1461,7 +1461,8 @@ class LuaAppActivity::Backend final : public crosslua::Backend {
     return 0;
 #endif
   }
-  bool bleAdvertise(const char* name, const uint8_t* data, size_t dataLen, bool connectable, int intervalMs, char* err,
+  bool bleAdvertise(const char* name, const uint8_t* data, size_t dataLen, bool connectable, int intervalMs,
+                    uint16_t serviceUuid, const uint8_t* serviceData, size_t serviceDataLen, char* err,
                     size_t errCap) override {
 #if FREEINK_CAP_BLE_HID_HOST
     if (!bleUp_ || bleMode_ != crosslua::Backend::BLE_MODE_RAW) {
@@ -1473,6 +1474,9 @@ class LuaAppActivity::Backend final : public crosslua::Backend {
     adv->setConnectableMode(connectable ? BLE_GAP_CONN_MODE_UND : BLE_GAP_CONN_MODE_NON);
     if (name && name[0]) adv->setName(name);
     if (dataLen) adv->setManufacturerData(data, dataLen);
+    if (serviceUuid)
+      adv->setServiceData(NimBLEUUID(serviceUuid),
+                          std::string(reinterpret_cast<const char*>(serviceData), serviceDataLen));
     if (intervalMs > 0) {  // NimBLE takes 0.625 ms units: 20..10000 ms -> 32..16000
       const uint16_t u = static_cast<uint16_t>(intervalMs * 8 / 5);
       adv->setMinInterval(u);
@@ -1489,6 +1493,9 @@ class LuaAppActivity::Backend final : public crosslua::Backend {
     (void)dataLen;
     (void)connectable;
     (void)intervalMs;
+    (void)serviceUuid;
+    (void)serviceData;
+    (void)serviceDataLen;
     if (errCap) err[0] = 0;
     return false;
 #endif

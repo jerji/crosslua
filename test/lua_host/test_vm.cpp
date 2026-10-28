@@ -782,9 +782,12 @@ struct MockBackend : Backend {
   bool bleAdvUp = false, bleAdvFail = false;
   int bleAdvCalls = 0, bleAdvStops = 0;
   std::string bleAdvName, bleAdvData;
+  uint16_t bleAdvServiceUuid = 0;
+  std::string bleAdvServiceData;
   bool bleAdvConnectable = false;
   int bleAdvIntervalMs = 0;
-  bool bleAdvertise(const char* name, const uint8_t* data, size_t dataLen, bool connectable, int intervalMs, char* err,
+  bool bleAdvertise(const char* name, const uint8_t* data, size_t dataLen, bool connectable, int intervalMs,
+                    uint16_t serviceUuid, const uint8_t* serviceData, size_t serviceDataLen, char* err,
                     size_t errCap) override {
     bleAdvCalls++;
     if (bleAdvFail) {
@@ -795,6 +798,8 @@ struct MockBackend : Backend {
     bleAdvData = std::string(reinterpret_cast<const char*>(data), dataLen);
     bleAdvConnectable = connectable;
     bleAdvIntervalMs = intervalMs;
+    bleAdvServiceUuid = serviceUuid;
+    bleAdvServiceData = std::string(reinterpret_cast<const char*>(serviceData), serviceDataLen);
     bleAdvUp = true;
     return true;
   }
@@ -8966,12 +8971,19 @@ int main() {
         print(ble.advertise({data = string.rep("x", 32)}))
         print(ble.advertise({name = "x", interval_ms = 19}))
         print(ble.advertise({name = "x", interval_ms = "a"}))
+        print(ble.advertise({service_uuid = "a"}))
+        print(ble.advertise({service_uuid = 0}))
+        print(ble.advertise({service_uuid = 70000}))
+        print(ble.advertise({service_data = "\x01"}))
+        print(ble.advertise({service_uuid = 0xFE2C, service_data = string.rep("x", 28)}))
       )LUA");
       expect(be,
              {"true", "nil\toptions must be a table like {name=\"...\", data=\"...\"}", "nil\tname must be a string",
-              "nil\tdata must be a string", "nil\tadvertise a name, data, or both",
+              "nil\tdata must be a string", "nil\tadvertise a name, data, service_data, or a combination",
               "nil\tdata must be at most 31 bytes", "nil\tinterval_ms must be 0 or 20..10000",
-              "nil\tinterval_ms must be 0 or 20..10000"},
+              "nil\tinterval_ms must be 0 or 20..10000", "nil\tservice_uuid must be an integer 1..65535",
+              "nil\tservice_uuid must be an integer 1..65535", "nil\tservice_uuid must be an integer 1..65535",
+              "nil\tservice_data needs a service_uuid", "nil\tservice_data must be at most 27 bytes"},
              "validation");
       CHECK(be.bleAdvCalls == 0);
     }
@@ -8997,6 +9009,13 @@ int main() {
       be.bleAdvFail = true;
       go(be, "print(ble.start(\"raw\")); print(ble.advertise({name=\"x\"}))");
       expect(be, {"true", "nil\tadvertising refused (mock)"}, "backend failure");
+    }
+    {
+      MockBackend be;  // service_uuid + service_data reach the backend as a service-data AD
+      be.blePermitted = true;
+      go(be, "print(ble.start(\"raw\")); print(ble.advertise({service_uuid=0xFE2C, service_data=\"\\x03\\x00\\x80\"}))");
+      expect(be, {"true", "true"}, "service data");
+      CHECK(be.bleAdvServiceUuid == 0xFE2C && be.bleAdvServiceData == std::string("\x03\x00\x80", 3));
     }
   }
   if (ota_version_tests())

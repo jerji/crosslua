@@ -72,6 +72,8 @@ word. Order = leverage per effort, cheapest first. Everything here is NOT built 
 | 27 | 4-level grayscale `gfx` model | X3 panel, 2-bit XTCH pages, anti-aliased text | L | X3-class boards only |
 | 28 | RTC alarm wake (`device.wake_in`) | alarm clock | L | needs upstream wake-source plumbing |
 | 29 | sleep-enter hook / retained frame | background sync | M | upstream hook |
+| 30 | `ble.advertise` service-data AD (`{service_uuid, service_data}`) | Fast Pair preset, other service-data beacons | S | **done**: `service_uuid` (1..65535) + `service_data` (≤27 B) → `setServiceData` |
+| 31 | `go.engine` — native michi-c2 bridge | strong Go AI (port crossplay's `src/apps_local/go/michi/`) | M/L | **PARKED (Angel)**: the Lua RAVE playout ships for now |
 
 ### Apps that need no new native code (each gets a spec before it is written)
 

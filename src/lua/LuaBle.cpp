@@ -524,6 +524,9 @@ int ble_advertise(lua_State* L) {
   size_t dataLen = 0;
   bool connectable = false;
   int intervalMs = 0;
+  uint16_t serviceUuid = 0;
+  const char* serviceData = "";
+  size_t serviceDataLen = 0;
   lua_getfield(L, 1, "name");
   if (!lua_isnil(L, -1)) {
     if (lua_type(L, -1) != LUA_TSTRING) {
@@ -564,13 +567,45 @@ int ble_advertise(lua_State* L) {
     }
   }
   lua_pop(L, 1);
-  if (name[0] == 0 && dataLen == 0) return pushFail(L, "advertise a name, data, or both");
+  lua_getfield(L, 1, "service_uuid");
+  if (!lua_isnil(L, -1)) {
+    if (lua_type(L, -1) != LUA_TNUMBER) {
+      lua_pop(L, 1);
+      return pushFail(L, "service_uuid must be an integer 1..65535");
+    }
+    const lua_Integer su = lua_tointeger(L, -1);
+    if (su < 1 || su > 65535) {
+      lua_pop(L, 1);
+      return pushFail(L, "service_uuid must be an integer 1..65535");
+    }
+    serviceUuid = static_cast<uint16_t>(su);
+  }
+  lua_pop(L, 1);
+  lua_getfield(L, 1, "service_data");
+  if (!lua_isnil(L, -1)) {
+    if (lua_type(L, -1) != LUA_TSTRING) {
+      lua_pop(L, 1);
+      return pushFail(L, "service_data must be a string");
+    }
+    serviceData = lua_tolstring(L, -1, &serviceDataLen);
+    if (serviceDataLen > 27) {
+      lua_pop(L, 1);
+      return pushFail(L, "service_data must be at most 27 bytes");
+    }
+    if (serviceUuid == 0) {
+      lua_pop(L, 1);
+      return pushFail(L, "service_data needs a service_uuid");
+    }
+  }
+  lua_pop(L, 1);
+  if (name[0] == 0 && dataLen == 0 && serviceUuid == 0)
+    return pushFail(L, "advertise a name, data, service_data, or a combination");
   if (dataLen > 31) return pushFail(L, "data must be at most 31 bytes");
   if (int r = gateBle(L)) return r;
   if (int r = needMode(L, Backend::BLE_MODE_RAW)) return r;
   char err[96] = {0};
-  if (!be(L).bleAdvertise(name, reinterpret_cast<const uint8_t*>(data), dataLen, connectable, intervalMs, err,
-                          sizeof(err)))
+  if (!be(L).bleAdvertise(name, reinterpret_cast<const uint8_t*>(data), dataLen, connectable, intervalMs, serviceUuid,
+                          reinterpret_cast<const uint8_t*>(serviceData), serviceDataLen, err, sizeof(err)))
     return pushFail(L, err[0] ? err : "cannot advertise");
   lua_pushboolean(L, 1);
   return 1;
