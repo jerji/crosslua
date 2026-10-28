@@ -1,0 +1,1 @@
+{"title": "Host Scanner", "description": "TCP-connect sweep of your subnet: which hosts answer on which ports", "permissions": ["network"]}
