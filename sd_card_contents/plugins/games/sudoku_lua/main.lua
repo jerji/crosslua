@@ -648,7 +648,6 @@ local function __main()
   sudoku = require("sudoku")
   game = sudoku.newGame()
   rec = sudoku.newRecord()
-  rng = sudoku.newRng(seed())
   loadSave()
   if not loadGenerated() and hasGame then
     screen = "board"          -- a save resumed: open straight onto the board

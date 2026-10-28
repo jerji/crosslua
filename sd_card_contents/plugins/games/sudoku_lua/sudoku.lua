@@ -118,13 +118,8 @@ function M.generate(out, level, work, rng, attempts)
   for attempt = 1, attempts do
     local attemptSeed = rng.s
     local solution = {}
-    if not fillComplete(solution, work, rng) then
-      -- no base grid from this seed; try another
-    elseif not carve(out, solution, work, rng) then
-      -- dug but could not grade; try another
-    elseif out.level ~= level then
-      -- a perfectly good puzzle, just not this level; try another
-    else
+    -- no base grid, could not grade, or not this level: try another seed
+    if fillComplete(solution, work, rng) and carve(out, solution, work, rng) and out.level == level then
       out.seed = attemptSeed
       return true
     end
