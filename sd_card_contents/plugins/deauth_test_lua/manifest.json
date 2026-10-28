@@ -1,1 +1,1 @@
-{"title": "Deauth Test (authorised)", "description": "ACTIVE: sends 802.11 deauth frames to ONE AP you pick, for testing your own network. Needs a typed authorisation phrase; stops by itself after 60 s.", "permissions": ["network", "monitor", "tx"]}
+{"title": "Deauth (AP or client)", "description": "ACTIVE: sends 802.11 deauth frames to a chosen AP (all clients) or one client of it. Transmits until Back. Native approval required.", "permissions": ["network", "monitor", "tx"]}
