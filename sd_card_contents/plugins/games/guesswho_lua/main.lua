@@ -149,9 +149,8 @@ local ok, err = pcall(function()
     if e == "back" then
       if st.mode ~= "normal" then st.mode = "normal"; st.msg = ""
       else break end
-    elseif done then
-      -- result is shown; back exits
-    elseif st.mode == "ask" then
+    elseif not done then   -- once the result is shown, only back does anything
+      if st.mode == "ask" then
       if e == "up" then st.qsel = st.qsel > 1 and st.qsel - 1 or #QUESTIONS
       elseif e == "down" then st.qsel = st.qsel < #QUESTIONS and st.qsel + 1 or 1
       elseif e == "confirm" then
@@ -178,6 +177,7 @@ local ok, err = pcall(function()
           st.mode = "guess"; st.msg = "Pick a tile and confirm to guess. Back cancels."
           st.cur = { kind = "tile", i = 1 }
         end
+      end
       end
     end
     draw(st)
