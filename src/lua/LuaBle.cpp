@@ -497,6 +497,10 @@ int ble_notifs(lua_State* L) {
 
 }  // namespace
 
+int ble_advertise(lua_State* L);
+int ble_advertise_stop(lua_State* L);
+int ble_advertising(lua_State* L);
+
 void registerBle(lua_State* L, Ctx* c) {
   static const luaL_Reg fns[] = {
       {"start", ble_start},           {"stop", ble_stop},       {"scan", ble_scan},
@@ -505,8 +509,86 @@ void registerBle(lua_State* L, Ctx* c) {
       {"forget", ble_forget},         {"observe", ble_observe}, {"observe_stop", ble_observe_stop},
       {"adverts", ble_adverts},       {"services", ble_services}, {"read", ble_read},
       {"write", ble_write},           {"notify", ble_notify},   {"notifs", ble_notifs},
+      {"advertise", ble_advertise},   {"advertise_stop", ble_advertise_stop}, {"advertising", ble_advertising},
       {nullptr, nullptr}};
   regTable(L, c, "ble", fns);
+}
+
+// ble.advertise({name=..., data=..., connectable=false, interval_ms=...}) -> true | nil, err (raw mode). Broadcasts
+// a name and/or manufacturer data as an advertisement (a beacon by default). The observer and the broadcaster share
+// the one stack, so you can keep scanning while you advertise.
+int ble_advertise(lua_State* L) {
+  if (lua_type(L, 1) != LUA_TTABLE) return pushFail(L, "options must be a table like {name=\"...\", data=\"...\"}");
+  const char* name = "";
+  const char* data = "";
+  size_t dataLen = 0;
+  bool connectable = false;
+  int intervalMs = 0;
+  lua_getfield(L, 1, "name");
+  if (!lua_isnil(L, -1)) {
+    if (lua_type(L, -1) != LUA_TSTRING) {
+      lua_pop(L, 1);
+      return pushFail(L, "name must be a string");
+    }
+    name = lua_tostring(L, -1);
+  }
+  lua_pop(L, 1);
+  lua_getfield(L, 1, "data");
+  if (!lua_isnil(L, -1)) {
+    if (lua_type(L, -1) != LUA_TSTRING) {
+      lua_pop(L, 1);
+      return pushFail(L, "data must be a string");
+    }
+    data = lua_tolstring(L, -1, &dataLen);
+  }
+  lua_pop(L, 1);
+  lua_getfield(L, 1, "connectable");
+  if (!lua_isnil(L, -1)) {
+    if (lua_type(L, -1) != LUA_TBOOLEAN) {
+      lua_pop(L, 1);
+      return pushFail(L, "connectable must be a boolean");
+    }
+    connectable = lua_toboolean(L, -1) != 0;
+  }
+  lua_pop(L, 1);
+  lua_getfield(L, 1, "interval_ms");
+  if (!lua_isnil(L, -1)) {
+    if (lua_type(L, -1) != LUA_TNUMBER) {
+      lua_pop(L, 1);
+      return pushFail(L, "interval_ms must be 0 or 20..10000");
+    }
+    intervalMs = static_cast<int>(lua_tointeger(L, -1));
+    if (intervalMs < 0 || (intervalMs > 0 && (intervalMs < 20 || intervalMs > 10000))) {
+      lua_pop(L, 1);
+      return pushFail(L, "interval_ms must be 0 or 20..10000");
+    }
+  }
+  lua_pop(L, 1);
+  if (name[0] == 0 && dataLen == 0) return pushFail(L, "advertise a name, data, or both");
+  if (dataLen > 31) return pushFail(L, "data must be at most 31 bytes");
+  if (int r = gateBle(L)) return r;
+  if (int r = needMode(L, Backend::BLE_MODE_RAW)) return r;
+  char err[96] = {0};
+  if (!be(L).bleAdvertise(name, reinterpret_cast<const uint8_t*>(data), dataLen, connectable, intervalMs, err,
+                          sizeof(err)))
+    return pushFail(L, err[0] ? err : "cannot advertise");
+  lua_pushboolean(L, 1);
+  return 1;
+}
+
+int ble_advertise_stop(lua_State* L) {
+  if (int r = gateBle(L)) return r;
+  if (be(L).bleRunning() && be(L).bleMode() == Backend::BLE_MODE_RAW) be(L).bleAdvertiseStop();
+  lua_pushboolean(L, 1);
+  return 1;
+}
+
+// ble.advertising() -> boolean (raw mode). Whether the broadcaster is currently advertising.
+int ble_advertising(lua_State* L) {
+  if (int r = gateBle(L)) return r;
+  if (int r = needMode(L, Backend::BLE_MODE_RAW)) return r;
+  lua_pushboolean(L, be(L).bleAdvertising());
+  return 1;
 }
 
 }  // namespace crosslua

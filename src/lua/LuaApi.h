@@ -352,6 +352,21 @@ class Backend {
     (void)cap;
     return 0;
   }
+  // Advertising (raw mode, the broadcaster role): ble.advertise() broadcasts a name and/or manufacturer data as an
+  // advertisement (a beacon). The observer and the broadcaster share the one stack, so you can scan while you
+  // advertise. name/data are optional (at most one may be empty, not both). data <= 31 bytes.
+  virtual bool bleAdvertise(const char* name, const uint8_t* data, size_t dataLen, bool connectable, int intervalMs,
+                            char* err, size_t errCap) {
+    (void)name;
+    (void)data;
+    (void)dataLen;
+    (void)connectable;
+    (void)intervalMs;
+    if (errCap) err[0] = 0;
+    return false;
+  }
+  virtual void bleAdvertiseStop() {}
+  virtual bool bleAdvertising() { return false; }
   // Details of the "key" event popEvent() returned last; false for any other event.
   virtual bool eventKey(KeyInfo* k) {
     (void)k;

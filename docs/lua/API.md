@@ -410,8 +410,9 @@ end
 
 **Raw mode** (`ble.start("raw")`): NimBLE as a bare observer. Every advertisement is handed over as received, to parse yourself. Same
 permission (`bluetooth`), same RAM and radio exclusivity as keyboard mode. The keyboard calls (`scan`, `devices`, `connect`, `paired`, `forget`)
-refuse in raw mode and the raw calls refuse in keyboard mode, with a message that says which mode they need. Observer only: the
-build has the central and observer roles, not peripheral or broadcaster, so there is no advertising and no acting as a device.
+refuse in raw mode and the raw calls refuse in keyboard mode, with a message that says which mode they need. Raw mode is the
+bare radio (the central, observer and broadcaster roles): you can observe advertisements and broadcast your own at the
+same time.
 
 | call | notes |
 |---|---|
@@ -419,6 +420,10 @@ build has the central and observer roles, not peripheral or broadcaster, so ther
 | `ble.observe_stop()` → true | |
 | `ble.adverts()` → `list, dropped` \| nil, err | one entry per device heard since `observe()` started (first heard first, **at most 32**): `{addr, addr_type, rssi, adv_type, connectable, scannable, adv_len, age_ms, data}`. `data` is the advertising data followed by the scan response as raw bytes (at most 31 + 31), `adv_len` says where the scan response starts. `rssi` and `data` are those of the last packet, `age_ms` is the time since it. `addr_type` is NimBLE's: 0 public, 1 random (2 and 3: resolved private addresses). `adv_type`: 0 ADV_IND, 1 ADV_DIRECT_IND, 2 ADV_SCAN_IND, 3 ADV_NONCONN_IND, 4 SCAN_RSP. `dropped` counts **packets** (not devices) ignored because the table was full |
 | `ble.state()` | in raw mode `mode = "raw"`, `scanning` tells whether the observer is listening, `link` stays `idle` |
+
+| `ble.advertise(options)` → true \| nil, err | broadcasts **your own** advertisement (a beacon): `options` = `{name = "...", data = "<bytes>", connectable = false, interval_ms = ...}`. `name` and `data` (manufacturer data, < 31 bytes) are each optional but at least one is required; `connectable=true` advertises as connectable, default `false` is a non-connectable beacon; `interval_ms` is 0 (default ≈100 ms) or 20..10000. Repeating replaces the advertisement |
+| `ble.advertise_stop()` → true | ends the advertisement |
+| `ble.advertising()` → boolean | whether you are currently advertising |
 
 Parsing is left to Lua on purpose (a length/type/value walk is ten lines, see `lua_tests_lua/tests/bleraw.lua`). Legacy advertising only: extended
 advertisements (coded PHY, long payloads) are not compiled into this build. Verified on the X4: passive and active scans, `observe(0)` + stop, six
@@ -459,8 +464,8 @@ for _, c in ipairs(ble.services()) do print(c.service, c.uuid, c.props) end
 print(ble.read("2a19"))                              -- e.g. battery level
 ```
 
-Not yet: advertising/beacons and acting as a keyboard/device (the peripheral role, which upstream's NimBLE config
-compiles out).
+Not yet: acting as a keyboard/device (the HID peripheral role — DuckyScript-style keystroke injection), and a GATT
+server (others connecting to us, as opposed to the GATT client above which connects TO others).
 
 ## epub — book metadata without opening the book
 | call | notes |

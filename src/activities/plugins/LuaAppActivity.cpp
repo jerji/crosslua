@@ -1434,6 +1434,50 @@ class LuaAppActivity::Backend final : public crosslua::Backend {
     return 0;
 #endif
   }
+  bool bleAdvertise(const char* name, const uint8_t* data, size_t dataLen, bool connectable, int intervalMs, char* err,
+                    size_t errCap) override {
+#if FREEINK_CAP_BLE_HID_HOST
+    if (!bleUp_ || bleMode_ != crosslua::Backend::BLE_MODE_RAW) {
+      snprintf(err, errCap, "bluetooth is not running in raw mode");
+      return false;
+    }
+    NimBLEAdvertising* adv = NimBLEDevice::getAdvertising();
+    adv->stop();
+    adv->setConnectableMode(connectable ? BLE_GAP_CONN_MODE_UND : BLE_GAP_CONN_MODE_NON);
+    if (name && name[0]) adv->setName(name);
+    if (dataLen) adv->setManufacturerData(data, dataLen);
+    if (intervalMs > 0) {  // NimBLE takes 0.625 ms units: 20..10000 ms -> 32..16000
+      const uint16_t u = static_cast<uint16_t>(intervalMs * 8 / 5);
+      adv->setMinInterval(u);
+      adv->setMaxInterval(u);
+    }
+    if (!adv->start(0)) {
+      snprintf(err, errCap, "advertising did not start");
+      return false;
+    }
+    return true;
+#else
+    (void)name;
+    (void)data;
+    (void)dataLen;
+    (void)connectable;
+    (void)intervalMs;
+    if (errCap) err[0] = 0;
+    return false;
+#endif
+  }
+  void bleAdvertiseStop() override {
+#if FREEINK_CAP_BLE_HID_HOST
+    if (bleUp_ && bleMode_ == crosslua::Backend::BLE_MODE_RAW) NimBLEDevice::getAdvertising()->stop();
+#endif
+  }
+  bool bleAdvertising() override {
+#if FREEINK_CAP_BLE_HID_HOST
+    return bleUp_ && bleMode_ == crosslua::Backend::BLE_MODE_RAW && NimBLEDevice::getAdvertising()->isAdvertising();
+#else
+    return false;
+#endif
+  }
   bool eventKey(crosslua::Backend::KeyInfo* k) override {
     if (!haveKey) return false;
     *k = lastKey;

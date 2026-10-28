@@ -778,6 +778,31 @@ struct MockBackend : Backend {
     gattNotifBuf.clear();
     return n;
   }
+  // --- advertise mock (raw mode, broadcaster) ---
+  bool bleAdvUp = false, bleAdvFail = false;
+  int bleAdvCalls = 0, bleAdvStops = 0;
+  std::string bleAdvName, bleAdvData;
+  bool bleAdvConnectable = false;
+  int bleAdvIntervalMs = 0;
+  bool bleAdvertise(const char* name, const uint8_t* data, size_t dataLen, bool connectable, int intervalMs, char* err,
+                    size_t errCap) override {
+    bleAdvCalls++;
+    if (bleAdvFail) {
+      snprintf(err, errCap, "advertising refused (mock)");
+      return false;
+    }
+    bleAdvName = name ? name : "";
+    bleAdvData = std::string(reinterpret_cast<const char*>(data), dataLen);
+    bleAdvConnectable = connectable;
+    bleAdvIntervalMs = intervalMs;
+    bleAdvUp = true;
+    return true;
+  }
+  void bleAdvertiseStop() override {
+    bleAdvStops++;
+    bleAdvUp = false;
+  }
+  bool bleAdvertising() override { return bleAdvUp; }
   bool eventKey(KeyInfo* k) override {
     if (!haveKey) return false;
     *k = lastKey;
@@ -8720,6 +8745,90 @@ int main() {
       expect(be, {"true", "nil\tuuid must be a 1..36 character string", "nil\tuuid must be a string",
                   "nil\tdata must be a string", "nil\ton must be a boolean"}, "validation");
       CHECK(be.gattReadCalls == 0 && be.gattWriteCalls == 0 && be.gattNotifyCalls == 0);
+    }
+  }
+  TEST("ble advertise: name/data broadcast in raw mode, validation, mode gating");
+  {
+    auto go = [](MockBackend& be, const char* script) {
+      LuaVm vm;
+      CHECK(vm.open(128 * 1024));
+      registerApi(vm, be);
+      CHECK(vm.load("t", script, strlen(script)));
+      CHECK(run(vm, be, 100000) == Status::Finished);
+    };
+    auto expect = [](MockBackend& be, std::vector<std::string> want, const char* tag) {
+      if (be.logs.size() != want.size()) printf("    adv %s: %zu logs, want %zu\n", tag, be.logs.size(), want.size());
+      CHECK(be.logs.size() == want.size());
+      for (size_t i = 0; i < want.size() && i < be.logs.size(); i++) {
+        CHECK(be.logs[i] == want[i]);
+        if (be.logs[i] != want[i])
+          printf("    adv %s #%zu got '%s' want '%s'\n", tag, i + 1, be.logs[i].c_str(), want[i].c_str());
+      }
+    };
+    const std::string DENIED =
+        "nil\tbluetooth not permitted: add \"permissions\": [\"bluetooth\"] to this app's manifest.json (and approve "
+        "it)";
+    const std::string NOTRUN = "nil\tbluetooth is not running (call ble.start() first)";
+    const std::string NEEDRAW = "nil\tthis needs ble.start(\"raw\") (bluetooth is running in keyboard mode)";
+    {
+      MockBackend be;  // permission, then running, then raw mode
+      const char* script = "print(ble.advertise({name=\"x\"})); print(ble.advertising())";
+      go(be, script);
+      expect(be, {DENIED, DENIED}, "denied");
+      be.blePermitted = true;
+      be.logs.clear();
+      go(be, script);
+      expect(be, {NOTRUN, NOTRUN}, "not running");
+      be.logs.clear();
+      go(be, "print(ble.start(\"keyboard\"))");
+      be.logs.clear();
+      go(be, script);
+      expect(be, {NEEDRAW, NEEDRAW}, "keyboard mode");
+      CHECK(be.bleAdvCalls == 0);
+    }
+    {
+      MockBackend be;  // argument validation never reaches the backend
+      be.blePermitted = true;
+      go(be, R"LUA(
+        print(ble.start("raw"))
+        print(ble.advertise("x"))
+        print(ble.advertise({name = 5}))
+        print(ble.advertise({data = 5}))
+        print(ble.advertise({}))
+        print(ble.advertise({data = string.rep("x", 32)}))
+        print(ble.advertise({name = "x", interval_ms = 19}))
+        print(ble.advertise({name = "x", interval_ms = "a"}))
+      )LUA");
+      expect(be,
+             {"true", "nil\toptions must be a table like {name=\"...\", data=\"...\"}", "nil\tname must be a string",
+              "nil\tdata must be a string", "nil\tadvertise a name, data, or both",
+              "nil\tdata must be at most 31 bytes", "nil\tinterval_ms must be 0 or 20..10000",
+              "nil\tinterval_ms must be 0 or 20..10000"},
+             "validation");
+      CHECK(be.bleAdvCalls == 0);
+    }
+    {
+      MockBackend be;  // the fields reach the backend; stop clears it; advertise while advertising restarts it
+      be.blePermitted = true;
+      go(be, R"LUA(
+        print(ble.start("raw"))
+        print(ble.advertising())
+        print(ble.advertise({name = "CrossLua Beacon", data = "\x01\x02\x03"}))
+        print(ble.advertising())
+        print(ble.advertise({name = "b", connectable = true, interval_ms = 100}))
+        print(ble.advertise_stop())
+        print(ble.advertising())
+      )LUA");
+      expect(be, {"true", "false", "true", "true", "true", "true", "false"}, "flow");
+      CHECK(be.bleAdvCalls == 2 && be.bleAdvStops == 1 && be.bleAdvName == "b" && be.bleAdvData == "" &&
+            be.bleAdvConnectable && be.bleAdvIntervalMs == 100);
+    }
+    {
+      MockBackend be;  // the stack's own refusal surfaces its message
+      be.blePermitted = true;
+      be.bleAdvFail = true;
+      go(be, "print(ble.start(\"raw\")); print(ble.advertise({name=\"x\"}))");
+      expect(be, {"true", "nil\tadvertising refused (mock)"}, "backend failure");
     }
   }
   if (ota_version_tests())
