@@ -1,0 +1,1 @@
+{"title": "Password Manager", "description": "Encrypted list of logins in a PIN-protected vault (AES-256 + HMAC, device-bound key). Entries: name, user, password."}
