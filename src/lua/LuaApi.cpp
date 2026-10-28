@@ -804,6 +804,13 @@ int sys_mac(lua_State* L) {
   return 1;
 }
 
+// system.reboot() -> true. Restarts the whole device (the app ends, the reader boots cold).
+int sys_reboot(lua_State* L) {
+  be(L).systemReboot();
+  lua_pushboolean(L, 1);
+  return 1;
+}
+
 // print(...) -> device log (tabs between args, like stock print)
 int api_print(lua_State* L) {
   char buf[256];
@@ -942,6 +949,7 @@ void registerApi(LuaVm& vm, Backend& backend) {
                                  {"dev_floor", sys_dev_floor},
                                  {"sleep", sys_sleep},
                                  {"last_wake", sys_last_wake},
+                                 {"reboot", sys_reboot},
                                  {nullptr, nullptr}};
   regTable(L, c, "gfx", gfx);
   regTable(L, c, "input", input);

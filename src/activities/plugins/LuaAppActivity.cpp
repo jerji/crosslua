@@ -2320,6 +2320,7 @@ class LuaAppActivity::Backend final : public crosslua::Backend {
     esp_read_mac(m, ESP_MAC_WIFI_STA);
     snprintf(out, 18, "%02X:%02X:%02X:%02X:%02X:%02X", m[0], m[1], m[2], m[3], m[4], m[5]);
   }
+  void systemReboot() override { esp_restart(); }
   bool drawQr(const char* text, int x, int y, int side) override {
     QrUtils::drawQrCode(r_, Rect(x, y, side, side), text);
     return true;

@@ -471,6 +471,7 @@ class Backend {
   // Rename/move within the app's data: scope (LuaFs resolves and scopes; paths arrive absolute).
   virtual bool fsRename(const char* from, const char* to, char* err, size_t errCap) = 0;
   virtual void mac(char out[18]) = 0;  // "AA:BB:CC:DD:EE:FF"
+  virtual void systemReboot() = 0;     // restart the whole device (esp_restart)
   // Draws a QR code for `text` into the current frame, fitted into a side x side box. false when it cannot fit.
   virtual bool drawQr(const char* text, int x, int y, int side) = 0;
   // Frontlight. get() false when the board has none. On set, -1 means "leave unchanged".

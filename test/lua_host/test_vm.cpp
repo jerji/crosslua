@@ -1116,6 +1116,8 @@ struct MockBackend : Backend {
     return true;
   }
   void mac(char out[18]) override { snprintf(out, 18, "%s", mac_.c_str()); }
+  bool rebooted = false;
+  void systemReboot() override { rebooted = true; }
   bool drawQr(const char* text, int x, int y, int side) override {
     qrSeen = std::string(text) + "|" + std::to_string(x) + "|" + std::to_string(y) + "|" + std::to_string(side);
     return true;
@@ -2662,6 +2664,18 @@ int main() {
     CHECK(be.openedBook.empty() && be.logs.size() == 1 && be.logs[0].find("false\tlibrary access not permitted") == 0);
   }
   {
+    TEST("system.reboot: reaches the backend, returns true");
+    {
+      MockBackend be;
+      LuaVm vm;
+      CHECK(vm.open(64 * 1024));
+      registerApi(vm, be);
+      const char* script = "print(system.reboot())";
+      CHECK(vm.load("t", script, strlen(script)));
+      CHECK(run(vm, be, 100000) == Status::Finished);
+      CHECK(be.logs.size() == 1 && be.logs[0] == "true");
+      CHECK(be.rebooted);
+    }
     TEST("batch A: wifi.scan/time.sync+set/fs.rename/system.mac/gfx.qr/rounded/frontlight");
     MockBackend be;
     be.files["/.crosslua/data/test/a.txt"] = "one";
