@@ -1,0 +1,1 @@
+{"title": "BLE Scanner", "description": "Passive Bluetooth LE observer: lists nearby advertisers by signal, with names and manufacturer IDs. Transmits nothing.", "permissions": ["bluetooth"]}
