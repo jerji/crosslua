@@ -1,1 +1,1 @@
-{"title": "Home Assistant", "description": "Simple HA front end: see and toggle the entities you list (lights, switches, covers). Token kept in an encrypted vault.", "permissions": ["network"]}
+{"title": "Home Assistant", "description": "Browse Home Assistant by room or type, pick an entity, and act on it (on/off, open/close, lock). Server URL and token go in an encrypted vault. Put your server certificate at HomeAssistant/ca.pem on the card; the token is not sent without it.", "permissions": ["network"], "storage": {"read": ["HomeAssistant"]}}
