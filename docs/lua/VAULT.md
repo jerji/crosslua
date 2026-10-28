@@ -66,5 +66,5 @@ Deliberately **not** done:
   plus tamper, wrong-PIN, device-binding and validation cases; `crypto.device_key` against python HMAC vectors; the real
   `main.lua` driven through every flow with scripted keys and typed text. Mutation runs: `host-tools/mut_devkey.py` (14),
   `mut_vault.py` (29), `mut_totp.py` (34), `mut_app.py` (33): every mutant turns the suite red.
-* device: `lua_tests_lua/tests/vaulttest.lua` (needs `vault.lua` in `/.crosslua/lib/`; run it twice: the first run creates a vault and
+* device: `lua_tests_lua/tests/vaulttest.lua` (uses its own copy of `vault.lua`, which the host suite checks is identical to the app's; run it twice: the first run creates a vault and
   deep-sleeps, the second must open it, which proves the key survives a reboot).

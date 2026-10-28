@@ -1,6 +1,6 @@
 -- hub test: the body is wrapped so an early `return` or an error still goes back to the menu.
 -- vault: crypto.device_key (the device secret kept in NVS) and lib vault.lua on the REAL device.
--- Needs vault.lua in /.crosslua/lib/ (the hub falls back to it): tools push totp_lua/vault.lua there.
+-- Uses lua_tests_lua/vault.lua: a copy of totp_lua/vault.lua (the host suite fails if the two differ).
 -- RUN IT TWICE: the first run creates a vault, saves a fingerprint of the device key and goes to deep sleep for 6 s (a reboot); the
 -- second run must open that vault and see the same fingerprint (the key survives a reboot because it lives in NVS, not RAM/SD).
 local function __test()

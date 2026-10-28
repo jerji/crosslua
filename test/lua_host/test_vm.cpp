@@ -7056,6 +7056,12 @@ int main() {
       CHECK(fresh.logs.size() == 1 && fresh.logs[0] == "true");
     }
   }
+  {
+    TEST("vault.lua: the test hub's copy is identical to the Authenticator's (one source of truth)");
+    auto slurp = [](const char* path) { std::ifstream f(path, std::ios::binary); std::stringstream ss; ss << f.rdbuf(); return ss.str(); };
+    const std::string a = slurp("sd_card_contents/plugins/totp_lua/vault.lua"), b = slurp("sd_card_contents/plugins/lua_tests_lua/vault.lua");
+    CHECK(!a.empty() && a == b);
+  }
   printf(g_fail ? "\n%d FAILED\n" : "\nALL PASSED\n", g_fail);
   return g_fail ? 1 : 0;
 }
