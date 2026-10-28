@@ -132,6 +132,25 @@ int epub_progress(lua_State* L) {
   return 1;
 }
 
+// epub.recent() -> { {path, title, author}, ... } (most-recent first, sd:-prefixed paths)
+int epub_recent(lua_State* L) {
+  constexpr int CAP = 16;  // RecentBooksStore caps at 10 anyway
+  Backend::RecentBookInfo buf[CAP];
+  const int n = be(L).epubRecent(buf, CAP);
+  lua_createtable(L, n, 0);
+  for (int i = 0; i < n; i++) {
+    lua_createtable(L, 0, 3);
+    lua_pushstring(L, buf[i].path);
+    lua_setfield(L, -2, "path");
+    lua_pushstring(L, buf[i].title);
+    lua_setfield(L, -2, "title");
+    lua_pushstring(L, buf[i].author);
+    lua_setfield(L, -2, "author");
+    lua_rawseti(L, -2, i + 1);
+  }
+  return 1;
+}
+
 struct PushData {
   const char* data;
   size_t len;
@@ -283,7 +302,8 @@ void registerZip(lua_State* L, Ctx* c) {
   static const luaL_Reg fns[] = {{"list", zip_list},     {"read", zip_read},   {"inflate", zip_inflate},
                                {"zstd", zip_zstd},     {nullptr, nullptr}};
   regTable(L, c, "zip", fns);
-  static const luaL_Reg epubFns[] = {{"meta", epub_meta}, {"progress", epub_progress}, {nullptr, nullptr}};
+  static const luaL_Reg epubFns[] = {{"meta", epub_meta}, {"progress", epub_progress}, {"recent", epub_recent},
+                               {nullptr, nullptr}};
   regTable(L, c, "epub", epubFns);
 }
 

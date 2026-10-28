@@ -77,6 +77,7 @@
 #include "util/QrUtils.h"
 #include "util/BookProgress.h"
 #include "util/ScreenshotUtil.h"
+#include "RecentBooksStore.h"
 
 static bool g_inDeepSleepCall = false;  // true while system.sleep() is inside upstream enterDeepSleep()
 
@@ -1987,6 +1988,20 @@ class LuaAppActivity::Backend final : public crosslua::Backend {
     return true;
   }
   int epubProgress(const char* path) override { return loadBookProgress(path); }
+  int epubRecent(Backend::RecentBookInfo* out, int maxEntries) override {
+    const auto& books = RECENT_BOOKS.getBooks();
+    int n = 0;
+    for (const auto& b : books) {
+      if (n >= maxEntries) break;
+      const char* p = b.path.c_str();
+      while (*p == '/') p++;  // drop any leading slash before the sd: prefix
+      snprintf(out[n].path, sizeof(out[n].path), "sd:%s", p);
+      snprintf(out[n].title, sizeof(out[n].title), "%s", b.title.c_str());
+      snprintf(out[n].author, sizeof(out[n].author), "%s", b.author.c_str());
+      n++;
+    }
+    return n;
+  }
   int zipList(const char* path, crosslua::Backend::ZipEntryInfo* out, int maxEntries, int* total, char* err,
               size_t errCap) override {
     const std::string p(path);

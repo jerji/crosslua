@@ -1285,6 +1285,8 @@ struct MockBackend : Backend {
   std::vector<std::string> epubAsked;
   std::map<std::string, int> progress;            // abs path -> saved percent (0-100)
   std::vector<std::string> progressAsked;
+  struct RecentFix { std::string path, title, author; };
+  std::vector<RecentFix> recentBooks;
   bool epubMeta(const char* path, char* title, size_t titleCap, char* author, size_t authorCap, char* err,
                 size_t errCap) override {
     epubAsked.push_back(path);
@@ -1301,6 +1303,17 @@ struct MockBackend : Backend {
     progressAsked.push_back(path);
     auto it = progress.find(path);
     return it == progress.end() ? -1 : it->second;
+  }
+  int epubRecent(Backend::RecentBookInfo* out, int maxEntries) override {
+    int n = 0;
+    for (const auto& r : recentBooks) {
+      if (n >= maxEntries) break;
+      snprintf(out[n].path, sizeof(out[n].path), "%s", r.path.c_str());
+      snprintf(out[n].title, sizeof(out[n].title), "%s", r.title.c_str());
+      snprintf(out[n].author, sizeof(out[n].author), "%s", r.author.c_str());
+      n++;
+    }
+    return n;
   }
   int zipList(const char* path, ZipEntryInfo* out, int maxEntries, int* total, char* err, size_t errCap) override {
     auto it = zips.find(path);
@@ -4677,6 +4690,42 @@ int main() {
     }
     const std::vector<std::string> asked = {"/Books/a.epub", "/Books/b.xtc", "/Books/c.epub", "/Books/missing.epub"};
     CHECK(be.progressAsked == asked);  // notes.txt and the '..' path never reached the backend
+  }
+  {
+    TEST("epub.recent: shelf of {path,title,author}, most-recent first");
+    MockBackend be;
+    be.recentBooks = {{"sd:Books/a.epub", "A Tale of Two Cities", "Charles Dickens"},
+                      {"sd:Books/b.epub", "No Author", ""}};
+    LuaVm vm;
+    CHECK(vm.open(128 * 1024));
+    registerApi(vm, be);
+    const char* script = R"LUA(
+      local r = epub.recent()
+      print(#r)
+      print(r[1].path, r[1].title, r[1].author)
+      print(r[2].path, r[2].title, "[" .. r[2].author .. "]")
+      print(r[3])
+    )LUA";
+    CHECK(vm.load("t", script, strlen(script)));
+    CHECK(run(vm, be, 100000) == Status::Finished);
+    CHECK(be.logs.size() == 4);
+    if (be.logs.size() == 4) {
+      CHECK(be.logs[0] == "2");
+      CHECK(be.logs[1] == "sd:Books/a.epub\tA Tale of Two Cities\tCharles Dickens");
+      CHECK(be.logs[2] == "sd:Books/b.epub\tNo Author\t[]");
+      CHECK(be.logs[3] == "nil");
+    }
+  }
+  {
+    TEST("epub.recent: empty shelf -> {}");
+    MockBackend be;
+    LuaVm vm;
+    CHECK(vm.open(128 * 1024));
+    registerApi(vm, be);
+    const char* script = "print(#epub.recent())";
+    CHECK(vm.load("t", script, strlen(script)));
+    CHECK(run(vm, be, 100000) == Status::Finished);
+    CHECK(be.logs.size() == 1 && be.logs[0] == "0");
   }
   {
     TEST(
