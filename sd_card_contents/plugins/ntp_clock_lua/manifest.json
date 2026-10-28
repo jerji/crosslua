@@ -1,0 +1,1 @@
+{"title": "NTP Clock", "description": "Joins WiFi once, syncs the clock over SNTP, then shows local time. Confirm re-syncs.", "permissions": ["network"]}
