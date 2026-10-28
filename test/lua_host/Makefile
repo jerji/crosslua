@@ -12,11 +12,11 @@ MBEDFLAGS = -O1 -g -w -I$(MBED)/include -I$(MBED)/library -Itest/lua_host -DMBED
 # -g1 -fno-var-tracking: the 2400-line main() in test_vm.cpp blows GCC's variable-tracking
 # limit and gets compiled twice
 CXXFLAGS  = -std=c++20 -O1 -g1 -fno-var-tracking -Wall -Wextra -Ilib/lua -I$(MBED)/include -Itest/lua_host \
-            -DMBEDTLS_CONFIG_FILE='"mbedtls_host_config.h"' -I. -Ilib -Ilib/InflateReader -Ilib/uzlib/src \
+            -DMBEDTLS_CONFIG_FILE='"mbedtls_host_config.h"' -I. -Ilib -Ilib/zstd -Ilib/InflateReader -Ilib/uzlib/src \
             -fsanitize=address,undefined -MMD -MP
 
 CXX_SRC  := test/lua_host/test_vm.cpp test/lua_host/test_ota.cpp $(addprefix src/lua/,LuaVm.cpp LuaApi.cpp LuaFs.cpp LuaJson.cpp LuaNet.cpp LuaZip.cpp LuaCrypto.cpp LuaXml.cpp LuaSock.cpp LuaAudio.cpp LuaMic.cpp LuaEspNow.cpp LuaMonitor.cpp LuaTx.cpp LuaBle.cpp) lib/InflateReader/InflateReader.cpp
-C_SRC    := $(wildcard lib/lua/*.c) lib/uzlib/src/tinflate.c
+C_SRC    := $(wildcard lib/lua/*.c) lib/uzlib/src/tinflate.c lib/zstd/zstddeclib.c
 MBED_SRC := $(addprefix $(MBED)/library/,sha1.c sha256.c md5.c md.c aes.c platform_util.c constant_time.c gcm.c cipher.c cipher_wrap.c)
 
 CXX_OBJ  := $(patsubst %.cpp,$(OUT)/obj/%.o,$(CXX_SRC))

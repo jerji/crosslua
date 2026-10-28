@@ -10,6 +10,8 @@
 
 #include "LuaInternal.h"
 
+#include <zstd.h>
+
 namespace crosslua {
 namespace {
 
@@ -183,6 +185,44 @@ int zip_inflate(lua_State* L) {
   return 1;
 }
 
+// zip.zstd(frame [, dict]) -> string | nil, err. Zstandard decompression — what the Wikipedia/xkcd/trivia packs
+// use (an optional pre-shared dictionary for better compression). Pure computation, no I/O. Input <= 64 KB,
+// output <= 96 KB. The frame's stored content size, when present, sizes the output exactly; a streamed frame
+// decompresses into the 96 KB cap.
+int zip_zstd(lua_State* L) {
+  size_t fl = 0;
+  const char* frame = luaL_checklstring(L, 1, &fl);
+  const char* dict = nullptr;
+  size_t dl = 0;
+  if (!lua_isnoneornil(L, 2)) dict = luaL_checklstring(L, 2, &dl);
+  if (fl < 1 || fl > 64 * 1024) return pushFail(L, "input must be 1..65536 bytes");
+  if (dl > 256 * 1024) return pushFail(L, "dictionary too large (over 256 KB)");
+
+  const unsigned long long sz = ZSTD_getFrameContentSize(frame, fl);
+  size_t dstCap;
+  if (sz == ZSTD_CONTENTSIZE_ERROR) return pushFail(L, "not a valid zstd frame");
+  if (sz == ZSTD_CONTENTSIZE_UNKNOWN) dstCap = 96 * 1024;  // streamed: bounded by the cap
+  else {
+    if (sz > 96 * 1024) return pushFail(L, "decompressed size too large (over 96 KB)");
+    dstCap = static_cast<size_t>(sz);
+  }
+
+  luaL_Buffer b;
+  uint8_t* dst = reinterpret_cast<uint8_t*>(luaL_buffinitsize(L, &b, dstCap));
+  size_t rc;
+  if (dict) {  // dictionary frames need a DCtx for the loaded-dict state
+    ZSTD_DCtx* dctx = ZSTD_createDCtx();
+    if (!dctx) return pushFail(L, "out of memory");
+    rc = ZSTD_decompress_usingDict(dctx, dst, dstCap, frame, fl, dict, dl);
+    ZSTD_freeDCtx(dctx);
+  } else {
+    rc = ZSTD_decompress(dst, dstCap, frame, fl);
+  }
+  if (ZSTD_isError(rc)) return pushFail(L, "zstd decompression failed");
+  luaL_pushresultsize(&b, rc);
+  return 1;
+}
+
 // gfx.image(path, x, y [, box_w, box_h]) -> drawn_w, drawn_h | nil, err
 // PNG/JPEG/BMP from app:/data:/sd: (sd: needs "library"), decoded row by row into the current frame, fitted into the
 // box (default: from x,y to the screen edge), never upscaled, centred in the box, dithered to black/white. Call
@@ -226,7 +266,8 @@ static int gfx_image(lua_State* L) {
 }
 
 void registerZip(lua_State* L, Ctx* c) {
-  static const luaL_Reg fns[] = {{"list", zip_list}, {"read", zip_read}, {"inflate", zip_inflate}, {nullptr, nullptr}};
+  static const luaL_Reg fns[] = {{"list", zip_list},     {"read", zip_read},   {"inflate", zip_inflate},
+                               {"zstd", zip_zstd},     {nullptr, nullptr}};
   regTable(L, c, "zip", fns);
   static const luaL_Reg epubFns[] = {{"meta", epub_meta}, {nullptr, nullptr}};
   regTable(L, c, "epub", epubFns);
