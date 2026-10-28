@@ -1,0 +1,1 @@
+{"title": "AP Cloner", "description": "ACTIVE: clones a visible AP's SSID (and BSSID or a random one). Targets all clients or one client. Transmits until Back. Native approval required.", "permissions": ["network", "monitor", "tx"]}
