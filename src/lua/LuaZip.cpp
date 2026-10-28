@@ -151,6 +151,38 @@ int epub_recent(lua_State* L) {
   return 1;
 }
 
+// epub.library([offset [, limit]]) -> { {path, title, author}, ... }, total
+int epub_library(lua_State* L) {
+  const int offset = lua_isnoneornil(L, 1) ? 0 : static_cast<int>(luaL_checkinteger(L, 1));
+  const int limit = lua_isnoneornil(L, 2) ? 64 : static_cast<int>(luaL_checkinteger(L, 2));
+  if (offset < 0) return pushFail(L, "offset must be >= 0");
+  if (limit < 1 || limit > 64) return pushFail(L, "limit must be 1..64");
+  auto* buf = static_cast<Backend::RecentBookInfo*>(
+      malloc(static_cast<size_t>(limit) * sizeof(Backend::RecentBookInfo)));
+  if (!buf) return pushFail(L, "out of memory");
+  int total = 0;
+  char err[96] = {0};
+  const int n = be(L).epubLibrary(buf, limit, offset, &total, err, sizeof(err));
+  if (n < 0) {
+    free(buf);
+    return pushFail(L, err[0] ? err : "library index unavailable");
+  }
+  lua_createtable(L, n, 0);
+  for (int i = 0; i < n; i++) {
+    lua_createtable(L, 0, 3);
+    lua_pushstring(L, buf[i].path);
+    lua_setfield(L, -2, "path");
+    lua_pushstring(L, buf[i].title);
+    lua_setfield(L, -2, "title");
+    lua_pushstring(L, buf[i].author);
+    lua_setfield(L, -2, "author");
+    lua_rawseti(L, -2, i + 1);
+  }
+  free(buf);
+  lua_pushinteger(L, total);
+  return 2;
+}
+
 struct PushData {
   const char* data;
   size_t len;
@@ -303,7 +335,7 @@ void registerZip(lua_State* L, Ctx* c) {
                                {"zstd", zip_zstd},     {nullptr, nullptr}};
   regTable(L, c, "zip", fns);
   static const luaL_Reg epubFns[] = {{"meta", epub_meta}, {"progress", epub_progress}, {"recent", epub_recent},
-                               {nullptr, nullptr}};
+                               {"library", epub_library}, {nullptr, nullptr}};
   regTable(L, c, "epub", epubFns);
 }
 

@@ -78,6 +78,8 @@
 #include "util/BookProgress.h"
 #include "util/ScreenshotUtil.h"
 #include "RecentBooksStore.h"
+#include <LibraryIndexFile.h>
+#include <LibraryBuilder.h>
 
 static bool g_inDeepSleepCall = false;  // true while system.sleep() is inside upstream enterDeepSleep()
 
@@ -1998,6 +2000,36 @@ class LuaAppActivity::Backend final : public crosslua::Backend {
       snprintf(out[n].path, sizeof(out[n].path), "sd:%s", p);
       snprintf(out[n].title, sizeof(out[n].title), "%s", b.title.c_str());
       snprintf(out[n].author, sizeof(out[n].author), "%s", b.author.c_str());
+      n++;
+    }
+    return n;
+  }
+  int epubLibrary(Backend::RecentBookInfo* out, int maxEntries, int offset, int* total, char* err,
+                  size_t errCap) override {
+    library::LibraryIndexFile index;
+    if (library::isLibraryIndexDirty() || !index.open(library::libraryIndexPath())) {
+      library::BuildStats stats;
+      if (!library::buildLibraryIndex("/", stats, SETTINGS.libraryUseMetadata != 0) ||
+          !index.open(library::libraryIndexPath())) {
+        snprintf(err, errCap, "library index unavailable (open the Library once)");
+        return -1;
+      }
+    }
+    *total = index.bookCount();
+    int n = 0;
+    for (int row = offset; row < *total && n < maxEntries; row++) {
+      library::ClixRecord rec;
+      if (!index.readRecord(static_cast<uint16_t>(row), rec)) continue;
+      std::string path, title, author;
+      if (!index.readPath(rec, path)) continue;
+      index.readTitle(rec, title);
+      if (title.empty()) index.readName(rec, title);  // fall back to the on-card basename
+      index.readAuthor(rec, author);
+      const char* p = path.c_str();
+      while (*p == '/') p++;  // sd: prefix, no leading slash
+      snprintf(out[n].path, sizeof(out[n].path), "sd:%s", p);
+      snprintf(out[n].title, sizeof(out[n].title), "%s", title.c_str());
+      snprintf(out[n].author, sizeof(out[n].author), "%s", author.c_str());
       n++;
     }
     return n;

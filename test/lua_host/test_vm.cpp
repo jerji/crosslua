@@ -1287,6 +1287,8 @@ struct MockBackend : Backend {
   std::vector<std::string> progressAsked;
   struct RecentFix { std::string path, title, author; };
   std::vector<RecentFix> recentBooks;
+  std::vector<RecentFix> libraryBooks;
+  bool libraryUnavailable = false;
   bool epubMeta(const char* path, char* title, size_t titleCap, char* author, size_t authorCap, char* err,
                 size_t errCap) override {
     epubAsked.push_back(path);
@@ -1311,6 +1313,23 @@ struct MockBackend : Backend {
       snprintf(out[n].path, sizeof(out[n].path), "%s", r.path.c_str());
       snprintf(out[n].title, sizeof(out[n].title), "%s", r.title.c_str());
       snprintf(out[n].author, sizeof(out[n].author), "%s", r.author.c_str());
+      n++;
+    }
+    return n;
+  }
+  int epubLibrary(Backend::RecentBookInfo* out, int maxEntries, int offset, int* total, char* err,
+                  size_t errCap) override {
+    if (libraryUnavailable) {
+      snprintf(err, errCap, "mock: no library index");
+      return -1;
+    }
+    *total = static_cast<int>(libraryBooks.size());
+    int n = 0;
+    for (int i = offset; i < static_cast<int>(libraryBooks.size()) && n < maxEntries; i++) {
+      const auto& b = libraryBooks[static_cast<size_t>(i)];
+      snprintf(out[n].path, sizeof(out[n].path), "%s", b.path.c_str());
+      snprintf(out[n].title, sizeof(out[n].title), "%s", b.title.c_str());
+      snprintf(out[n].author, sizeof(out[n].author), "%s", b.author.c_str());
       n++;
     }
     return n;
@@ -4726,6 +4745,54 @@ int main() {
     CHECK(vm.load("t", script, strlen(script)));
     CHECK(run(vm, be, 100000) == Status::Finished);
     CHECK(be.logs.size() == 1 && be.logs[0] == "0");
+  }
+  {
+    TEST("epub.library: paginated full list + total, validation (offset/limit), unavailable index");
+    MockBackend be;
+    be.libraryBooks = {{"sd:Books/x.epub", "X", "XA"},
+                       {"sd:Books/y.epub", "Y", "YA"},
+                       {"sd:Books/z.epub", "Z", "ZA"}};
+    LuaVm vm;
+    CHECK(vm.open(128 * 1024));
+    registerApi(vm, be);
+    const char* script = R"LUA(
+      local a, t = epub.library()
+      print(#a, t)
+      print(a[1].path, a[1].title, a[1].author)
+      print(a[2].path, a[2].title, a[2].author)
+      print(a[3].path, a[3].title, a[3].author)
+      local b, t2 = epub.library(1, 2)
+      print(#b, t2, b[1].title, b[2].title)
+      print(epub.library(-1))
+      print(epub.library(0, 100))
+      local c, t3 = epub.library(0, 1)
+      print(#c, t3, c[1].title)
+    )LUA";
+    CHECK(vm.load("t", script, strlen(script)));
+    CHECK(run(vm, be, 100000) == Status::Finished);
+    CHECK(be.logs.size() == 8);
+    if (be.logs.size() == 8) {
+      CHECK(be.logs[0] == "3\t3");
+      CHECK(be.logs[1] == "sd:Books/x.epub\tX\tXA");
+      CHECK(be.logs[2] == "sd:Books/y.epub\tY\tYA");
+      CHECK(be.logs[3] == "sd:Books/z.epub\tZ\tZA");
+      CHECK(be.logs[4] == "2\t3\tY\tZ");  // offset 1 + limit 2 -> books 2 and 3
+      CHECK(be.logs[5] == "nil\toffset must be >= 0");
+      CHECK(be.logs[6] == "nil\tlimit must be 1..64");
+      CHECK(be.logs[7] == "1\t3\tX");  // offset 0 + limit 1 -> just the first book
+    }
+  }
+  {
+    TEST("epub.library: unavailable index -> nil, err (backend passthrough)");
+    MockBackend be;
+    be.libraryUnavailable = true;
+    LuaVm vm;
+    CHECK(vm.open(128 * 1024));
+    registerApi(vm, be);
+    const char* script = "print(epub.library())";
+    CHECK(vm.load("t", script, strlen(script)));
+    CHECK(run(vm, be, 100000) == Status::Finished);
+    CHECK(be.logs.size() == 1 && be.logs[0] == "nil\tmock: no library index");
   }
   {
     TEST(

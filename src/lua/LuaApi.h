@@ -436,6 +436,9 @@ class Backend {
     char author[120];
   };
   virtual int epubRecent(RecentBookInfo* out, int maxEntries) = 0;
+  // Library index (the full book list, in arrival order). Fills up to maxEntries starting at `offset`; *total = books
+  // in the index. Returns the count filled, or -1 with err when the index can't be opened/built.
+  virtual int epubLibrary(RecentBookInfo* out, int maxEntries, int offset, int* total, char* err, size_t errCap) = 0;
   virtual int zipList(const char* path, ZipEntryInfo* out, int maxEntries, int* total, char* err, size_t errCap) = 0;
   // Inflates one entry into a malloc'd buffer (caller free()s). Refuses entries over maxBytes.
   virtual bool zipRead(const char* path, const char* name, size_t maxBytes, char** data, size_t* len, char* err,
