@@ -64,6 +64,10 @@ local finalUntil = 0
 local linkCursor, linkGear = 12, false
 local settingsOpen = false
 local linkSettingsSel = 0
+-- forward declarations: the link and engine helpers below are defined in order
+-- but called from earlier functions, so they must be locals declared first.
+local vsComputer, engineToMove, linkPlaying, linkMatched, linkYourTurn
+local applyMove, sendPosition, saveGame, proposeRematch, onMatchStart, onRematch, leaveLink
 
 function vsComputer() return not linkS and settings.opponent == 0 end
 function engineToMove() return vsComputer() and pos.white ~= settings.playAsWhite end
@@ -254,9 +258,8 @@ local function tryMove(from, to)
   for i = 1, legalN do
     local mv = legal[i]
     if chess.mvFrom(mv) == from and chess.mvTo(mv) == to then
-      if chess.mvFlags(mv) & chess.F_PROMO ~= 0 and chess.mvPromo(mv) ~= chess.QUEEN then
-        -- several entries share from/to when promoting; take the queen
-      else
+      -- several entries share from/to when promoting; take the queen
+      if (chess.mvFlags(mv) & chess.F_PROMO) == 0 or chess.mvPromo(mv) == chess.QUEEN then
         applyMove(mv)
         return true
       end
@@ -630,7 +633,7 @@ local function drawMenu(sel)
       -- the two-dot multiplayer mark, right of the label; white ink on the
       -- selected row like the text beside it
       local mx, my = W - 74, y + (rowH - 14) // 2
-      local dark = not (i - 1 == sel)
+      local dark = i - 1 ~= sel
       gfx.rounded_rect(mx, my, 14, 14, 7, true, dark)
       gfx.rounded_rect(mx + 22, my, 14, 14, 7, true, dark)
     end
@@ -839,15 +842,6 @@ local function boardLoop(interactive)
 end
 
 -- ---------------------------------------------------------------- the link
--- The link conversation state. (linkS itself is declared at the top of the
--- chunk with the rest of the state, so every function binds the same local.)
-local seatYou, seatThem = "ready", "looking"
-local rematchQuestion = false
-local endgameStage = "live"       -- live / final / offer
-local finalUntil = 0
-local linkCursor, linkGear = 12, false
-local settingsOpen = false
-
 local function opponentName()
   return linkS and linkS:opponentName() or ""
 end

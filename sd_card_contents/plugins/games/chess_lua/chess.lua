@@ -339,7 +339,6 @@ function chess.genPseudo(pos, list)
         end
       else
         -- bishop / rook / queen
-        local t = chess.pieceType(piece)
         if t == chess.BISHOP or t == chess.QUEEN then
           for d = 1, 4 do
             local df, dr = BISHOP_D[d][1], BISHOP_D[d][2]
