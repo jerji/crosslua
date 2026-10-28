@@ -1,0 +1,1 @@
+{"title": "BLE Sensor", "description": "Connects to a nearby BLE sensor (GATT) and shows its battery, temperature, humidity and pressure, polled or notified.", "permissions": ["bluetooth"]}
