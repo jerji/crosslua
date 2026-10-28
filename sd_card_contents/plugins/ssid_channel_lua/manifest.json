@@ -1,0 +1,1 @@
+{"title": "SSID Channel", "description": "ACTIVE covert channel: send a short text as beacon SSIDs, or receive by listening for them. Broadcast only.", "permissions": ["network", "monitor", "tx"]}
