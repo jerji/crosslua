@@ -871,14 +871,13 @@ __main = function()
           pageDeck(dir)
         end
       elseif S.view == "note" then
-        if S.noteCur == 0 then
-          -- nothing on the band
-        elseif S.noteCur >= #S.blocks + 1 then
+        -- cursor 0 is "nothing on the band": no move
+        if S.noteCur ~= 0 and S.noteCur >= #S.blocks + 1 then
           local last = noteLastSlot()
           S.noteCur = S.noteCur + dir
           if S.noteCur < #S.blocks + 1 then S.noteCur = #S.blocks + 1 end
           if S.noteCur > last then S.noteCur = last end
-        else
+        elseif S.noteCur ~= 0 then
           pageNote(dir)
         end
       elseif S.view == "menu" then
