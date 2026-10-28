@@ -74,7 +74,7 @@ word. Order = leverage per effort, cheapest first. Everything here is NOT built 
 | 29 | sleep-enter hook / retained frame | background sync | M | upstream hook |
 | 30 | `ble.advertise` service-data AD (`{service_uuid, service_data}`) | Fast Pair preset, other service-data beacons | S | **done**: `service_uuid` (1..65535) + `service_data` (≤27 B) → `setServiceData` |
 | 31 | `go.engine` — native michi-c2 bridge | strong Go AI (port crossplay's `src/apps_local/go/michi/`) | M/L | **PARKED (Angel)**: the Lua RAVE playout ships for now |
-| 32 | `http.peer_cert(url)` → PEM / SHA-256 fingerprint | TOFU cert pinning (ha_frontend pins HomeAssistant/ca.pem) | S | Sunny requested 16:50 |
+| 32 | `http.peer_cert(url)` → PEM / SHA-256 fingerprint | TOFU cert pinning (ha_frontend pins HomeAssistant/ca.pem) | S | **PARKED (Angel)**: needs an upstream `SecureClient` peer-cert accessor (wolfSSL handle is opaque/private); ha_frontend already ships warning-based per Angel's call, and `http.request{ca=}` covers the known-ca case |
 
 ### Apps that need no new native code (each gets a spec before it is written)
 
