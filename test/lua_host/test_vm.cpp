@@ -1321,6 +1321,8 @@ static void dump(MockBackend& be) {
 }
 #define TEST(name) printf("[test] %s\n", name)
 
+int ota_version_tests();
+
 int main() {
   setvbuf(stdout, nullptr, _IONBF, 0);
   {
@@ -8384,6 +8386,7 @@ int main() {
       CHECK(be.bleObserveCalls == 0 && be.bleObserveStops == 0);
     }
   }
+  if (ota_version_tests()) ++g_fail;  // defined in test_ota.cpp: a separate TU, so OtaVersion.h edits do not recompile this file
   printf(g_fail ? "\n%d FAILED\n" : "\nALL PASSED\n", g_fail);
   return g_fail ? 1 : 0;
 }

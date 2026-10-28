@@ -132,6 +132,10 @@ jobs:
     permissions:
       contents: write
     steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event.release.tag_name }}
+
       - name: Download firmware assets
         uses: actions/download-artifact@v4
         with:
@@ -150,4 +154,23 @@ jobs:
           done
           test "$(find dist -maxdepth 1 -type f -name 'crosspoint-*.bin' | wc -l)" -eq 8
           gh release upload "$RELEASE_TAG" dist/crosspoint-*.bin \
+            --repo "$GITHUB_REPOSITORY" --clobber
+
+      # The SD-card contents (apps, and separately the on-device test suites), zipped by the same script CI runs on every push.
+      - name: Package the SD-card contents
+        env:
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+        run: |
+          version="${RELEASE_TAG#v}"
+          python3 scripts/package_sd_card.py "$version" zips
+          test -f "zips/crosslua-apps-${version}.zip"
+          test -f "zips/crosslua-tests-${version}.zip"
+          test "$(find zips -maxdepth 1 -type f -name 'crosslua-*.zip' | wc -l)" -eq 2
+
+      - name: Attach the SD-card zips
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+        run: |
+          gh release upload "$RELEASE_TAG" zips/crosslua-*.zip \
             --repo "$GITHUB_REPOSITORY" --clobber

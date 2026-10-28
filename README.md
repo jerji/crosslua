@@ -46,6 +46,33 @@ The device has ~107 KB of free heap and a 32-bit Lua with a per-app budget (~85 
 Full API reference: [`docs/lua/API.md`](docs/lua/API.md) · feature status: [`docs/lua/FEATURE_MATRIX.md`](docs/lua/FEATURE_MATRIX.md) ·
 upstream files touched: [`docs/lua/UPSTREAM_TOUCHPOINTS.md`](docs/lua/UPSTREAM_TOUCHPOINTS.md).
 
+## Install and update CrossLua
+
+Everything below comes from **this repository's [Releases](https://github.com/jerji/crosslua/releases)**, not upstream's.
+
+1. **Firmware**: download `crosspoint-<version>-<board>.bin` (`x3-x4` for the X3 and X4; `sticky`, `x4pro`, `x4c`, `papermono`,
+   `metalio_eink4`, `eego_a4`, `picco` for the others) and flash it the way any CrossPoint firmware is flashed: the web installer's
+   "Custom .bin" option, or `esptool` at offset `0x10000` (see [Install firmware](#install-firmware) below).
+2. **Apps**: download `crosslua-apps-<version>.zip` and unzip it into the **root of the SD card** (it creates `/plugins/<app>/`),
+   then enable Settings → Connectivity → Plugins. `crosslua-tests-<version>.zip` holds the on-device test suites (for developers).
+3. **Updates**: Settings → Check for update reads *this* repository's latest release (a fork of CrossLua points it at its own
+   repository with `-DCROSSLUA_RELEASE_REPO=\"owner/name\"`). Versions look like `2.0.0-crosslua.3`: the first three numbers are the
+   CrossPoint base, the last one is the CrossLua revision, and an update is offered when that revision is higher.
+4. **Going back** to stock CrossPoint: flash an official release with the upstream web installer. Your SD card is untouched.
+
+## Known limitations (read before you rely on it)
+
+- **Hardware**: everything marked verified was verified on the **Xteink X4** (ESP32-C3). All 8 board variants build in CI, but on the
+  other boards (touch, haptics, IMU, audio, frontlight, the S3 boards with PSRAM) the code only compiles and links: **untested on
+  hardware**. Every RAM number in these docs is an X4 number.
+- **HTTPS is encrypted but the server is not authenticated** unless the app passes `ca=` (a pinned certificate). The firmware's own
+  HTTP stack works the same way, **including the firmware update download**, and releases are not signed: flash only releases you trust.
+- **Bluetooth and WiFi modes are mutually exclusive**, each radio mode costs 50-60 KB of the ~107 KB free heap, and leaving an app that
+  used the radio reboots to Home.
+- **A preview**: the API grows between releases. Existing calls keep working; additions and any change are listed in
+  [`docs/lua/FEATURE_MATRIX.md`](docs/lua/FEATURE_MATRIX.md).
+- **Apps run with the permissions you approve**; the approval dialog lists them all. Read it.
+
 ## Credits & licenses
 
 - **[CrossPoint Reader](https://github.com/crosspoint-reader/crosspoint-reader)** (upstream, MIT © 2025 CrossPoint Reader

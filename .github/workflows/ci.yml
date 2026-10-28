@@ -202,6 +202,56 @@ jobs:
       - name: Run tests
         run: ctest --test-dir build/test --output-on-failure -j
 
+  # CrossLua's own Lua-VM suite (gcc + ASAN/UBSAN, mock backend). The cmake unit-tests above are upstream's; this one is ours.
+  lua-host-tests:
+    name: CrossLua host tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          submodules: recursive
+
+      - name: Fetch the mbedtls sources the firmware links
+        # Same version as the ESP-IDF framework bundles (3.6.6); the crypto tests compile these files on the host.
+        run: git clone --quiet --depth 1 --branch mbedtls-3.6.6 https://github.com/Mbed-TLS/mbedtls "$RUNNER_TEMP/mbedtls"
+
+      - name: Install build tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends ccache
+
+      - name: Run the CrossLua host tests
+        env:
+          MBEDTLS_DIR: ${{ runner.temp }}/mbedtls
+        run: test/lua_host/run.sh
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v7
+        with:
+          version: "latest"
+          enable-cache: false
+
+      - name: Run the x4ctl driver tests
+        run: uv run --with pyserial --with pillow test/lua_host/test_x4ctl.py
+
+  # The SD-card zips are built here on every push, by the same script the release uses, so a bad plugin
+  # (missing manifest, oversized script, host path or LAN address in a shipped file) fails CI instead of a release.
+  sd-card-zip:
+    name: SD card zips
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Build the zips
+        run: python3 scripts/package_sd_card.py ci dist
+
+      - name: Upload the zips
+        uses: actions/upload-artifact@v6
+        with:
+          name: crosslua-sd-card
+          path: dist/*.zip
+          if-no-files-found: error
+
   # This job is used as the PR required actions check, allows for changes to other steps in the future without breaking
   # PR requirements.
   test-status:
@@ -211,6 +261,8 @@ jobs:
       - clang-format
       - cppcheck
       - unit-tests
+      - lua-host-tests
+      - sd-card-zip
     if: always()
     runs-on: ubuntu-latest
     steps:
