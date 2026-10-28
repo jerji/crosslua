@@ -66,7 +66,7 @@ word. Order = leverage per effort, cheapest first. Everything here is NOT built 
 | 21 | input gestures: swipe/pinch, capacitive home key, slide switch | touch boards | M | UNTESTED hardware |
 | 22 | `device.orientation` + rotated text | landscape apps | M | |
 | 23 | `audio.play_data` (PCM from memory) | chimes, synth | M | |
-| 24 | `zip.create` / deflate compress, `zstd.decompress` | backups, gzip from a Lua HTTP server | M | **`zip.zstd(frame[, dict])` done** (device-verified) — unblocks Wikipedia/xkcd/trivia packs. `zip.create`/deflate-compress still open |
+| 24 | `zip.create` / deflate compress, `zstd.decompress` | backups, gzip from a Lua HTTP server | M | `zip.zstd(frame[, dict])` built + host-verified (real zstd vectors, 3 gates) but **BLOCKED on-device**: zstd 1.5.7's ~96 KB ZSTD_DCtx exceeds the Lua app's ~82-94 KB free heap. `zip.create`/deflate still open too |
 | 25 | `wifi.softap` and ESP-NOW at the same time | biscuit's SOS beacon | M | today they refuse each other (radio arbitration) |
 | 26 | `gfx.image` GIF (first frame) | | S | |
 | 27 | 4-level grayscale `gfx` model | X3 panel, 2-bit XTCH pages, anti-aliased text | L | X3-class boards only |
