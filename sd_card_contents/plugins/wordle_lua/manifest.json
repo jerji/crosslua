@@ -1,0 +1,1 @@
+{"title": "Wordle", "description": "Five-letter word game. Word lists are NOT shipped: put answers.txt (YYYY-MM-DD WORD per line) and valid.txt (one word per line) in the Wordle folder on the card. Progress is saved per day.", "storage": {"read": ["Wordle"]}}
