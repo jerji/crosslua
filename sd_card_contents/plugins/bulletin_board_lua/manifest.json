@@ -1,0 +1,1 @@
+{"title": "Bulletin Board", "description": "ESP-NOW multi-hop board: post a note, it floods to devices nearby (each relays it once). Board kept in RAM.", "permissions": ["network", "espnow"]}
