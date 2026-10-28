@@ -321,38 +321,6 @@ local function flatten_line(raw)
   return d:gsub("^%s+", ""):gsub("%s+$", "")
 end
 
-local function delink(s)
-  local out = {}
-  local run = 1
-  local pos = 1
-  local n = #s
-  while pos <= n do
-    local b = s:byte(pos)
-    local image = b == 33 and s:byte(pos + 1) == 91  -- ![
-    if b == 91 or image then  -- [
-      local open = image and pos + 1 or pos
-      local close = s:find("]", open + 1, true)
-      if close and close + 1 <= n and s:byte(close + 1) == 40 then  -- (
-        local target = s:find(")", close + 2, true)
-        if target then
-          if run < pos then out[#out + 1] = s:sub(run, pos - 1) end
-          if not image then out[#out + 1] = s:sub(open + 1, close - 1) end
-          pos = target + 1
-          run = pos
-        else
-          pos = pos + 1
-        end
-      else
-        pos = pos + 1
-      end
-    else
-      pos = pos + 1
-    end
-  end
-  if run <= n then out[#out + 1] = s:sub(run) end
-  return table.concat(out)
-end
-
 -- The paid half of the gate, and the flattening, in one streaming pass.
 -- Markdown blocks (paragraphs separated by blank lines) that read as prose --
 -- at least kProseBlockMin chars, and not a list/heading/table/rule -- count

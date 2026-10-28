@@ -53,6 +53,7 @@ local cursor = 1
 local doc = ""              -- the document the reader is holding
 local doc_title = ""
 local reader_url = ""
+local is_saved   -- defined below, used by the footer
 local reading_saved = false  -- back returns to the SAVED shelf
 local top_line = 0
 local line_offsets = {}      -- byte offset of each wrapped line start
@@ -410,7 +411,7 @@ local function turn_page(delta)
   draw_reader()
 end
 
-local function is_saved(url)
+function is_saved(url)
   return saved_ids[hn.saved_id(url)] == true
 end
 
