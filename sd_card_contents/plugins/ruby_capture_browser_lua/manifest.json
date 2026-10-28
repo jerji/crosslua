@@ -1,0 +1,1 @@
+{"title": "Ruby Capture Browser", "description": "Browse .pcap captures in the Captures folder: summary, packet list, packet detail. Read-only.", "storage": {"read": ["Captures"]}}
