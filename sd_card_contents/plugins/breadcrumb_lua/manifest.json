@@ -1,0 +1,1 @@
+{"title": "Breadcrumb", "description": "Passive: drop a labelled snapshot of the strongest nearby APs to a CSV, as a rough location trail.", "permissions": ["network", "monitor"]}
