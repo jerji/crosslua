@@ -1,0 +1,1 @@
+{"title": "mDNS Browser", "description": "Find services on your LAN by mDNS (http, ssh, smb, airplay, ...)", "permissions": ["network"]}
