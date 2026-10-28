@@ -402,6 +402,12 @@ class Backend {
   virtual void wifiRequestConnect() = 0;
   virtual bool wifiInfo(char* ssid, size_t ssidCap, char* ip, size_t ipCap, int* rssi) = 0;  // false when not connected
   virtual void wifiOff() = 0;
+  // Set/read the runtime STA MAC (esp_wifi_set_mac / esp_wifi_get_mac). setMac refuses while any radio mode is active
+  // (connected, hotspot, monitor, tx, espnow) because the change would be disruptive mid-session; it boots the driver
+  // if the radio is off so the new MAC is programmed before the next connect. getMac returns false when the driver is
+  // down (nothing init'd yet).
+  virtual bool wifiSetMac(const uint8_t mac[6], char* err, size_t cap) = 0;
+  virtual bool wifiGetMac(uint8_t mac[6]) = 0;
   // Blocking (the device's own screens do the same). true = a response arrived (res.status set), false = res.error set.
   virtual bool httpRequest(const HttpRequest& req, HttpResult& res) = 0;
   virtual size_t largestFreeBlock() = 0;

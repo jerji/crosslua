@@ -966,6 +966,28 @@ struct MockBackend : Backend {
     monUp = false;
     txUp = false;
   }  // like the firmware: the hotspot and espnow stop too
+  bool wifiSetMac(const uint8_t mac[6], char* err, size_t cap) override {
+    if (wifiConnected() || apUp || monUp || txUp || enUp) {
+      snprintf(err, cap, "a radio mode is active (call wifi.off() first)");
+      return false;
+    }
+    if (wifiSetMacFail) {
+      snprintf(err, cap, "could not set the MAC address");
+      return false;
+    }
+    memcpy(staMac, mac, 6);
+    wifiSetMacCalls++;
+    return true;
+  }
+  bool wifiGetMac(uint8_t mac[6]) override {
+    if (!wifiRadioUp) return false;
+    memcpy(mac, staMac, 6);
+    return true;
+  }
+  uint8_t staMac[6] = {0x02, 0x11, 0x22, 0x33, 0x44, 0x55};  // mock STA MAC; set_mac writes it
+  bool wifiRadioUp = true;                                    // false -> wifi.get_mac reports "WiFi is off"
+  bool wifiSetMacFail = false;
+  int wifiSetMacCalls = 0;
   size_t largestFreeBlock() override { return largest; }
   bool httpRequest(const HttpRequest& rq, HttpResult& res) override {
     SeenReq r;
@@ -7448,6 +7470,73 @@ int main() {
       CHECK(vm3.load("t", script3, strlen(script3)));
       CHECK(run(vm3, be, 100000) == Status::Finished);
       CHECK(be.logs.size() == 2 && be.logs[1].rfind("nil\tmonitor not permitted", 0) == 0);
+    }
+  }
+  {
+    TEST("wifi.set_mac/get_mac: formats, validation, radio-off read, permission");
+    {
+      MockBackend be;
+      be.net = true;
+      LuaVm vm;
+      CHECK(vm.open(128 * 1024));
+      registerApi(vm, be);
+      const char* script = R"LUA(
+        print(wifi.set_mac("02:11:22:33:44:55"))
+        print(wifi.set_mac(123))
+        print(wifi.set_mac("02:11:22:33:44"))
+        print(wifi.set_mac("02:11:22:33:44:5G"))
+        print(wifi.set_mac("03:11:22:33:44:55"))
+        print(wifi.set_mac("00:00:00:00:00:00"))
+        print(wifi.set_mac(string.char(0x02,0x11,0x22,0x33,0x44,0x66)))
+        print(wifi.get_mac())
+      )LUA";
+      CHECK(vm.load("t", script, strlen(script)));
+      CHECK(run(vm, be, 100000) == Status::Finished);
+      const char* S = "nil\tmac must be a string (6 bytes or \"AA:BB:CC:DD:EE:FF\")";
+      const char* F = "nil\tmac must be 6 bytes or \"AA:BB:CC:DD:EE:FF\"";
+      const char* want[] = {"true", S, F, F, "nil\tnot a unicast MAC (clear the first byte's low bit)",
+                            "nil\tnot a valid MAC (all zero)", "true", "02:11:22:33:44:66"};
+      const size_t N = sizeof(want) / sizeof(want[0]);
+      if (be.logs.size() != N || getenv("DUMP_LOGS"))
+        for (size_t i = 0; i < be.logs.size(); i++) printf("    mac log[%zu] '%s'\n", i, be.logs[i].c_str());
+      CHECK(be.logs.size() == N);
+      for (size_t i = 0; i < N && i < be.logs.size(); i++) CHECK(be.logs[i] == want[i]);
+    }
+    {
+      MockBackend be;  // radio off -> get_mac refuses; active radio -> set_mac refuses
+      be.net = true;
+      be.wifiRadioUp = false;
+      LuaVm vm;
+      CHECK(vm.open(128 * 1024));
+      registerApi(vm, be);
+      const char* s1 = "print(wifi.get_mac())";
+      CHECK(vm.load("t", s1, strlen(s1)));
+      CHECK(run(vm, be, 100000) == Status::Finished);
+      CHECK(be.logs.size() == 1);
+      if (be.logs.size() == 1) CHECK(be.logs[0] == "nil\tWiFi is off (wifi.set_mac or wifi.connect brings it up)");
+      be.wifiRadioUp = true;
+      be.wifiUp = true;  // connected -> set_mac refuses
+      be.logs.clear();
+      LuaVm vm2;
+      CHECK(vm2.open(128 * 1024));
+      registerApi(vm2, be);
+      const char* s2 = "print(wifi.set_mac(\"02:11:22:33:44:55\"))";
+      CHECK(vm2.load("t", s2, strlen(s2)));
+      CHECK(run(vm2, be, 100000) == Status::Finished);
+      CHECK(be.logs.size() == 1);
+      if (be.logs.size() == 1) CHECK(be.logs[0] == "nil\ta radio mode is active (call wifi.off() first)");
+    }
+    {
+      MockBackend be;  // no network permission -> DENIED
+      be.net = false;
+      LuaVm vm;
+      CHECK(vm.open(128 * 1024));
+      registerApi(vm, be);
+      const char* s = "print(wifi.set_mac(\"02:11:22:33:44:55\"))";
+      CHECK(vm.load("t", s, strlen(s)));
+      CHECK(run(vm, be, 100000) == Status::Finished);
+      CHECK(be.logs.size() == 1);
+      if (be.logs.size() == 1) CHECK(be.logs[0].rfind("nil", 0) == 0 && be.logs[0].find("not permitted") != std::string::npos);
     }
   }
   {

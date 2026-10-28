@@ -472,12 +472,63 @@ int http_get(lua_State* L) {
   return lua_gettop(L) - t;
 }
 
+// ---- wifi.set_mac / wifi.get_mac (TODO: fold into the wifiFns table) ----------------------------------------------
+static int hexVal(char c) {
+  if (c >= '0' && c <= '9') return c - '0';
+  if (c >= 'a' && c <= 'f') return c - 'a' + 10;
+  if (c >= 'A' && c <= 'F') return c - 'A' + 10;
+  return -1;
+}
+static bool parseMacColon(const char* s, uint8_t out[6]) {
+  if (!s || strlen(s) != 17) return false;
+  for (int i = 0; i < 6; i++) {
+    const int hi = hexVal(s[i * 3]), lo = hexVal(s[i * 3 + 1]);
+    if (hi < 0 || lo < 0) return false;
+    if (i < 5 && s[i * 3 + 2] != ':') return false;
+    out[i] = static_cast<uint8_t>((hi << 4) | lo);
+  }
+  return true;
+}
+// wifi.set_mac("AA:BB:CC:DD:EE:FF" | 6 raw bytes) -> true | nil, err. Rotates the STA MAC (ghost mode). Requires network.
+int wifi_set_mac(lua_State* L) {
+  if (!allowed(L)) return pushFail(L, DENIED);
+  if (lua_type(L, 1) != LUA_TSTRING) return pushFail(L, "mac must be a string (6 bytes or \"AA:BB:CC:DD:EE:FF\")");
+  size_t len = 0;
+  const char* s = lua_tolstring(L, 1, &len);
+  uint8_t mac[6];
+  if (len == 6) {
+    memcpy(mac, s, 6);
+  } else if (!parseMacColon(s, mac)) {
+    return pushFail(L, "mac must be 6 bytes or \"AA:BB:CC:DD:EE:FF\"");
+  }
+  if (mac[0] & 1) return pushFail(L, "not a unicast MAC (clear the first byte's low bit)");
+  bool zero = true;
+  for (int i = 0; i < 6; i++)
+    if (mac[i]) zero = false;
+  if (zero) return pushFail(L, "not a valid MAC (all zero)");
+  char err[64];
+  if (!be(L).wifiSetMac(mac, err, sizeof(err))) return pushFail(L, err);
+  lua_pushboolean(L, 1);
+  return 1;
+}
+// wifi.get_mac() -> "AA:BB:CC:DD:EE:FF" (the current runtime STA MAC; nil,err when the radio has never been up).
+int wifi_get_mac(lua_State* L) {
+  if (!allowed(L)) return pushFail(L, DENIED);
+  uint8_t mac[6];
+  if (!be(L).wifiGetMac(mac)) return pushFail(L, "WiFi is off (wifi.set_mac or wifi.connect brings it up)");
+  char s[18];
+  snprintf(s, sizeof(s), "%02X:%02X:%02X:%02X:%02X:%02X", mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
+  lua_pushstring(L, s);
+  return 1;
+}
+
 }  // namespace
 
 void registerNet(lua_State* L, Ctx* c) {
   static const luaL_Reg wifiFns[] = {
       {"connect", wifi_connect}, {"status", wifi_status},           {"off", wifi_off}, {"scan", wifi_scan},
-      {"softap", wifi_softap},   {"softap_info", wifi_softap_info}, {nullptr, nullptr}};
+      {"softap", wifi_softap},   {"softap_info", wifi_softap_info}, {"set_mac", wifi_set_mac},
+      {"get_mac", wifi_get_mac}, {nullptr, nullptr}};
   regTable(L, c, "wifi", wifiFns);
   registerWifiMonitor(L, c);  // wifi.monitor_* joins the same lazy table
   registerWifiTx(L, c);       // wifi.tx_* too

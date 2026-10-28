@@ -52,7 +52,7 @@ word. Order = leverage per effort, cheapest first. Everything here is NOT built 
 | 7 | `wifi.scan` fields: BSSID, channel, auth mode, hidden | scanners, pickers, heat maps | S | **done**: rows are `{ssid, rssi, encrypted, bssid, channel, auth, hidden}` |
 | 8 | `net.mdns_advertise` (+ the UDP discovery companions use) | Calibre/transfer discovery | S | ✔ only `mdns_query` exists |
 | 9 | small getters: `system.reboot`, `system.language`, `system.mem`, `device.caps().model`, `time.tz`, `system.panic_info` | diagnostics, localisation | S | `system.reboot` + `system.language` **done**; `system.mem` ≈ `system.heap()`/`system.lua_mem()` (already exists); `device.caps().model`, `time.tz`, `system.panic_info` still open |
-| 10 | `wifi.set_mac` | MAC rotation | S | |
+| 10 | `wifi.set_mac` | MAC rotation | S | **done**: `wifi.set_mac(mac)`/`wifi.get_mac()` → runtime STA MAC, unicast/all-zero guards, refuses mid-radio-session (device-verified) |
 | 11 | `gfx.wrap` / `gfx.char_width` / hyphenation helper | every text app hand-rolls line breaking | S | |
 | 12 | `crypto.aes_gcm` (+ `x25519`, `hkdf`) | encrypted logs, app-to-app crypto | S-M | **`aes_gcm` done** (NIST-vector verified); `x25519`/`hkdf` still open |
 | 13 | `decimal.*` (decNumber) | exact Calculator (Lua floats are 32-bit) | S | |

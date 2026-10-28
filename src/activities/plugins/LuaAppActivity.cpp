@@ -1658,6 +1658,22 @@ class LuaAppActivity::Backend final : public crosslua::Backend {
     WiFi.disconnect(false);
     WiFi.mode(WIFI_OFF);
   }
+  bool wifiSetMac(const uint8_t mac[6], char* err, size_t cap) override {
+    if (wifiConnected() || apRunning() || monUp_ || txUp_ || espnowUp_) {
+      snprintf(err, cap, "a radio mode is active (call wifi.off() first)");
+      return false;
+    }
+    if (WiFi.getMode() == WIFI_MODE_NULL) WiFi.mode(WIFI_STA);  // init the driver so the MAC can be programmed
+    if (esp_wifi_set_mac(WIFI_IF_STA, mac) != ESP_OK) {
+      snprintf(err, cap, "could not set the MAC address");
+      return false;
+    }
+    return true;
+  }
+  bool wifiGetMac(uint8_t mac[6]) override {
+    if (WiFi.getMode() == WIFI_MODE_NULL) return false;  // nothing init'd yet
+    return esp_wifi_get_mac(WIFI_IF_STA, mac) == ESP_OK;
+  }
   size_t largestFreeBlock() override { return HalMemory::getInternalHeap().largestBlockBytes; }
 
   // --- library: sd: scope, zip, open_book --------------------------------------------------------------------------
