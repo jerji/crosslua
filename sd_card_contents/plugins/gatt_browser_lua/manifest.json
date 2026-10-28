@@ -1,0 +1,1 @@
+{"title": "GATT Browser", "description": "Connect to a nearby BLE device, browse its services and characteristics, read values, write test bytes and watch notifications.", "permissions": ["bluetooth"]}
