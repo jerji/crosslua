@@ -443,6 +443,14 @@ class Backend {
   // Inflates one entry into a malloc'd buffer (caller free()s). Refuses entries over maxBytes.
   virtual bool zipRead(const char* path, const char* name, size_t maxBytes, char** data, size_t* len, char* err,
                        size_t errCap) = 0;
+  // App wants to install a plugins bundle (bulk extract into the plugin root). Requires the "plugin_install"
+  // manifest permission AND user approval (like listen/hotspot). Gated separately from network so an app that
+  // merely talks to a server cannot overwrite the plugin tree.
+  virtual bool pluginInstallAllowed() = 0;
+  // Extract a plugins zip (entries "plugins/<category>/<app>/<file>", none absolute, none with "..") into
+  // "/plugins/". Returns the number of files written, or -1 with err. Writes a per-app ".installing" marker
+  // around each app's files so a crash mid-install quarantines only the app it was on.
+  virtual int installPluginZip(const char* zipPath, char* err, size_t errCap) = 0;
   // Ask the host to open `absPath` in the reader (replaces the app). false = no such file.
   virtual bool openBook(const char* absPath) = 0;
   // app.restart(entry): ask the host to tear this VM down and start `entry` (a .lua file in the app folder) in a fresh

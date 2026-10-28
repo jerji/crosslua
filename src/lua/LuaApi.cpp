@@ -321,6 +321,40 @@ int app_open_book(lua_State* L) {
   lua_pushboolean(L, 0);
   return lua_yield(L, 2);
 }
+// app.install_plugin(zip_path) -> true, count | false, err. Bulk-extracts a plugins zip (entries
+// "plugins/<category>/<app>/...", holds many apps at once) into /plugins/. Needs the "plugin_install"
+// manifest permission + user approval (gated separately from network).
+int app_install_plugin(lua_State* L) {
+  const char* spec = luaL_checkstring(L, 1);
+  if (strncmp(spec, "sd:", 3) != 0 && strncmp(spec, "data:", 5) != 0) {
+    lua_pushnil(L);
+    lua_pushstring(L, "install_plugin needs a data: or sd: zip path");
+    return 2;
+  }
+  char path[MAX_PATH_LEN + 80];
+  Scope sc;
+  const char* perr = nullptr;
+  if (!resolvePath(be(L), spec, path, sizeof(path), &sc, &perr)) {
+    lua_pushnil(L);
+    lua_pushstring(L, perr);
+    return 2;
+  }
+  if (!be(L).pluginInstallAllowed()) {
+    lua_pushboolean(L, 0);
+    lua_pushstring(L, "not allowed: add \"plugin_install\" to the manifest permissions and approve it");
+    return 2;
+  }
+  char err[96] = {0};
+  const int n = be(L).installPluginZip(path, err, sizeof(err));
+  if (n < 0) {
+    lua_pushboolean(L, 0);
+    lua_pushstring(L, err[0] ? err : "install failed");
+    return 2;
+  }
+  lua_pushboolean(L, 1);
+  lua_pushinteger(L, n);
+  return 2;
+}
 // app.restart([entry="main.lua"]) -> false, err | (never returns). The app quits and is started again from `entry`
 // (a .lua file in the app's own folder, subfolders allowed: "tests/net.lua") in a FRESH VM: a fresh heap budget, no
 // leftover globals, WiFi radio switched off. Pass state across with data: files. Use it to give a heavy sub-app a lean
@@ -1047,7 +1081,8 @@ void registerApi(LuaVm& vm, Backend& backend) {
                                    {"key", input_key},   {"text", input_text}, {nullptr, nullptr}};
   static const luaL_Reg app[] = {
       {"sleep", app_sleep},         {"exit", app_exit},       {"name", app_name},   {"dir", app_dir},
-      {"open_book", app_open_book}, {"restart", app_restart}, {"entry", app_entry}, {nullptr, nullptr}};
+      {"open_book", app_open_book}, {"restart", app_restart}, {"entry", app_entry},
+      {"install_plugin", app_install_plugin}, {nullptr, nullptr}};
   static const luaL_Reg sys[] = {{"millis", sys_millis},
                                  {"heap", sys_heap},
                                  {"lua_mem", sys_lua_mem},

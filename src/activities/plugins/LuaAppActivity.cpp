@@ -76,6 +76,7 @@
 #include "network/WifiPowerSaveGuard.h"
 #include "util/QrUtils.h"
 #include "util/BookProgress.h"
+#include "util/PluginLocations.h"
 #include "util/ScreenshotUtil.h"
 #include "RecentBooksStore.h"
 #include <LibraryIndexFile.h>
@@ -353,7 +354,7 @@ class LuaAppActivity::Backend final : public crosslua::Backend {
   // Parsed from the manifest but INVISIBLE to the API (grantCount() == 0) until the user approved exactly this request.
   bool hasGrantRequest() const {
     return !requested_.empty() || listenReq_ || hotspotReq_ || espnowReq_ || monitorReq_ || txReq_ || audioReq_ ||
-           micReq_ || bleReq_;
+           micReq_ || bleReq_ || pluginInstallReq_;
   }
   // Canonical text of the request; an approval is valid only for an identical request (any change asks again).
   std::string grantCanonical() const {
@@ -368,6 +369,7 @@ class LuaAppActivity::Backend final : public crosslua::Backend {
     if (listenReq_) v.push_back("p:listen");   // accepting connections from the LAN is part of the approved request too
     if (micReq_) v.push_back("p:microphone");  // a recording device: consented to explicitly, never silently
     if (audioReq_) v.push_back("p:audio");  // playing sounds is consented to for the same reason (a device that talks)
+    if (pluginInstallReq_) v.push_back("p:plugin_install");  // writes other apps' code into the plugin tree
     std::sort(v.begin(), v.end());
     std::string s;
     for (const std::string& x : v) s += x + "\n";
@@ -412,11 +414,12 @@ class LuaAppActivity::Backend final : public crosslua::Backend {
       if (listenReq_) labels.push_back("SERVER");
       if (audioReq_) labels.push_back("SPEAKER");
       if (bleReq_) labels.push_back("BLE");  // fits the third line: "SERVER, SPEAKER, BLE" is 20 characters
+      if (pluginInstallReq_) labels.push_back("INSTALL APPS");
       s += crosslua::packPermissionLabels(labels, PERMISSION_LINE_WIDTH);
     }
     if (!rd.empty()) s += "READ: " + rd + "\n";
     if (!wr.empty()) s += "WRITE: " + wr + "\n";
-    if (*danger)
+    if (*danger || pluginInstallReq_)
       s += "\nWARNING: this includes the whole card or the plugins folder, i.e. other apps' code.";
     else if (!rd.empty() || !wr.empty())
       s += "\nIt can never touch hidden folders (WiFi passwords, other apps' data) or firmware images.";
@@ -426,7 +429,8 @@ class LuaAppActivity::Backend final : public crosslua::Backend {
   std::string grantTitle(const std::string& app) const {
     const bool files = !requested_.empty();
     const int n = (listenReq_ ? 1 : 0) + (hotspotReq_ ? 1 : 0) + (espnowReq_ ? 1 : 0) + (audioReq_ ? 1 : 0) +
-                  (micReq_ ? 1 : 0) + (monitorReq_ ? 1 : 0) + (txReq_ ? 1 : 0) + (bleReq_ ? 1 : 0) + (files ? 1 : 0);
+                  (micReq_ ? 1 : 0) + (monitorReq_ ? 1 : 0) + (txReq_ ? 1 : 0) + (bleReq_ ? 1 : 0) +
+                  (pluginInstallReq_ ? 1 : 0) + (files ? 1 : 0);
     if (n > 1) return app + " wants access to your device";
     if (micReq_) return app + " wants to use the microphone";
     if (txReq_) return app + " wants to inject WiFi frames";
@@ -434,6 +438,7 @@ class LuaAppActivity::Backend final : public crosslua::Backend {
     if (espnowReq_) return app + " wants to use the radio directly";
     if (hotspotReq_) return app + " wants to start a hotspot";
     if (listenReq_) return app + " wants to accept connections";
+    if (pluginInstallReq_) return app + " wants to install apps";
     if (audioReq_) return app + " wants to play sounds";
     if (bleReq_) return app + " wants to use Bluetooth";
     return app + " wants access to your files";
@@ -2099,6 +2104,59 @@ class LuaAppActivity::Backend final : public crosslua::Backend {
     *len = got;
     return true;
   }
+  bool pluginInstallAllowed() override { return pluginInstallReq_ && approved_; }
+  int installPluginZip(const char* zipPath, char* err, size_t errCap) override {
+    ZipFile zip(zipPath);
+    if (!zip.open()) {
+      snprintf(err, errCap, "cannot open zip (missing, not a zip, or damaged)");
+      return -1;
+    }
+    std::vector<std::string> entries;
+    const bool ok = zip.enumerateFileEntries([&](std::string_view name, uint32_t, uint32_t) { entries.emplace_back(name); });
+    zip.close();
+    if (!ok || entries.empty()) {
+      snprintf(err, errCap, "cannot read zip entries");
+      return -1;
+    }
+    // Validate the whole archive before writing anything: every entry is a file under "plugins/", none absolute, none
+    // with ".." (a hostile zip must not write outside the plugin tree).
+    for (const std::string& e : entries) {
+      if (e.size() < 8 || e.rfind("plugins/", 0) != 0 || e.find("..") != std::string::npos) {
+        snprintf(err, errCap, "invalid entry path: %s", e.c_str());
+        return -1;
+      }
+    }
+    if (!zip.open()) {
+      snprintf(err, errCap, "cannot reopen zip");
+      return -1;
+    }
+    int written = 0;
+    std::string currentAppDir;
+    for (const std::string& e : entries) {
+      if (e.size() > 1 && e.back() == '/') continue;  // a directory entry; mkdir creates dirs as needed
+      const std::string target = "/" + e;             // "plugins/games/foo/main.lua" -> "/plugins/games/foo/main.lua"
+      const std::string appDir = target.substr(0, target.rfind('/'));
+      if (appDir != currentAppDir) {  // entering a new app: close the previous marker, open this one
+        if (!currentAppDir.empty()) Storage.remove((currentAppDir + "/" + PluginLocations::INSTALL_MARKER).c_str());
+        currentAppDir = appDir;
+        Storage.mkdir(appDir.c_str(), true);
+        Storage.writeFile((appDir + "/" + PluginLocations::INSTALL_MARKER).c_str(), String("installing"));
+      }
+      size_t got = 0;
+      uint8_t* d = zip.readFileToMemory(e.c_str(), &got, false);
+      if (!d) continue;
+      HalFile f;
+      if (Storage.openFileForWrite("LUA", target.c_str(), f)) {
+        f.write(d, got);
+        f.close();
+        written++;
+      }
+      free(d);
+    }
+    if (!currentAppDir.empty()) Storage.remove((currentAppDir + "/" + PluginLocations::INSTALL_MARKER).c_str());
+    zip.close();
+    return written;
+  }
   bool requestRestart(const char* entry) override {
     restartEntry = entry;
     return true;
@@ -2677,6 +2735,8 @@ class LuaAppActivity::Backend final : public crosslua::Backend {
         txReq_ = true;
       else if (p.is<const char*>() && !strcmp(p.as<const char*>(), "bluetooth"))
         bleReq_ = true;
+      else if (p.is<const char*>() && !strcmp(p.as<const char*>(), "plugin_install"))
+        pluginInstallReq_ = true;
     for (int w = 0; w < 2; w++)
       for (JsonVariantConst v : doc["storage"][w ? "write" : "read"].as<JsonArrayConst>()) {
         char rel[104];
@@ -2935,6 +2995,7 @@ class LuaAppActivity::Backend final : public crosslua::Backend {
   bool monitorReq_ = false;  // manifest asked for "monitor" (effective only after approval)
   bool txReq_ = false;       // manifest asked for "tx" (effective only after approval)
   bool bleReq_ = false;      // manifest asked for "bluetooth" (effective only after approval)
+  bool pluginInstallReq_ = false;  // manifest asked for "plugin_install" (effective only after approval)
   bool bleFailed_ = false;   // the last connect failed (reason in bleReason_)
   bool bleHasPasskey_ = false;
   uint32_t blePasskey_ = 0;

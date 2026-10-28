@@ -1289,6 +1289,10 @@ struct MockBackend : Backend {
   std::vector<RecentFix> recentBooks;
   std::vector<RecentFix> libraryBooks;
   bool libraryUnavailable = false;
+  bool pluginInstall = false;   // mock: "plugin_install" permission granted
+  bool installFail = false;     // mock: installPluginZip returns -1
+  int installCount = 0;         // mock: files "written"
+  std::vector<std::string> installAsked;
   bool epubMeta(const char* path, char* title, size_t titleCap, char* author, size_t authorCap, char* err,
                 size_t errCap) override {
     epubAsked.push_back(path);
@@ -1375,6 +1379,15 @@ struct MockBackend : Backend {
     if (!files.count(absPath)) return false;
     openedBook = absPath;
     return true;
+  }
+  bool pluginInstallAllowed() override { return pluginInstall; }
+  int installPluginZip(const char* zipPath, char* err, size_t errCap) override {
+    installAsked.push_back(zipPath);
+    if (installFail) {
+      snprintf(err, errCap, "mock: install failed");
+      return -1;
+    }
+    return installCount;
   }
   // ---- batch A mock: scan/time/rename/mac/qr/frontlight/inflate/rounded -------------------------
   std::vector<Backend::WifiScanInfo> nets{
@@ -2066,13 +2079,35 @@ int main() {
         }
         closedir(d);
       };
+  auto findAppDir = [&](const std::string& name) -> std::string {
+    // Flat first (backward compat), then one level under any category folder.
+    const std::string flat = "sd_card_contents/plugins/" + name;
+    if (DIR* d = opendir(flat.c_str())) {
+      closedir(d);
+      return flat;
+    }
+    DIR* root = opendir("sd_card_contents/plugins");
+    if (!root) return "";
+    std::string found;
+    while (dirent* e = readdir(root)) {
+      const std::string cat = e->d_name;
+      if (cat == "." || cat == "..") continue;
+      const std::string cand = "sd_card_contents/plugins/" + cat + "/" + name;
+      if (DIR* d = opendir(cand.c_str())) {
+        closedir(d);
+        found = cand;
+        break;
+      }
+    }
+    closedir(root);
+    return found;
+  };
   auto loadApp = [&](MockBackend& be, const char* name) {
     std::string mainSrc;
     const std::string dir =
         name == std::string("selftest_lua")
-            ? std::string(
-                  "sd_card_contents/plugins/lua_tests_lua")  // selftest files live in the lua_tests_lua plugin dir
-            : std::string("sd_card_contents/plugins/") + name;
+            ? findAppDir("lua_tests_lua")  // selftest files live in the lua_tests_lua plugin dir
+            : findAppDir(name);
     loadDir(be, dir, "", mainSrc);
     return mainSrc;
   };
@@ -2084,13 +2119,13 @@ int main() {
     {
       std::string helper;
       {
-        std::ifstream f("sd_card_contents/plugins/lua_tests_lua/helper.lua");
+        std::ifstream f("sd_card_contents/plugins/system/lua_tests_lua/helper.lua");
         std::stringstream ss;
         ss << f.rdbuf();
         helper = ss.str();
       }
       be.files["/plugins/test/helper.lua"] = helper;  // the selftest requires "helper" from its app dir
-      std::ifstream f("sd_card_contents/plugins/lua_tests_lua/tests/selftest.lua");
+      std::ifstream f("sd_card_contents/plugins/system/lua_tests_lua/tests/selftest.lua");
       std::stringstream ss;
       ss << f.rdbuf();
       src = ss.str();
@@ -4793,6 +4828,52 @@ int main() {
     CHECK(vm.load("t", script, strlen(script)));
     CHECK(run(vm, be, 100000) == Status::Finished);
     CHECK(be.logs.size() == 1 && be.logs[0] == "nil\tmock: no library index");
+  }
+  {
+    TEST("app.install_plugin: denied without the plugin_install permission; bad scope refused");
+    MockBackend be;  // pluginInstall = false
+    LuaVm vm;
+    CHECK(vm.open(128 * 1024));
+    registerApi(vm, be);
+    const char* script = R"LUA(
+      print(app.install_plugin("data:apps.zip"))
+      print(app.install_plugin("app:main.lua"))
+    )LUA";
+    CHECK(vm.load("t", script, strlen(script)));
+    CHECK(run(vm, be, 100000) == Status::Finished);
+    CHECK(be.logs.size() == 2);
+    if (be.logs.size() == 2) {
+      CHECK(be.logs[0] == "false\tnot allowed: add \"plugin_install\" to the manifest permissions and approve it");
+      CHECK(be.logs[1].rfind("nil\t", 0) == 0);  // app: scope refused before the backend
+    }
+    CHECK(be.installAsked.empty());  // nothing reached the backend
+  }
+  {
+    TEST("app.install_plugin: allowed -> true,count; backend error passthrough");
+    MockBackend be;
+    be.pluginInstall = true;
+    be.installCount = 42;
+    LuaVm vm;
+    CHECK(vm.open(128 * 1024));
+    registerApi(vm, be);
+    const char* script = "print(app.install_plugin('data:apps.zip'))";
+    CHECK(vm.load("t", script, strlen(script)));
+    CHECK(run(vm, be, 100000) == Status::Finished);
+    CHECK(be.logs.size() == 1 && be.logs[0] == "true\t42");
+    CHECK(be.installAsked.size() == 1 && be.installAsked[0].rfind("apps.zip") != std::string::npos);
+  }
+  {
+    TEST("app.install_plugin: backend failure -> false, err");
+    MockBackend be;
+    be.pluginInstall = true;
+    be.installFail = true;
+    LuaVm vm;
+    CHECK(vm.open(128 * 1024));
+    registerApi(vm, be);
+    const char* script = "print(app.install_plugin('data:apps.zip'))";
+    CHECK(vm.load("t", script, strlen(script)));
+    CHECK(run(vm, be, 100000) == Status::Finished);
+    CHECK(be.logs.size() == 1 && be.logs[0] == "false\tmock: install failed");
   }
   {
     TEST(
@@ -9204,8 +9285,8 @@ int main() {
       ss << f.rdbuf();
       return ss.str();
     };
-    const std::string a = slurp("sd_card_contents/plugins/totp_lua/vault.lua"),
-                      b = slurp("sd_card_contents/plugins/lua_tests_lua/vault.lua");
+    const std::string a = slurp("sd_card_contents/plugins/security/totp_lua/vault.lua"),
+                      b = slurp("sd_card_contents/plugins/system/lua_tests_lua/vault.lua");
     CHECK(!a.empty() && a == b);
   }
   {
