@@ -1,0 +1,1 @@
+{"title": "Library Grid", "description": "Your full library as a paged grid. Each cell has a status glyph: empty = new, half = reading, filled = finished. Confirm opens the book.", "permissions": ["library"]}
