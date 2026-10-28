@@ -28,9 +28,7 @@ local MERMAID_CHASE = { 2, 6, 14, 400 }
 local function countUnseen(obs, kind)
   local n = game.SUPPLY[kind + 1]
   for c = 1, game.CARDS do
-    if game.kindOf(c) ~= kind then
-      -- not this kind
-    elseif obs.view[c] ~= VIEW.UNKNOWN then n = n - 1 end
+    if game.kindOf(c) == kind and obs.view[c] ~= VIEW.UNKNOWN then n = n - 1 end
   end
   return n
 end
@@ -97,9 +95,7 @@ local function averageUnseenValue(obs)
   local total, cards = 0, 0
   for kind = 0, 13 do
     local n = countUnseen(obs, kind)
-    if n == 0 then
-      -- skip
-    else
+    if n ~= 0 then
       -- Value it as if *I* drew it: close enough for both uses, and
       -- honest -- valuing it for them would need their hand, the fog.
       local sample = 1
@@ -117,11 +113,8 @@ end
 local function myPileValue(obs, pileView)
   local best, bestAt, bestSeq = -1, game.NO_CARD, 0
   for c = 1, game.CARDS do
-    if obs.view[c] ~= pileView then
-      -- skip
-    elseif obs.seq[c] < bestSeq then
-      -- not the top
-    else
+    -- the top card of the pile: the latest-played one
+    if obs.view[c] == pileView and obs.seq[c] >= bestSeq then
       bestSeq = obs.seq[c]
       bestAt = c
     end
@@ -231,9 +224,7 @@ function M.decide(obs, skill)
     local pile = obs.crabPile == 0 and VIEW.PILEA or VIEW.PILEB
     local bestCard, best = game.NO_CARD, -1
     for c = 1, game.CARDS do
-      if obs.view[c] ~= pile then
-        -- skip
-      else
+      if obs.view[c] == pile then
         local value = M.marginalValue(obs, c)
         if value > best then best, bestCard = value, c end
       end

@@ -522,12 +522,14 @@ function M.playDuo(g, a, b)
     local wanted = nextRandom(state) % held
     local theirs = handOf(victim)
     for c = 1, M.CARDS do
-      if g.place[c] ~= theirs then
-      elseif wanted > 0 then wanted = wanted - 1
-      else
-        moveToHand(g, c, g.turn)
-        checkMermaidWin(g, g.turn)
-        break
+      if g.place[c] == theirs then
+        if wanted > 0 then
+          wanted = wanted - 1
+        else
+          moveToHand(g, c, g.turn)
+          checkMermaidWin(g, g.turn)
+          break
+        end
       end
     end
     return true
