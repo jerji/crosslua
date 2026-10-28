@@ -1,0 +1,1 @@
+{"title": "Transit Alert", "description": "Passive: watch one chosen AP and alert when it disappears (your train or bus moved) or returns. Receive only.", "permissions": ["network", "monitor"]}
