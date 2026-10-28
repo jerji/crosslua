@@ -2676,6 +2676,66 @@ int main() {
       CHECK(be.logs.size() == 1 && be.logs[0] == "true");
       CHECK(be.rebooted);
     }
+    TEST("crypto.aes_gcm: NIST-reference vectors, round-trip, aad, tamper/bad-tag, validation");
+    {
+      MockBackend be;
+      LuaVm vm;
+      CHECK(vm.open(256 * 1024));
+      registerApi(vm, be);
+      const char* script = R"LUA(
+        local function H(x) return crypto.hex(x) end
+        local Z = crypto.unhex
+        local k0 = Z("00000000000000000000000000000000")
+        local n0 = Z("000000000000000000000000")
+        -- empty pt/aad -> just the 16-byte tag (NIST GCM case 1)
+        local s0 = crypto.aes_gcm_encrypt(k0, n0, "")
+        print(H(s0), H(crypto.aes_gcm_decrypt(k0, n0, s0)))
+        -- 16-byte pt (NIST case 2)
+        local p1 = Z("00000000000000000000000000000000")
+        local s1 = crypto.aes_gcm_encrypt(k0, n0, p1)
+        print(H(s1), H(crypto.aes_gcm_decrypt(k0, n0, s1)))
+        -- AES-128 with AAD
+        local k2 = Z("feffe9928665731c6d6a8f9467308308")
+        local n2 = Z("cafebabefacedbaddecaf888")
+        local aad2 = Z("feedfacedeadbeeffeedfacedeadbeefabaddad2")
+        local p2 = Z("d9313225f88406e5a55909c5aff5269a")
+        local s2 = crypto.aes_gcm_encrypt(k2, n2, p2, aad2)
+        print(H(s2), H(crypto.aes_gcm_decrypt(k2, n2, s2, aad2)))
+        -- AES-256, empty plaintext + 16-byte aad
+        local k3 = Z("0000000000000000000000000000000000000000000000000000000000000000")
+        local aad3 = Z("00000000000000000000000000000000")
+        print(H(crypto.aes_gcm_encrypt(k3, n0, "", aad3)))
+        -- tampering: wrong aad, flipped tag byte, wrong key -> all "bad tag"
+        print(crypto.aes_gcm_decrypt(k2, n2, s2, "bad"))
+        local bad = s2:sub(1, -2) .. string.char((s2:byte(-1)) ~ 1)
+        print(crypto.aes_gcm_decrypt(k2, n2, bad, aad2))
+        print(crypto.aes_gcm_decrypt(Z("11111111111111111111111111111111"), n2, s2, aad2))
+        -- validation
+        print(crypto.aes_gcm_encrypt(k0, "short", "x"))
+        print(crypto.aes_gcm_encrypt("short", n0, "x"))
+        print(crypto.aes_gcm_decrypt(k0, n0, "short"))
+      )LUA";
+      CHECK(vm.load("t", script, strlen(script)));
+      CHECK(run(vm, be, 20000000) == Status::Finished);
+      const char* want[] = {
+          "58e2fccefa7e3061367f1d57a4e7455a\t",
+          "0388dace60b6a392f328c2b971b2fe78ab6e47d42cec13bdf53a67b21257bddf\t00000000000000000000000000000000",
+          "42831ec2217774244b7221b784d0d49cd9f20ea917428bc48f586f2936d0fddf\td9313225f88406e5a55909c5aff5269a",
+          "2d45552d8575922b3ca3cc538442fa26",
+          "nil\tbad tag (wrong key, nonce or corrupted data)",
+          "nil\tbad tag (wrong key, nonce or corrupted data)",
+          "nil\tbad tag (wrong key, nonce or corrupted data)",
+          "nil\tnonce must be 12 bytes (generate with crypto.random(12), never reuse)",
+          "nil\tkey must be 16, 24 or 32 bytes",
+          "nil\tsealed data must be at least 16 bytes (ciphertext + tag)",
+      };
+      for (size_t i = 0; i < sizeof(want) / sizeof(want[0]); i++) {
+        CHECK(i < be.logs.size());
+        if (i < be.logs.size() && be.logs[i] != want[i])
+          printf("    aes_gcm #%zu got '%s' want '%s'\n", i + 1, be.logs[i].c_str(), want[i]);
+        CHECK(be.logs[i] == want[i]);
+      }
+    }
     TEST("batch A: wifi.scan/time.sync+set/fs.rename/system.mac/gfx.qr/rounded/frontlight");
     MockBackend be;
     be.files["/.crosslua/data/test/a.txt"] = "one";

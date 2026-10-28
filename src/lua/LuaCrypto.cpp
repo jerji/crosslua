@@ -3,6 +3,7 @@
 // encryption apps call; on the ESP32-C3 SHA and AES run on the hardware accelerators). The host tests compile the SAME
 // mbedtls 3.x sources (test/lua_host/run.sh). Only random bytes come from the Backend (esp_fill_random on the device).
 #include <mbedtls/aes.h>
+#include <mbedtls/gcm.h>
 #include <mbedtls/md.h>
 #include <mbedtls/md5.h>
 #include <mbedtls/sha1.h>
@@ -420,6 +421,53 @@ int aesCbc(lua_State* L, bool encrypt) {
 int cr_aes_cbc_encrypt(lua_State* L) { return aesCbc(L, true); }
 int cr_aes_cbc_decrypt(lua_State* L) { return aesCbc(L, false); }
 
+// ---- AES-GCM (AES-128/192/256, 12-byte nonce, authenticated) -------------------------------------
+// crypto.aes_gcm_encrypt(key, nonce, data [, aad]) -> sealed | nil, err   sealed = ciphertext .. 16-byte tag
+// crypto.aes_gcm_decrypt(key, nonce, sealed [, aad]) -> data | nil, err   verifies the tag (nil, "bad tag")
+// Authenticated encryption in one blob (no separate MAC, unlike AES-CBC which needs hmac_sha256). Never reuse a
+// nonce with one key. aad (associated data) is authenticated but not encrypted (e.g. a header/account id).
+constexpr size_t MAX_AES_GCM = 32 * 1024;
+int aesGcm(lua_State* L, bool encrypt) {
+  size_t kl, nl, dl, al = 0;
+  const uint8_t* key = dataArg(L, 1, &kl);
+  const uint8_t* nonce = dataArg(L, 2, &nl);
+  const uint8_t* d = dataArg(L, 3, &dl);
+  const uint8_t* aad = nullptr;
+  if (!lua_isnoneornil(L, 4)) aad = dataArg(L, 4, &al);
+  if (kl != 16 && kl != 24 && kl != 32) return pushFail(L, "key must be 16, 24 or 32 bytes");
+  if (nl != 12) return pushFail(L, "nonce must be 12 bytes (generate with crypto.random(12), never reuse)");
+  if (dl > MAX_AES_GCM) return pushFail(L, "data must be at most 32 KB");
+  if (!encrypt && dl < 16) return pushFail(L, "sealed data must be at least 16 bytes (ciphertext + tag)");
+
+  mbedtls_gcm_context gcm;
+  mbedtls_gcm_init(&gcm);
+  int rc = mbedtls_gcm_setkey(&gcm, MBEDTLS_CIPHER_ID_AES, key, static_cast<unsigned>(kl * 8));
+  if (rc == 0 && encrypt) {
+    const size_t total = dl + 16;
+    luaL_Buffer b;
+    uint8_t* buf = reinterpret_cast<uint8_t*>(luaL_buffinitsize(L, &b, total));
+    rc = mbedtls_gcm_crypt_and_tag(&gcm, MBEDTLS_GCM_ENCRYPT, dl, nonce, nl, aad, al, d, buf, 16, buf + dl);
+    mbedtls_gcm_free(&gcm);
+    if (rc != 0) return pushFail(L, "aes-gcm failed");
+    luaL_pushresultsize(&b, total);
+    return 1;
+  }
+  if (rc == 0) {  // decrypt: authenticated, data = plaintext, tag the last 16 bytes of `d`
+    const size_t cl = dl - 16;
+    luaL_Buffer b;
+    uint8_t* buf = reinterpret_cast<uint8_t*>(luaL_buffinitsize(L, &b, cl));
+    rc = mbedtls_gcm_auth_decrypt(&gcm, cl, nonce, nl, aad, al, d + cl, 16, d, buf);
+    mbedtls_gcm_free(&gcm);
+    if (rc != 0) return pushFail(L, "bad tag (wrong key, nonce or corrupted data)");
+    luaL_pushresultsize(&b, cl);
+    return 1;
+  }
+  mbedtls_gcm_free(&gcm);
+  return pushFail(L, "aes-gcm key failed");
+}
+int cr_aes_gcm_encrypt(lua_State* L) { return aesGcm(L, true); }
+int cr_aes_gcm_decrypt(lua_State* L) { return aesGcm(L, false); }
+
 }  // namespace
 
 void registerCrypto(lua_State* L, Ctx* c) {
@@ -439,6 +487,8 @@ void registerCrypto(lua_State* L, Ctx* c) {
                                  {"equal", cr_equal},
                                  {"aes_cbc_encrypt", cr_aes_cbc_encrypt},
                                  {"aes_cbc_decrypt", cr_aes_cbc_decrypt},
+                                 {"aes_gcm_encrypt", cr_aes_gcm_encrypt},
+                                 {"aes_gcm_decrypt", cr_aes_gcm_decrypt},
                                  {"device_key", cr_device_key},
                                  {nullptr, nullptr}};
   regTable(L, c, "crypto", fns);

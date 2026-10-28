@@ -17,7 +17,7 @@ CXXFLAGS  = -std=c++20 -O1 -g1 -fno-var-tracking -Wall -Wextra -Ilib/lua -I$(MBE
 
 CXX_SRC  := test/lua_host/test_vm.cpp test/lua_host/test_ota.cpp $(addprefix src/lua/,LuaVm.cpp LuaApi.cpp LuaFs.cpp LuaJson.cpp LuaNet.cpp LuaZip.cpp LuaCrypto.cpp LuaSock.cpp LuaAudio.cpp LuaMic.cpp LuaEspNow.cpp LuaMonitor.cpp LuaTx.cpp LuaBle.cpp) lib/InflateReader/InflateReader.cpp
 C_SRC    := $(wildcard lib/lua/*.c) lib/uzlib/src/tinflate.c
-MBED_SRC := $(addprefix $(MBED)/library/,sha1.c sha256.c md5.c md.c aes.c platform_util.c constant_time.c)
+MBED_SRC := $(addprefix $(MBED)/library/,sha1.c sha256.c md5.c md.c aes.c platform_util.c constant_time.c gcm.c cipher.c cipher_wrap.c)
 
 CXX_OBJ  := $(patsubst %.cpp,$(OUT)/obj/%.o,$(CXX_SRC))
 C_OBJ    := $(patsubst %.c,$(OUT)/obj/%.o,$(C_SRC))
