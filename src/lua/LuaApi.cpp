@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cstdio>
 #include <cstring>
+#include <string>
 
 #include "LuaInternal.h"
 #include "LuaVm.h"
@@ -167,6 +168,79 @@ int gfx_text_width(lua_State* L) {
 int gfx_line_height(lua_State* L) {
   const TextOpts o = parseTextOpts(L, 1);
   lua_pushinteger(L, be(L).lineHeight(o.font));
+  return 1;
+}
+// gfx.wrap(text, max_width [, font [, style]]) -> { "line1", "line2", ... }
+// Word-wraps text to max_width px in the given font ("ui" default). Explicit newlines are line breaks, runs of
+// spaces collapse to one, and a single word wider than max_width is hard-broken (measured char-by-char so
+// proportional fonts break correctly). Returns a 1-based table; empty text -> {} (no lines).
+int gfx_wrap(lua_State* L) {
+  const char* text = luaL_checkstring(L, 1);
+  const lua_Number mwn = luaL_checknumber(L, 2);
+  if (mwn < 1 || mwn > 10000 || mwn != static_cast<int>(mwn)) luaL_error(L, "max_width must be an integer 1..10000");
+  const TextOpts o = parseTextOpts(L, 3);
+  const int maxW = static_cast<int>(mwn);
+  const int spaceW = be(L).textWidth(o.font, " ", o.style);
+
+  lua_createtable(L, 0, 0);
+  int n = 0;
+  const auto tw = [&](const std::string& s) { return be(L).textWidth(o.font, s.c_str(), o.style); };
+  auto push = [&](const std::string& s) {
+    lua_pushlstring(L, s.data(), s.size());
+    lua_rawseti(L, -2, ++n);
+  };
+
+  std::string cur;  // the line being built
+  const char* p = text;
+  while (*p) {
+    const char* nl = strchr(p, '\n');
+    const std::string para(p, nl ? static_cast<size_t>(nl - p) : strlen(p));
+    size_t i = 0;
+    while (i < para.size()) {
+      if (para[i] == ' ' || para[i] == '\t') {  // collapse runs of spaces
+        i++;
+        continue;
+      }
+      size_t j = i;
+      while (j < para.size() && para[j] != ' ' && para[j] != '\t') j++;
+      const std::string word = para.substr(i, j - i);
+      i = j;
+      const int curW = cur.empty() ? 0 : tw(cur);
+      const int wordW = tw(word);
+      const bool overflow = !cur.empty() && curW + spaceW + wordW > maxW;
+      if (overflow) {
+        push(cur);
+        cur.clear();
+      }
+      if (cur.empty() && wordW > maxW) {  // a single word wider than the box: hard-break it
+        size_t start = 0;
+        while (start < word.size()) {
+          size_t end = start;
+          for (size_t k = start; k < word.size(); k++)
+            if (tw(word.substr(start, k - start + 1)) <= maxW)
+              end = k + 1;
+            else
+              break;
+          if (end <= start) end = start + 1;  // one glyph still too wide: take it anyway
+          if (end >= word.size()) {
+            cur = word.substr(start);  // final piece joins the next word
+            break;
+          }
+          push(word.substr(start, end - start));
+          start = end;
+        }
+      } else if (cur.empty()) {
+        cur = word;
+      } else {
+        cur += ' ';
+        cur += word;
+      }
+    }
+    push(cur);  // the paragraph's last line (empty paragraph -> one empty line)
+    cur.clear();
+    if (!nl) break;
+    p = nl + 1;
+  }
   return 1;
 }
 // gfx.present([mode])  mode: "fast" (default) | "half" | "full"
@@ -964,6 +1038,7 @@ void registerApi(LuaVm& vm, Backend& backend) {
                                  {"rounded_rect", gfx_rounded_rect},
                                  {"text_width", gfx_text_width},
                                  {"line_height", gfx_line_height},
+                                 {"wrap", gfx_wrap},
                                  {"present", gfx_present},
                                  {nullptr, nullptr}};
   static const luaL_Reg input[] = {{"poll", input_poll}, {"wait", input_wait}, {"pos", input_pos},

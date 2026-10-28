@@ -1875,6 +1875,35 @@ int main() {
     if (be.logs.size() == 1) CHECK(be.logs[0] == "English");
   }
   {
+    TEST("gfx.wrap: word-wrap, newlines, space collapse, hard-break, empty/oversize validation");
+    LuaVm vm;
+    MockBackend be;
+    setup(vm, be, R"LUA(
+      local function j(t) return table.concat(t, "|") end
+      print(j(gfx.wrap("hello world", 50)))    -- 50px = "hello"; "hello world" (110) wraps
+      print(j(gfx.wrap("hello\nworld", 100)))  -- explicit newline is a line break
+      print(j(gfx.wrap("", 100)))              -- empty -> no lines
+      print(j(gfx.wrap("aaa bbb ccc", 30)))    -- each word is exactly 30px -> one word per line
+      print(j(gfx.wrap("abcdef", 20)))         -- 2 chars = 20px -> hard-break every 2 chars
+      print(j(gfx.wrap("a   b", 100)))         -- runs of spaces collapse to one
+      print(#gfx.wrap("hello world\nfoo", 50))  -- 3 lines: hello / world / foo
+      local ok, e = pcall(gfx.wrap, "x", 0)    -- max_width out of range raises
+      print(ok == false)
+    )LUA");
+    CHECK(run(vm, be) == Status::Finished);
+    CHECK(be.logs.size() == 8);
+    if (be.logs.size() == 8) {
+      CHECK(be.logs[0] == "hello|world");
+      CHECK(be.logs[1] == "hello|world");
+      CHECK(be.logs[2] == "");
+      CHECK(be.logs[3] == "aaa|bbb|ccc");
+      CHECK(be.logs[4] == "ab|cd|ef");
+      CHECK(be.logs[5] == "a b");
+      CHECK(be.logs[6] == "3");
+      CHECK(be.logs[7] == "true");
+    }
+  }
+  {
     TEST("system.battery_info: full fields, omission of unknown, no-battery");
     {
       LuaVm vm;
