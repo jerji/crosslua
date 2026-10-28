@@ -1,0 +1,1 @@
+{"title": "HTTP Client", "description": "Build and send an HTTP request, read the status, headers and body", "permissions": ["network"]}
