@@ -1,0 +1,1 @@
+{"title": "EAPOL Hunt", "description": "Pick a visible AP, lock its channel, record WPA 4-way handshake frames to PCAP. Receive only.", "permissions": ["network", "monitor"]}
