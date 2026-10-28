@@ -32,7 +32,9 @@ local function main()
   if input.wait() ~= "confirm" then return end
 
   gfx.clear(); gfx.text(16, 10, "Connecting...", "ui12", "b"); gfx.present("fast")
-  local ok, why = wifi.connect()
+  local https = url:sub(1, 8) == "https://"
+  local ok, why
+  if https then ok, why = wifi.connect() else ok, why = wifi.connect({ tls = false }) end
   if not ok then return fail("WiFi failed: " .. tostring(why)) end
 
   gfx.clear(); gfx.text(16, 10, "Downloading...", "ui12", "b")
@@ -68,4 +70,3 @@ local ok, err = pcall(main)
 if not ok then
   fail("Error: " .. tostring(err):sub(1, 44))
 end
-app.restart("main.lua")
