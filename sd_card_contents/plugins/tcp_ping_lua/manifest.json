@@ -1,0 +1,1 @@
+{"title": "TCP Ping", "description": "Ping a host by TCP connect: RTT, loss, min/avg/max", "permissions": ["network"]}
