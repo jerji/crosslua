@@ -1,0 +1,1 @@
+{"title": "Deauth Test (authorised)", "description": "ACTIVE: sends 802.11 deauth frames to ONE AP you pick, for testing your own network. Needs a typed authorisation phrase; stops by itself after 60 s.", "permissions": ["network", "monitor", "tx"]}
