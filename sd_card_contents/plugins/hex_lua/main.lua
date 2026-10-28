@@ -7,6 +7,9 @@
 -- on the cursor (one tap, no second tap), Back opens the pause menu.
 local core = require("hexcore")
 local brain = require("brain")
+local nearby = require("nearby")
+local wire = require("wire")
+local GAME_ID = 0x0B01
 
 local W, H = gfx.size()
 local HEADER, CAPSULE = 40, 48
@@ -336,6 +339,7 @@ local function frontRows()
   if game and not game.finished then rows[#rows + 1] = "RESUME GAME" end
   rows[#rows + 1] = "PLAY VS THE DEVICE"
   rows[#rows + 1] = "TWO PLAYERS"
+  rows[#rows + 1] = "PLAY NEARBY"
   rows[#rows + 1] = "LEVEL: " .. brain.LEVELS[prefs.level].name
   rows[#rows + 1] = "YOU PLAY: " .. (prefs.you == 1 and "BLACK" or "WHITE")
   rows[#rows + 1] = "HOW TO PLAY"
@@ -359,6 +363,8 @@ local function frontDoor()
     elseif label == "TWO PLAYERS" then
       prefs.mode = 2
       return "new"
+    elseif label == "PLAY NEARBY" then
+      linkedPlay()
     elseif label:sub(1, 6) == "LEVEL:" then
       prefs.level = prefs.level % #brain.LEVELS + 1
       save()
@@ -369,6 +375,154 @@ local function frontDoor()
       howTo()
     end
   end
+end
+
+-- ---------------------------------------------------------------- PLAY NEARBY
+-- Two devices over ESP-NOW (nearby.lua). The whole board travels as the 162-byte
+-- blob (wire.lua), the layout of HexCore.h. Black moves first in a round; the
+-- first mover flips each round, both devices on the same rematch exchange.
+-- The linked game lives in its own table, so a saved solo game is untouched.
+
+local function linkedScreen(view, status)
+  gfx.clear()
+  header("HEX", "PLAY NEARBY")
+  drawBoard(view)
+  capsule(status)
+  gfx.present()
+end
+
+-- One linked session, from the search screen to leaving. Returns to the menu.
+local function linkedPlay()
+  local S = nearby.new(GAME_ID, "PUP " .. string.sub(system.mac(), 16, 17))
+  local ok, err = S:start()
+  if not ok then
+    gfx.clear()
+    header("HEX")
+    gfx.text(16, 100, "RADIO WILL NOT START", "sans16", "b")
+    gfx.text(16, 130, tostring(err):sub(1, 60), "ui12", "b")
+    capsule("Back: menu")
+    gfx.present()
+    while input.wait() ~= "back" do end
+    return
+  end
+
+  local mode = "search"          -- search | board | result | linkend
+  local meFirst = false          -- I am black this round
+  local me = core.BLACK
+  local lg = nil                 -- the shared game record
+  local cur = core.index(6, 6)   -- my cursor: local, never sent
+  local myAgain = false
+  local dirty = true
+
+  local function newRound()
+    me = meFirst and core.BLACK or core.WHITE
+    lg = { cells = core.newBoard(), turn = core.BLACK, finished = false, winner = nil, last = nil }
+    myAgain = false
+    S:newRound()
+    mode = "board"
+    dirty = true
+  end
+
+  local function view()
+    return { cells = lg.cells, last = lg.last, cur = cur }
+  end
+
+  while true do
+    local now = system.millis()
+    S:pump(now)
+    S:tick(now)
+    if S:takeMatch() then
+      meFirst = S.iFirst
+      newRound()
+    end
+    local blob = S:takeState()
+    if blob and mode ~= "search" then
+      local ng = wire.unpack(blob)
+      if ng then
+        -- their first move of a new round can land before my own flip for
+        -- that round: start the round here, then take the move
+        if mode == "result" and not ng.finished then
+          meFirst = not meFirst
+          newRound()
+        end
+        lg = ng
+        mode = lg.finished and "result" or "board"
+        dirty = true
+      end
+    end
+    if S.phase == "ended" and mode ~= "linkend" then
+      mode = "linkend"
+      dirty = true
+    end
+    -- both said PLAY AGAIN: start the next round, the first mover flipping
+    if mode == "result" and myAgain and S.peerAgain then
+      meFirst = not meFirst
+      newRound()
+    end
+
+    if dirty then
+      dirty = false
+      if mode == "search" then
+        gfx.clear()
+        header("HEX", "PLAY NEARBY")
+        gfx.text(W // 2, 220, "LOOKING FOR A PLAYER", "sans18", "bc")
+        gfx.text(W // 2, 256, "Turn on PLAY NEARBY on the other device.", "ui12", "c")
+        capsule("Back: cancel")
+        gfx.present()
+      elseif mode == "board" then
+        local status
+        if lg.turn == me then
+          status = "YOUR MOVE: JOIN " .. (me == core.BLACK and "TOP TO BOTTOM" or "LEFT TO RIGHT")
+        else
+          status = "THEIR MOVE"
+        end
+        linkedScreen(view(), status)
+      elseif mode == "result" then
+        local won = lg.winner == me
+        local tail = "Confirm: again   Back: leave"
+        if myAgain then tail = "WAITING FOR THEM"
+        elseif S.peerAgain then tail = "THEY WANT ANOTHER GAME" end
+        linkedScreen(view(), (won and "YOU WIN" or "THEY WIN") .. "   " .. tail)
+      else
+        linkedScreen(view(), S.reason == "lost" and "LOST CONNECTION   Back: menu" or "THEY LEFT   Back: menu")
+      end
+    end
+
+    local ev = input.wait(100)
+    if ev == "back" then
+      break
+    elseif ev == "up" or ev == "down" or ev == "left" or ev == "right" then
+      if mode == "board" then
+        local r, c = core.ROW[cur], core.COL[cur]
+        if ev == "up" and r > 1 then cur = core.index(r - 1, c)
+        elseif ev == "down" and r < core.N then cur = core.index(r + 1, c)
+        elseif ev == "left" and c > 1 then cur = core.index(r, c - 1)
+        elseif ev == "right" and c < core.N then cur = core.index(r, c + 1) end
+        dirty = true
+      end
+    elseif ev == "confirm" then
+      if mode == "board" and lg.turn == me and not lg.finished and lg.cells[cur] == 0 then
+        lg.cells[cur] = me
+        lg.last = cur
+        if core.connected(lg.cells, me) then
+          lg.finished = true
+          lg.winner = me
+        else
+          lg.turn = core.other(me)
+        end
+        S:sendState(system.millis(), wire.pack(lg))
+        mode = lg.finished and "result" or "board"
+        dirty = true
+      elseif mode == "result" and not myAgain then
+        myAgain = true
+        S:say(system.millis(), nearby.NOTE_PLAY_AGAIN)
+        dirty = true
+      elseif mode == "linkend" then
+        break
+      end
+    end
+  end
+  S:stop(system.millis())
 end
 
 -- ---------------------------------------------------------------- entry

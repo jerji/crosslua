@@ -1,1 +1,1 @@
-{"title": "Hex", "description": "Eleven by eleven, no draws. Join your edges first. Against the device or a friend."}
+{"title": "Hex", "description": "Eleven by eleven, no draws. Join your edges first. Against the device, a friend on this device, or PLAY NEARBY with a second device over ESP-NOW.", "permissions": ["network", "espnow"]}
