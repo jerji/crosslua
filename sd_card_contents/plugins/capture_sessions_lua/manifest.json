@@ -1,0 +1,1 @@
+{"title": "Capture Sessions", "description": "Start, stop, list and delete WiFi PCAP capture sessions saved to app data. Receive only, never transmits.", "permissions": ["network", "monitor"]}
