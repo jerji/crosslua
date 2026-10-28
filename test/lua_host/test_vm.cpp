@@ -1416,6 +1416,13 @@ struct MockBackend : Backend {
     return true;
   }
   void fsListEnd() override {}
+  uint64_t volTotal = 0, volUsed = 0;  // fs.volume mock (total==0 -> "no storage mounted")
+  StorageStats storageStats() override {
+    StorageStats s;
+    s.total = volTotal;
+    s.used = volUsed;
+    return s;
+  }
 };
 
 static int g_fail = 0;
@@ -2787,6 +2794,39 @@ int main() {
         CHECK(be.logs[4] == "nil\tnot a directory (use fs.remove)");
         CHECK(be.logs[5] == "nil\tno such file or directory");
         CHECK(be.logs[6] == "nil\tcannot remove the data root");
+      }
+    }
+    TEST("fs.volume: unmounted -> nil,err");
+    {
+      MockBackend be;  // volTotal defaults to 0 = no storage
+      LuaVm vm;
+      CHECK(vm.open(128 * 1024));
+      registerApi(vm, be);
+      const char* script = "print(fs.volume())";
+      CHECK(vm.load("t", script, strlen(script)));
+      CHECK(run(vm, be, 200000) == Status::Finished);
+      CHECK(be.logs.size() == 1);
+      if (be.logs.size() == 1) CHECK(be.logs[0] == "nil\tno storage mounted");
+    }
+    TEST("fs.volume: total/used/free (64-bit, free = total - used)");
+    {
+      MockBackend be;
+      be.volTotal = 64ull * 1024 * 1024;  // 64 MiB
+      be.volUsed = 20ull * 1024 * 1024;   // 20 MiB
+      LuaVm vm;
+      CHECK(vm.open(128 * 1024));
+      registerApi(vm, be);
+      const char* script = R"LUA(
+        local v = fs.volume()
+        print(v.free == v.total - v.used)                                        -- free is exactly total-used
+        print(v.total == 67108864 and v.used == 20971520 and v.free == 46137344) -- exact on both 32/64-bit float
+      )LUA";
+      CHECK(vm.load("t", script, strlen(script)));
+      CHECK(run(vm, be, 200000) == Status::Finished);
+      CHECK(be.logs.size() == 2);
+      if (be.logs.size() == 2) {
+        CHECK(be.logs[0] == "true");
+        CHECK(be.logs[1] == "true");
       }
     }
     TEST("xml.parse: element tree, text merge, whitespace, malformed/empty/too-deep/too-large");

@@ -37,6 +37,7 @@
 #include <ESPmDNS.h>
 #include <HalFrontlight.h>
 #include <HalStorage.h>
+#include <SDCardManager.h>
 #include <InflateReader.h>
 #include <Logging.h>
 #include <Memory.h>
@@ -2322,6 +2323,13 @@ class LuaAppActivity::Backend final : public crosslua::Backend {
     }
   }
   void fsListEnd() override { listDir_.close(); }
+  StorageStats storageStats() override {
+    StorageStats s;
+    if (!Storage.ready()) return s;  // card not mounted -> total==0
+    s.total = SDCardManager::getInstance().sdTotalBytes();
+    s.used = SDCardManager::getInstance().sdUsedBytes();
+    return s;
+  }
 
   // --- batch A additions: scan / clock / rename / mac / qr / frontlight / inflate / rounded rect -----------------
   int wifiScan(WifiScanInfo* out, int maxEntries, int* total, char* err, size_t errCap) override {

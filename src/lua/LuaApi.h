@@ -87,6 +87,12 @@ class Backend {
   virtual bool fsListBegin(const char* path) = 0;
   virtual bool fsListNext(char* name, size_t cap, bool* isDir) = 0;  // false at end
   virtual void fsListEnd() = 0;
+  // SD card capacity in bytes (free = total - used). total==0 means the card is not mounted.
+  struct StorageStats {
+    uint64_t total = 0;
+    uint64_t used = 0;
+  };
+  virtual StorageStats storageStats() = 0;
 
   // --- app -----------------------------------------------------------------
   virtual const char* appName() = 0;

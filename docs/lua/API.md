@@ -119,6 +119,7 @@ Anything else is rejected, so `fs.read("../../x")` cannot escape. Errors are ret
 | `fs.mkdir(path)` / `fs.remove(path)` | true \| nil, err (`data:` only; remove works on files and *empty* folders) |
 | `fs.rmdir(path)` → true \| nil, err | recursive directory delete (removes everything under it — `fs.remove` refuses a non-empty folder). Refuses the `data:` root and anything that is not a directory |
 | `fs.rename(from, to)` → true \| nil, err | both paths must be in `data:`; no overwrite (`to` must not exist), so an atomic replace is `fs.remove(to)` then `fs.rename` |
+| `fs.volume()` → `{total, used, free}` \| nil, `"no storage mounted"` | SD card capacity in **bytes** (free = total − used, computed exactly before the float conversion). On the X4 the values are 32-bit floats, so byte counts above ~16 MB lose sub-kilobyte precision — fine for free-space display, not for exact hashes/offsets |
 
 ## require
 `require("name")` loads `name.lua` (or `name/init.lua`) from the app folder, then from `/.crosslua/lib/`. Dots are folder

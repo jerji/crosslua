@@ -374,6 +374,21 @@ int fs_rmdir(lua_State* L) {
   lua_pushboolean(L, 1);
   return 1;
 }
+// fs.volume() -> { total=, used=, free= } in bytes (SD card). free = total - used, computed exactly in uint64_t before
+// the float conversion. total==0 when the card is not mounted (error). On the X4 the values are 32-bit floats, so byte
+// counts above ~16 MB lose sub-kilobyte precision — fine for free-space display, not for exact hashes/offsets.
+int fs_volume(lua_State* L) {
+  const Backend::StorageStats s = be(L).storageStats();
+  if (s.total == 0) return pushFail(L, "no storage mounted");
+  lua_createtable(L, 0, 3);
+  lua_pushnumber(L, static_cast<lua_Number>(s.total));
+  lua_setfield(L, -2, "total");
+  lua_pushnumber(L, static_cast<lua_Number>(s.used));
+  lua_setfield(L, -2, "used");
+  lua_pushnumber(L, static_cast<lua_Number>(s.total - s.used));
+  lua_setfield(L, -2, "free");
+  return 1;
+}
 // fs.list(path) -> { "a.txt", "sub/", ... } (directories get a trailing slash), sorted
 // FAT stores LOCAL wall-clock time as a packed stamp: date = (year-1980) << 9 | month << 5 | day, time = hour << 11 |
 // minute << 5 | sec/2. Returns that wall-clock expressed as seconds since 1970 as if it were UTC (a plain, sortable,
@@ -691,7 +706,7 @@ void registerFs(lua_State* L, Ctx* c) {
   static const luaL_Reg fs[] = {{"read", fs_read},     {"write", fs_write},   {"write_at", fs_write_at},
                                 {"append", fs_append}, {"exists", fs_exists}, {"size", fs_size},
                                 {"mkdir", fs_mkdir},   {"remove", fs_remove}, {"rmdir", fs_rmdir}, {"list", fs_list},
-                                {"rename", fs_rename}, {"stat", fs_stat},     {nullptr, nullptr}};
+                                {"rename", fs_rename}, {"stat", fs_stat},   {"volume", fs_volume}, {nullptr, nullptr}};
   regTable(L, c, "fs", fs);
 }
 

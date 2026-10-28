@@ -48,7 +48,7 @@ word. Order = leverage per effort, cheapest first. Everything here is NOT built 
 | 3 | button hold: `input.held_ms()` or hold events | games (flag/hold-to-delete), long-press menus | S | **done**: holding confirm/left/right/up/down >500 ms emits `<name>_hold`; Back stays the force-quit escape |
 | 4 | `led.flash(r, g, b [, n [, on_ms [, off_ms]]])` | notification patterns | S | ✔ was listed as done by mistake; `LedManager::flash` exists |
 | 5 | `system.battery()` detail: charging, millivolts, mA | power screens | S | percent only today |
-| 6 | `fs.volume()` (SD free/total), `fs.rmdir` (recursive) | disk-full warnings, cache clearing, archive/restore | S | **`fs.rmdir` done** (recursive, guards); `fs.volume` still open |
+| 6 | `fs.volume()` (SD free/total), `fs.rmdir` (recursive) | disk-full warnings, cache clearing, archive/restore | S | **both done**: `fs.rmdir` (recursive, guards) + `fs.volume` → `{total, used, free}` bytes (device-verified) |
 | 7 | `wifi.scan` fields: BSSID, channel, auth mode, hidden | scanners, pickers, heat maps | S | **done**: rows are `{ssid, rssi, encrypted, bssid, channel, auth, hidden}` |
 | 8 | `net.mdns_advertise` (+ the UDP discovery companions use) | Calibre/transfer discovery | S | ✔ only `mdns_query` exists |
 | 9 | small getters: `system.reboot`, `system.language`, `system.mem`, `device.caps().model`, `time.tz`, `system.panic_info` | diagnostics, localisation | S | |
