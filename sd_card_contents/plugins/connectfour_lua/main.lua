@@ -3,8 +3,13 @@
 -- Light always opens (the outlined disc); dark follows (solid).
 -- Left/right move the drop column along the lip; confirm drops the disc.
 -- The board is stored bottom-up (row 1 at the bottom) and flipped when drawn.
+-- PLAY NEARBY (crossplay docs/apps/connectfour.md, spec play-nearby §4.3): two
+-- devices on ESP-NOW; the whole board travels as the 46-byte game blob (wire.lua).
 
 local game4 = require("game4")
+local nearby = require("nearby")
+local wire = require("wire")
+local GAME_ID = 0x0201
 
 local W, H = gfx.size()
 
@@ -17,9 +22,13 @@ local SLOT_H = 42        -- the lip: a shallow channel, shallower than a row
 local LIP_R = 16         -- the waiting disc, smaller than a played one
 local F_TITLE, F_TXT, F_SMALL = "sans18", "sans18", "ui12"
 
-local screen = "menu"    -- menu | howto | board | result
-local menuSel = 1        -- 1 = PLAY, 2 = HOW TO PLAY
+local screen = "menu"    -- menu | howto | board | result | linkwait | linkend
+local menuSel = 1        -- 1 = PLAY, 2 = PLAY NEARBY, 3 = HOW TO PLAY
 local resultSel = 1      -- 1 = PLAY AGAIN, 2 = MENU
+local S = nil            -- PLAY NEARBY session, nil when playing alone
+local mySide = game4.LIGHT
+local myAgain = false    -- I have said PLAY AGAIN this round
+local flash = ""         -- one-line message on the menu
 local howPage = 1        -- 1..3
 local game = nil
 local sel = 4            -- selected drop column (1..7)
@@ -137,8 +146,10 @@ local function drawGrid(gridTop, cell)
 end
 
 local function drawBoard()
-  band("CONNECT FOUR", game.turn == game4.LIGHT and "LIGHT'S TURN" or "DARK'S TURN")
-  gfx.text(16, 56, "< > MOVE    OK DROP    BACK QUIT", F_SMALL)
+  local turnText = game.turn == game4.LIGHT and "LIGHT'S TURN" or "DARK'S TURN"
+  if S then turnText = game.turn == mySide and "YOUR TURN" or "THEIR TURN" end
+  band("CONNECT FOUR", turnText)
+  gfx.text(16, 56, S and "< > MOVE    OK DROP    BACK LEAVE" or "< > MOVE    OK DROP    BACK QUIT", F_SMALL)
   local lipTop = 76
   local gridTop = lipTop + SLOT_H
   boardFrame(LEFT, lipTop, GRID_W, GRID_H + SLOT_H)
@@ -170,6 +181,11 @@ end
 local function drawResult()
   local title = game.outcome == "light" and "LIGHT WINS"
     or (game.outcome == "dark" and "DARK WINS" or "A DRAW")
+  if S then
+    local won = game.outcome == "light" and game4.LIGHT or game4.DARK
+    title = game.outcome == "draw" and "A DRAW"
+      or (won == mySide and "YOU WIN" or "THEY WIN")
+  end
   band("CONNECT FOUR")
   centerText(56, title, F_TITLE, "b")
   -- the result screen is the board, drawn higher (no slot row to reserve)
@@ -188,6 +204,25 @@ local function drawResult()
   local bx = math.floor((W - (2 * bw2 + gap)) / 2)
   button(bx, by, bw2, bh, "PLAY AGAIN", resultSel == 1)
   button(bx + bw2 + gap, by, bw2, bh, "MENU", resultSel == 2)
+  if S then
+    local note = myAgain and "WAITING FOR THEM TO SAY PLAY AGAIN"
+      or (S.peerAgain and "THEY WANT ANOTHER GAME" or "")
+    centerText(660, note, F_SMALL, "b")
+  end
+end
+
+-- The nearby screens: searching for a partner, and the match ended early.
+local function drawLinkWait()
+  band("CONNECT FOUR", "PLAY NEARBY")
+  centerText(300, "LOOKING FOR A PLAYER", F_TITLE, "b")
+  centerText(344, "Turn on PLAY NEARBY on the other device.", F_SMALL, "b")
+  gfx.text(16, 700, "BACK CANCEL", F_SMALL)
+end
+
+local function drawLinkEnd()
+  band("CONNECT FOUR")
+  centerText(300, S and S.reason == "lost" and "LOST CONNECTION" or "THEY LEFT", F_TITLE, "b")
+  gfx.text(16, 700, "OK OR BACK: MENU", F_SMALL)
 end
 
 -- ------------------------------------------------------- menu / how to play
@@ -195,8 +230,8 @@ end
 local function drawMenu()
   band("CONNECT FOUR")
   gfx.text(16, 58, "PASS AND PLAY    LIGHT ALWAYS OPENS", F_SMALL)
-  local rows = { "PLAY", "HOW TO PLAY" }
-  for i = 1, 2 do
+  local rows = { "PLAY", "PLAY NEARBY", "HOW TO PLAY" }
+  for i = 1, 3 do
     local y = 150 + (i - 1) * 48
     local x = math.floor((W - gfx.text_width(rows[i], F_TXT, "b")) / 2)
     if menuSel == i then gfx.text(x - 36, y, ">", F_TXT, "b") end
@@ -219,6 +254,7 @@ local function drawMenu()
     disc(cx, cy, orr, s[3])
   end
   gfx.text(16, 540, "SEVEN COLUMNS. FOUR IN A LINE WINS.", F_SMALL)
+  if flash ~= "" then centerText(580, flash, F_SMALL, "b") end
   gfx.text(16, 700, "OK SELECT    BACK QUIT", F_SMALL)
 end
 
@@ -294,78 +330,202 @@ end
 
 -- ------------------------------------------------------------- input loop
 
+-- ------------------------------------------------------ PLAY NEARBY link
+
+local function leaveLink()
+  if S then S:stop(system.millis()) end
+  S = nil
+  myAgain = false
+  screen = "menu"
+  dirty = true
+end
+
+local function startLink()
+  S = nearby.new(GAME_ID, "PUP " .. string.sub(system.mac(), 16, 17))
+  local ok, err = S:start()
+  if not ok then
+    S = nil
+    flash = "RADIO WILL NOT START: " .. tostring(err):sub(1, 30)
+    dirty = true
+    return
+  end
+  flash = ""
+  screen = "linkwait"
+  dirty = true
+end
+
+-- A new round: both devices have said PLAY AGAIN (or the peer's first move
+-- arrived). The first mover flips each round, so both sides take turns going first.
+local function startRound()
+  S.iFirst = not S.iFirst
+  mySide = S.iFirst and game4.LIGHT or game4.DARK
+  S:newRound()
+  game = game4.newGame()
+  sel = 4
+  myAgain = false
+  screen = "board"
+  dirty = true
+end
+
+-- Runs every pass: pumps the radio, then applies the match, the peer's move,
+-- and the peer leaving. Nothing here draws unless something changed.
+local function pollLink()
+  if not S then return end
+  local now = system.millis()
+  S:pump(now)
+  S:tick(now)
+  if S:takeMatch() then
+    mySide = S.iFirst and game4.LIGHT or game4.DARK
+    game = game4.newGame()
+    sel = 4
+    myAgain = false
+    screen = "board"
+    dirty = true
+  end
+  local blob = S:takeState()
+  if blob then
+    local ng = wire.unpack(blob)
+    if ng then
+      if screen == "result" and ng.outcome == "running" then startRound() end
+      game = ng
+      if game.outcome ~= "running" then
+        resultSel = 1
+        screen = "result"
+      else
+        screen = "board"
+      end
+      dirty = true
+    end
+  end
+  if S.phase == "ended" and screen ~= "linkend" then
+    screen = "linkend"
+    dirty = true
+  end
+  -- both said PLAY AGAIN; whichever note arrived last starts the round
+  if screen == "result" and myAgain and S.peerAgain then startRound() end
+end
+
+-- A key on the board during a match: drop only on my turn, then send the board.
+local function linkDrop()
+  if game.turn ~= mySide then
+    flash = "NOT YOUR TURN"
+    return
+  end
+  if game4.drop(game, sel) then
+    flash = ""
+    S:sendState(system.millis(), wire.pack(game))
+    dirty = true
+    if game.outcome ~= "running" then
+      resultSel = 1
+      screen = "result"
+    end
+  end
+end
+
+-- Returns "exit" when the app should end.
+local function handleKey(ev)
+  if screen == "menu" then
+    if ev == "up" then
+      menuSel = (menuSel - 2) % 3 + 1
+      dirty = true
+    elseif ev == "down" then
+      menuSel = menuSel % 3 + 1
+      dirty = true
+    elseif ev == "confirm" then
+      if menuSel == 1 then
+        game = game4.newGame()
+        sel = 4
+        screen = "board"
+      elseif menuSel == 2 then
+        startLink()
+      else
+        howPage = 1
+        screen = "howto"
+      end
+      dirty = true
+    elseif ev == "back" then
+      return "exit"
+    end
+  elseif screen == "howto" then
+    if ev == "confirm" or ev == "right" then
+      if howPage < 3 then howPage = howPage + 1 else screen = "menu" end
+      dirty = true
+    elseif ev == "back" or ev == "left" then
+      if howPage > 1 then howPage = howPage - 1 else screen = "menu" end
+      dirty = true
+    end
+  elseif screen == "linkwait" then
+    if ev == "back" then leaveLink() end
+  elseif screen == "linkend" then
+    if ev == "confirm" or ev == "back" then leaveLink() end
+  elseif screen == "board" then
+    if ev == "left" or ev == "right" then
+      sel = ((sel + (ev == "right" and 1 or -1) - 1) % game4.COLS) + 1
+      dirty = true
+    elseif ev == "confirm" then
+      if S then
+        linkDrop()
+      elseif game4.drop(game, sel) then
+        -- a full column's drop is refused and changes nothing; a settled
+        -- game moves to the result screen
+        dirty = true
+        if game.outcome ~= "running" then
+          resultSel = 1
+          screen = "result"
+        end
+      end
+    elseif ev == "back" then
+      if S then leaveLink() else screen = "menu"; dirty = true end
+    end
+  elseif screen == "result" then
+    if ev == "left" or ev == "right" then
+      resultSel = resultSel == 1 and 2 or 1
+      dirty = true
+    elseif ev == "confirm" then
+      if S then
+        if resultSel == 1 then
+          if not myAgain then
+            myAgain = true
+            S:say(system.millis(), nearby.NOTE_PLAY_AGAIN)
+            if S.peerAgain then startRound() end
+          end
+          dirty = true
+        else
+          leaveLink()
+        end
+      elseif resultSel == 1 then
+        game = game4.newGame()
+        sel = 4
+        screen = "board"
+        dirty = true
+      else
+        screen = "menu"
+        dirty = true
+      end
+    elseif ev == "back" then
+      if S then leaveLink() else screen = "menu"; dirty = true end
+    end
+  end
+  return nil
+end
+
 local function update()
   while true do
+    pollLink()
     if dirty then
       if screen == "menu" then drawMenu()
       elseif screen == "howto" then drawHowTo()
       elseif screen == "board" then drawBoard()
-      else drawResult() end
+      elseif screen == "result" then drawResult()
+      elseif screen == "linkwait" then drawLinkWait()
+      else drawLinkEnd() end
       gfx.present()
       dirty = false
     end
-    local ev = input.wait()
-    if screen == "menu" then
-      if ev == "up" or ev == "down" then
-        menuSel = menuSel == 1 and 2 or 1
-        dirty = true
-      elseif ev == "confirm" then
-        if menuSel == 1 then
-          game = game4.newGame()
-          sel = 4
-          screen = "board"
-        else
-          howPage = 1
-          screen = "howto"
-        end
-        dirty = true
-      elseif ev == "back" then
-        return
-      end
-    elseif screen == "howto" then
-      if ev == "confirm" or ev == "right" then
-        if howPage < 3 then howPage = howPage + 1 else screen = "menu" end
-        dirty = true
-      elseif ev == "back" or ev == "left" then
-        if howPage > 1 then howPage = howPage - 1 else screen = "menu" end
-        dirty = true
-      end
-    elseif screen == "board" then
-      if ev == "left" or ev == "right" then
-        sel = ((sel + (ev == "right" and 1 or -1) - 1) % game4.COLS) + 1
-        dirty = true
-      elseif ev == "confirm" then
-        -- a full column's drop is refused and changes nothing; a settled
-        -- game moves to the result screen
-        if game4.drop(game, sel) then
-          dirty = true
-          if game.outcome ~= "running" then
-            resultSel = 1
-            screen = "result"
-          end
-        end
-      elseif ev == "back" then
-        screen = "menu"
-        dirty = true
-      end
-    elseif screen == "result" then
-      if ev == "left" or ev == "right" then
-        resultSel = resultSel == 1 and 2 or 1
-        dirty = true
-      elseif ev == "confirm" then
-        if resultSel == 1 then
-          game = game4.newGame()
-          sel = 4
-          screen = "board"
-        else
-          screen = "menu"
-        end
-        dirty = true
-      elseif ev == "back" then
-        screen = "menu"
-        dirty = true
-      end
-    end
+    -- while linked, wake every 100 ms so the radio keeps moving
+    local ev
+    if S then ev = input.wait(100) else ev = input.wait() end
+    if ev and handleKey(ev) == "exit" then return end
   end
 end
 

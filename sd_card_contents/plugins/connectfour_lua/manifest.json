@@ -1,1 +1,1 @@
-{"title": "Connect Four", "description": "Drop discs into seven columns; four in a line wins. Pass and play"}
+{"title": "Connect Four", "description": "Drop discs into seven columns; four in a line wins. Pass and play, or PLAY NEARBY with a second device over ESP-NOW.", "permissions": ["network", "espnow"]}
