@@ -13,6 +13,8 @@ Deterministic: sorted entries and fixed timestamps, so the same tree always give
 """
 import os
 import re
+import shutil
+import subprocess
 import sys
 import zipfile
 
@@ -22,6 +24,7 @@ TEST_APPS = {"lua_tests_lua", "grants_lua"}  # developer suites: not part of the
 MAX_LUA_BYTES = 64 * 1024                    # the runtime refuses bigger scripts
 STAMP = (2026, 1, 1, 0, 0, 0)                # fixed zip timestamp (FAT cannot store anything earlier than 1980)
 LEAK = re.compile(rb"/root/|/home/[a-z]|192\.168\.\d+\.\d+|C:\\\\Users")
+LUAC = shutil.which("luac5.4") or shutil.which("luac")  # parse-only Lua syntax check (nil when absent)
 INSTALL = """CrossLua apps {version}
 
 Unzip this archive into the ROOT of the SD card. It creates /plugins/<category>/<app>/ for every app.
@@ -69,6 +72,11 @@ def validate(app, problems):
             problems.append(f"{rel}: host-specific text {m.group(0)!r}")
         if ".." in rel.split("/"):
             problems.append(f"{rel}: path escapes the card")
+        if rel.endswith(".lua") and LUAC:
+            r = subprocess.run([LUAC, "-p", full], capture_output=True, text=True)
+            if r.returncode != 0:
+                err = (r.stderr or "").strip().splitlines()
+                problems.append(f"{rel}: Lua syntax error: {err[-1] if err else 'parse failed'}")
 
 
 def write_zip(path, apps, extra=None):

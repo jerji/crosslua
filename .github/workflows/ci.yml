@@ -242,6 +242,9 @@ jobs:
     steps:
       - uses: actions/checkout@v6
 
+      - name: Install Lua (syntax check for packaged .lua files)
+        run: sudo apt-get update && sudo apt-get install -y lua5.4
+
       - name: Build the zips
         run: python3 scripts/package_sd_card.py ci dist
 
