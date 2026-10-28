@@ -69,10 +69,10 @@ Nothing reaches the panel until `gfx.present()`. Coordinates may be floats (trun
 | call | notes |
 |---|---|
 | `input.wait([timeout_ms])` → name \| nil | yields to the firmware until a button is released or the timeout passes (`nil`). No timeout = wait forever. **Prefer this over polling** — the device idles/sleeps normally. |
-| `input.poll()` → name \| nil | non-blocking |
+| `input.poll()` → name \| nil | non-blocking. Button event names: a press returns the bare name (`back` `confirm` `left` `right` `up` `down`); holding a button >500 ms returns `<name>_hold` (`confirm_hold` `left_hold` `right_hold` `up_hold` `down_hold`) instead of the press. `back` has no hold — holding Back ~1 s force-quits the app (the escape hatch). A press is either a tap *or* a hold, never both |
 | `input.key()` → `{char, key, code, ctrl, shift, alt, gui}` \| nil | details of the `"key"` event `poll`/`wait` returned last (a Bluetooth keyboard press, see `ble`); `nil` after any other event. A printable key has `char` (one ASCII character); a special key has `key` = `enter backspace tab escape delete left right up down home end pageup pagedown`; `code` is the raw HID usage id; the modifier flags are true for either hand's key |
 
-Event names: `back confirm left right up down` (plus `key` while a Bluetooth keyboard is connected, and `press long tap release` on touch boards). Events are delivered on button *release*. Holding Back ≥ 1 s quits the app and is never delivered.
+Event names: `back confirm left right up down`, plus `<name>_hold` for every button but Back (see above), `key` while a Bluetooth keyboard is connected, and `press long tap release` on touch boards. A press event is delivered on button *release*; a `<name>_hold` is delivered the moment the hold crosses 500 ms (its release is then suppressed). Holding Back ≥ 1 s quits the app and is never delivered.
 
 ## app
 `app.sleep(ms)` (timer only — buttons stay queued) · `app.exit()` · `app.name()` · `app.dir()` (e.g. `/plugins/hello_lua`)

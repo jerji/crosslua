@@ -112,7 +112,8 @@ std::atomic<bool> g_bluetoothHeld{
 constexpr size_t MAX_SCRIPT_BYTES = 64 * 1024;
 
 constexpr uint32_t SLICE_MS = 25;        // max time one loop() pass spends inside Lua
-constexpr uint32_t EXIT_HOLD_MS = 1000;  // hold Back this long to force-quit any app
+constexpr uint32_t EXIT_HOLD_MS = 1000;    // hold Back this long to force-quit any app
+constexpr uint32_t BUTTON_HOLD_MS = 500;  // hold a nav button this long -> "<name>_hold" (Back reserved for force-quit)
 constexpr size_t EVENT_QUEUE_MAX = 16;
 
 }  // namespace
@@ -3039,6 +3040,12 @@ void LuaAppActivity::collectInput() {
       push("key", -1, -1, &k);
     }
   }
+  if (mappedInput.wasLongPressed(B::Confirm, BUTTON_HOLD_MS)) push("confirm_hold");
+  if (mappedInput.wasLongPressed(B::Left, BUTTON_HOLD_MS)) push("left_hold");
+  if (mappedInput.wasLongPressed(B::Right, BUTTON_HOLD_MS)) push("right_hold");
+  if (mappedInput.wasLongPressed(B::Up, BUTTON_HOLD_MS)) push("up_hold");
+  if (mappedInput.wasLongPressed(B::Down, BUTTON_HOLD_MS)) push("down_hold");
+  // Back has no "<name>_hold": holding Back past EXIT_HOLD_MS is the force-quit escape, not an app gesture.
   if (mappedInput.wasReleased(B::Back)) push("back");
   if (mappedInput.wasReleased(B::Confirm)) push("confirm");
   if (mappedInput.wasReleased(B::Left)) push("left");

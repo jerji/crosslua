@@ -35,9 +35,10 @@ class Backend {
   virtual void present(int mode) = 0;
 
   // --- input ---------------------------------------------------------------
-  // Next queued button event ("back","confirm","left","right","up","down","power"),
-  // or nullptr when empty.
-  virtual const char* popEvent() = 0;
+    // Next queued input event, or nullptr when empty: a button press ("back","confirm","left","right","up","down"),
+    // a button hold ("confirm_hold","left_hold","right_hold","up_hold","down_hold" — held >500 ms; Back has no hold,
+    // holding Back force-quits the app), a Bluetooth key ("key"), or a touch event ("press","long","tap","release").
+    virtual const char* popEvent() = 0;
 
   // --- system --------------------------------------------------------------
   virtual uint32_t millis() = 0;
