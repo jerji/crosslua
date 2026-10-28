@@ -1,0 +1,1 @@
+{"title": "BLE Remote", "description": "Connect to a Bluetooth LE device and send the GATT commands listed in commands.txt.", "permissions": ["bluetooth"]}

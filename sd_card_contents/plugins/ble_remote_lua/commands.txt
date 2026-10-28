@@ -1,0 +1,12 @@
+# BLE Remote command list. One command per line:
+#
+#   label | characteristic UUID | hex bytes | mode
+#
+# - UUID: 16-bit ("2a19"), 32-bit, or the full 128-bit dashed form.
+# - hex bytes: pairs of hex digits, spaces allowed ("01 0a ff"). Up to 244 bytes.
+# - mode: "write" (default, with response) or "nr" (write without response).
+#
+# Lines starting with # are ignored. Add the commands for your device below, then open the app.
+# Example (not active):
+# Power     | 0000ff01-0000-1000-8000-00805f9b34fb | 01 | write
+# Volume up | ff02 | 2b
