@@ -24,7 +24,7 @@ STAMP = (2026, 1, 1, 0, 0, 0)                # fixed zip timestamp (FAT cannot s
 LEAK = re.compile(rb"/root/|/home/[a-z]|192\.168\.\d+\.\d+|C:\\\\Users")
 INSTALL = """CrossLua apps {version}
 
-Unzip this archive into the ROOT of the SD card. It creates /plugins/<app>/ for every app.
+Unzip this archive into the ROOT of the SD card. It creates /plugins/<category>/<app>/ for every app.
 Then, on the device: Home -> Plugins (turn plugins on under Settings -> Connectivity if the entry is missing).
 
 Apps ask for their permissions the first time they run; each app's folder has a manifest.json that lists them.
@@ -33,8 +33,17 @@ Firmware updates come from Settings -> Check for update (this fork's own release
 
 
 def plugin_dirs():
+    """Apps sit one level under a category: plugins/<category>/<app>."""
     base = os.path.join(SRC, "plugins")
-    return sorted(d for d in os.listdir(base) if os.path.isdir(os.path.join(base, d)))
+    apps = []
+    for cat in sorted(os.listdir(base)):
+        cat_path = os.path.join(base, cat)
+        if not os.path.isdir(cat_path):
+            continue
+        for app in sorted(os.listdir(cat_path)):
+            if os.path.isdir(os.path.join(cat_path, app)):
+                apps.append(os.path.join(cat, app))
+    return sorted(apps)
 
 
 def files_of(app):
@@ -96,8 +105,8 @@ def main():
         for p in problems:
             print("  -", p)
         return 1
-    user_apps = [a for a in apps if a not in TEST_APPS]
-    test_apps = [a for a in apps if a in TEST_APPS]
+    user_apps = [a for a in apps if os.path.basename(a) not in TEST_APPS]
+    test_apps = [a for a in apps if os.path.basename(a) in TEST_APPS]
     if not user_apps or not test_apps:
         print(f"PACKAGING FAILED: expected both user apps and test apps, got {user_apps} / {test_apps}")
         return 1

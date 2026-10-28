@@ -1,9 +1,9 @@
 -- xkcd_core.lua — the crossplay xkcd pack reader core, ported to Lua.
 --
--- Port of /root/x4/crossplay/src/apps_local/xkcd/XkcdCore.{h,cpp} (the
--- "shelf" viewer). PURE: no device calls. Every byte arrives through a
--- ByteSource — a table with `read(offset, length) -> string | nil` and
--- `size() -> int` — so host tests can drive a real pack straight from files.
+-- Port of crossplay's apps_local/xkcd/XkcdCore.{h,cpp} (the "shelf" viewer).
+-- PURE: no device calls. Every byte arrives through a ByteSource — a table with
+-- `read(offset, length) -> string | nil` and `size() -> int` — so host tests can
+-- drive a real pack straight from files.
 --
 -- What this file does NOT do: it never decides how a comic is laid out. The
 -- pack builder settled that (docs/apps/xkcd-pack-format.md, the nine-case
