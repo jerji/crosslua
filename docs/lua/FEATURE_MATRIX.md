@@ -1,6 +1,6 @@
 # CrossLua feature matrix — what the other forks need from us
 
-Sources: per-fork surveys in `/root/x4/scratch/features/{crossplay,biscuit,ruby,avesO3,crosspoint-native}.md`
+Sources: per-fork surveys of crossplay, biscuit, Ruby, AvesO3 and CrossPoint itself
 (subagent read-throughs, LOC counts measured) plus a direct read of Grimoire's API doc and its 8 spells + launcher
 (72 unique API calls, see `docs/lua/GRIMOIRE.md`). A second audit pass over the same firmwares (2026-10-28, findings checked against `src/lua`) is merged in the "Next up" section below. This file deduplicates their "API gaps" lists into ONE runtime
 roadmap, ordered by how many features each primitive unblocks and how cheap/safe it is on the X4 (no PSRAM, ~96 KB
@@ -198,6 +198,6 @@ sequencing, panic capture, high-rate promiscuous streaming.
 ## Cross-fork portability verdicts (headline numbers)
 - **crossplay:** ~20 features portable now; 25 games' logic portable; images/`radio` are the blockers for the rest.
 - **biscuit:** ~48 portable now, ~60 need APIs (mostly wifi.scan/BLE/monitor/softap), ~12 native-only.
-- **AvesO3:** library/dashboard portable after `epub.meta`+`image`+`fs.rename`; parser spec captured in `scratch/features/avesO3.md` §4 (239-byte index record, `progress.bin` layout, sort/filter semantics).
+- **AvesO3:** library/dashboard portable after `epub.meta`+`image`+`fs.rename`; parser spec captured in the AvesO3 survey (§4) (239-byte index record, `progress.bin` layout, sort/filter semantics).
 - **Ruby:** passive RF analyzer — needs the native `capture.*` service; screens port after Tier-2 gfx.
 - **Grimoire:** spells are Lua scripts against a polled API; a thin Lua shim covers `display/input/fs/zip/time/system/wifi/http` (≈80 % of calls). Missing: `image.*`, `ble.*`, `hid.*`, `net.*`, AP mode, `fs.dofile`, `zip.inflate`, `time.sync`.
