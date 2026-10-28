@@ -1,0 +1,1 @@
+{"title": "BMP Stego", "description": "Hide or read a short text after a BMP's pixel data (the picture still opens normally). Files in Stego/.", "storage": {"read": ["Stego"], "write": ["Stego"]}}

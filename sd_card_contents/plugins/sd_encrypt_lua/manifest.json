@@ -1,0 +1,1 @@
+{"title": "SD File Encrypt", "description": "AES-256-CBC + HMAC-SHA256 file encryption for files in Secure/ (PBKDF2 from a typed passphrase).", "storage": {"read": ["Secure"], "write": ["Secure"]}}
