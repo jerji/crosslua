@@ -1,0 +1,1 @@
+{"title": "Passive Sniffer", "description": "Channel-hop 2.4 GHz, count beacons/probes/data, optional PCAP to app data. Receive only, never transmits.", "permissions": ["network", "monitor"]}
