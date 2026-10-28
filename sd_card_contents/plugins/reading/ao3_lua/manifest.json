@@ -1,0 +1,1 @@
+{"title": "AO3 & Library", "description": "Your library as a paged grid. Hold Confirm for the AO3 menu: continue reading, page as QR, chapter updates and EPUB downloads, metadata index, archive and restore.", "permissions": ["library", "network"], "storage": {"write": ["Books/AO3", "Downloads"]}}

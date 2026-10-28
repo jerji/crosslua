@@ -2,30 +2,21 @@
 -- sd:Books/AO3/works.txt, checks each work's chapter count on AO3, and
 -- downloads the whole work as an EPUB when chapters are new. The reading
 -- percentage comes from the firmware's own progress file (epub.progress).
--- Confirm: check all works. Right: download new/missing. Back: exit.
+-- Confirm: check all works. Right: download new/missing. Back: return to the menu.
 
-local AO3 = require("ao3")
+local AO3 = require("ao3.works")
+local ui = require("ui")
+
+local M = {}
 
 local STATE = "data:state.json"
-local W, H = gfx.size()
-local TITLE_H = 44
 local ROW_H = 64
-local VIS = math.max(1, math.floor((H - TITLE_H - 90) / ROW_H))
 
-local works = {}
-local state = {}
+local W, H = 480, 800
+local VIS = 1
+local works, state = {}, {}
 local cur, top = 1, 1
 local msg = nil
-
-local function clip(s, px, font)
-  if gfx.text_width(s, font) <= px then return s end
-  while #s > 0 and gfx.text_width(s .. "...", font) > px do
-    local p = utf8.offset(s, -1)
-    if not p then break end
-    s = s:sub(1, p - 1)
-  end
-  return s .. "..."
-end
 
 local function save_state()
   local text = json.encode(state)
@@ -34,9 +25,7 @@ end
 
 local function load()
   local text, err = fs.read(AO3.LIST)
-  if not text then
-    msg = "No list: " .. tostring(err)
-  end
+  if not text then msg = "No list: " .. tostring(err) end
   works = AO3.parse_works(text)
   local raw = fs.read(STATE)
   local st = raw and json.decode(raw)
@@ -63,8 +52,7 @@ local function status(w)
     return s.total and ("not downloaded (" .. s.total .. " ch)") or "not checked yet"
   end
   if needs(w) then
-    local new = s.total - (s.got or 0)
-    return "NEW: +" .. new .. " ch (" .. s.total .. " total)"
+    return "NEW: +" .. (s.total - (s.got or 0)) .. " ch (" .. s.total .. " total)"
   end
   local ok, p = pcall(epub.progress, path)
   if ok and type(p) == "number" then
@@ -75,9 +63,8 @@ end
 
 local function busy(text)
   gfx.clear()
-  gfx.rect(0, 0, W, TITLE_H, true)
-  gfx.text(14, 12, "AO3 updates", "ui12", "bw")
-  gfx.text(16, 100, clip(text, W - 32, "sans16"), "sans16", "b")
+  ui.header("AO3 updates")
+  gfx.text(16, 100, ui.clip(text, W - 32, "sans16", "b"), "sans16", "b")
   gfx.present()
 end
 
@@ -172,11 +159,7 @@ end
 
 local function draw()
   gfx.clear()
-  gfx.rect(0, 0, W, TITLE_H, true)
-  gfx.text(14, 12, "AO3 updates", "ui12", "bw")
-  if #works > 0 then
-    gfx.text(W - 14, 12, cur .. " / " .. #works, "ui12", "bwr")
-  end
+  ui.header("AO3 updates", (#works > 0) and (cur .. " / " .. #works) or nil)
 
   if #works == 0 then
     gfx.text(16, 100, "No works to track yet.", "sans16", "b")
@@ -185,42 +168,41 @@ local function draw()
     gfx.text(16, 182, "or  12345 | My favourite fic", "ui12")
   end
 
-  local y = TITLE_H + 12
+  local y = ui.TITLE_H + 12
   for i = top, math.min(#works, top + VIS - 1) do
     local w = works[i]
     local sel = (i == cur)
-    if sel then gfx.rect(8, y, W - 16, ROW_H - 8, true) end
+    if sel then gfx.rect(8, y, W - 16, ROW_H - 8, true, true) end
     local fl = sel and "bw" or "b"
     local sub = sel and "w" or ""
     local name = w.label or w.st.title or ("Work " .. w.id)
-    gfx.text(20, y + 6, clip(name, W - 48, "sans16"), "sans16", fl)
-    gfx.text(20, y + 34, clip(status(w), W - 48, "ui12"), "ui12", sub)
+    gfx.text(20, y + 6, ui.clip(name, W - 48, "sans16", fl), "sans16", fl)
+    gfx.text(20, y + 34, ui.clip(status(w), W - 48, "ui12", sub), "ui12", sub)
     y = y + ROW_H
   end
 
-  if msg then gfx.text(14, H - 70, clip(msg, W - 28, "ui12"), "ui12", "b") end
-  gfx.text(14, H - 34, clip("Up/Down pick  Confirm: check  Right: download  Back", W - 28, "ui12"), "ui12")
+  if msg then gfx.text(14, H - 70, ui.clip(msg, W - 28, "ui12", "b"), "ui12", "b") end
+  ui.footer("Up/Down pick  Confirm: check  Right: download  Back")
 end
 
-local function __main()
+function M.run()
+  W, H = gfx.size()
+  VIS = math.max(1, math.floor((H - ui.TITLE_H - 90) / ROW_H))
+  works, state, cur, top, msg = {}, {}, 1, 1, nil
   load()
   draw(); gfx.present()
   while true do
     local e = input.wait()
-    if e == "back" then break
-    elseif #works > 0 and e == "up" then msg = nil; move(-1)
-    elseif #works > 0 and e == "down" then msg = nil; move(1)
-    elseif #works > 0 and e == "confirm" then check_all()
-    elseif #works > 0 and e == "right" then download_new()
+    if e == "back" then return end
+    if #works > 0 then
+      if e == "up" then msg = nil; move(-1)
+      elseif e == "down" then msg = nil; move(1)
+      elseif e == "confirm" then check_all()
+      elseif e == "right" then download_new()
+      end
     end
     draw(); gfx.present()
   end
-  app.exit()
 end
 
-local ok, err = pcall(__main)
-if not ok then
-  gfx.clear(); gfx.text(10, 10, "err: " .. tostring(err):sub(1, 60), "ui12", "b"); gfx.present()
-  while input.wait() ~= "back" do end
-  app.exit()
-end
+return M

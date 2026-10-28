@@ -1,4 +1,4 @@
--- ao3.lua: pure helpers for the AO3 update checker. No device calls here, so
+-- ao3/works.lua: pure helpers for the AO3 update checker. No device calls here, so
 -- the parsing can be checked under the host lua5.4.
 
 local M = {}

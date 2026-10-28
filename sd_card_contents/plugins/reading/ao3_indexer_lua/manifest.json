@@ -1,1 +1,0 @@
-{"title": "AO3 Indexer", "description": "Scan Books/AO3 EPUBs and index their AO3 metadata (words, chapters, rating, fandom, date). Writes data:ao3.idx. No network.", "storage": {"read": ["Books/AO3"]}}

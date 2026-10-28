@@ -3,77 +3,22 @@
 -- skipped). The zip is written with method 0 (stored, no compression), so no
 -- deflate is needed. Restore parses the zip itself, reading one header at a time.
 
+local ui = require("ui")
+
+local M = {}
+
 local SRC = "sd:Books/AO3"
 local DIR = "sd:Downloads"
 local OUT = DIR .. "/ao3-archive.zip"
 local CD_TMP = "data:ao3-cd.tmp"   -- central directory staging, keeps RAM flat
 local CHUNK = 16384
-local LH = 24
-
-local W, H = 0, 0
-
-local function clip(s, n) return #s > n and s:sub(1, n) or s end
-
-local function screen(title, lines, footer)
-  gfx.clear(); W, H = gfx.size()
-  gfx.rect(0, 0, W, 40, true); gfx.text(14, 10, clip(title, 30), "ui12", "bw")
-  local y = 56
-  for _, l in ipairs(lines) do
-    gfx.text(16, y, clip(l, 46), "small"); y = y + LH
-  end
-  gfx.text(14, H - 34, footer or "", "small")
-  gfx.present()
-end
-
-local function wait_back()
-  while input.wait() ~= "back" do end
-end
-
-local function menu(title, items, footer)
-  local cur = 1
-  while true do
-    gfx.clear(); W, H = gfx.size()
-    gfx.rect(0, 0, W, 40, true); gfx.text(14, 10, clip(title, 30), "ui12", "bw")
-    if #items == 0 then gfx.text(14, 60, "(nothing here)", "small") end
-    local y = 56
-    for i, it in ipairs(items) do
-      if y > H - 70 then break end
-      if i == cur then
-        gfx.rect(10, y - 4, W - 20, LH + 4, true); gfx.text(16, y, clip(it, 44), "small", "w")
-      else
-        gfx.text(16, y, clip(it, 44), "small")
-      end
-      y = y + LH
-    end
-    gfx.text(14, H - 34, footer, "small")
-    gfx.present()
-    local e = input.wait()
-    if e == "up" then cur = cur > 1 and cur - 1 or math.max(1, #items)
-    elseif e == "down" then cur = cur < #items and cur + 1 or 1
-    elseif e == "confirm" and #items > 0 then return cur
-    elseif e == "back" then return nil end
-  end
-end
-
--- CRC-32 of a whole file, read in chunks. Returns the integer value.
-local function crc_of(path, size)
-  local c = crypto.crc32("")
-  local off = 0
-  while off < size do
-    local chunk = fs.read(path, off, CHUNK)
-    if not chunk or #chunk == 0 then return nil, "short read" end
-    c = crypto.crc32(chunk, c)
-    off = off + #chunk
-  end
-  return (string.unpack(">I4", c))
-end
 
 -- Archive: stream each .epub as a stored entry, staging central-directory records in data:.
+-- Returns count, bytes or nil, err.
 local function archive(progress)
-  local total = nil
   local probe, t = fs.list(SRC, { limit = 1 })
   if not probe then return nil, "no Books/AO3 folder on the card" end
-  total = t or 0
+  local total = t or 0
 
   if not fs.write(OUT, "") then return nil, "cannot write " .. OUT end
   fs.write(CD_TMP, "")
@@ -90,8 +35,17 @@ local function archive(progress)
         if not size then return nil, "cannot stat " .. n end
         if size > 0xFFFFFFFF or #n > 255 then return nil, "unsupported entry " .. n end
         progress(string.format("%d  %s", count + 1, n))
-        local crc, err = crc_of(path, size)
-        if not crc then return nil, n .. ": " .. tostring(err) end
+
+        -- CRC-32 of the whole file, read in chunks.
+        local c = crypto.crc32("")
+        local off = 0
+        while off < size do
+          local chunk = fs.read(path, off, CHUNK)
+          if not chunk or #chunk == 0 then return nil, n .. ": short read" end
+          c = crypto.crc32(chunk, c)
+          off = off + #chunk
+        end
+        local crc = string.unpack(">I4", c)
 
         local loff = pos
         local hdr = string.pack("<I4I2I2I2I2I2I4I4I4I2I2",
@@ -118,7 +72,7 @@ local function archive(progress)
   if count == 0 then return nil, "no .epub files in Books/AO3" end
 
   -- Copy the staged central directory after the entries, then the end record.
-  local cdstart, cdsize = pos, 0
+  local cdstart = pos
   local cdlen = fs.size(CD_TMP) or 0
   local p = 0
   while p < cdlen do
@@ -127,9 +81,8 @@ local function archive(progress)
     if not fs.append(OUT, chunk) then return nil, "write failed (card full?)" end
     p = p + #chunk
   end
-  cdsize = cdlen
   fs.append(OUT, string.pack("<I4I2I2I2I2I4I4I2",
-    0x06054b50, 0, 0, count, count, cdsize, cdstart, 0))
+    0x06054b50, 0, 0, count, count, cdlen, cdstart, 0))
   fs.remove(CD_TMP)
   return count, bytes
 end
@@ -145,6 +98,7 @@ local function safe_name(n)
   return n:match("^[%w%._%-%(%) %[%]]+%.[eE][pP][uU][bB]$") ~= nil and not n:find("%.%.")
 end
 
+-- Returns made, skipped, failed, refused; or nil, err.
 local function restore(zpath, progress)
   local size = fs.size(zpath)
   if not size or size < 22 then return nil, "not a zip archive" end
@@ -167,9 +121,7 @@ local function restore(zpath, progress)
     if not name then return nil, nerr end
     cp = cp + 46 + nlen + elen + clen2
 
-    if method ~= 0 then
-      refused = refused + 1
-    elseif not safe_name(name) then
+    if method ~= 0 or not safe_name(name) then
       refused = refused + 1
     else
       local dest = SRC .. "/" .. name
@@ -203,52 +155,53 @@ local function restore(zpath, progress)
   return made, skipped, failed, refused
 end
 
-local function main()
-  W, H = gfx.size()
+local function show(title, lines, hint)
+  ui.screen(title, lines, hint)
+end
+
+-- Returns to the caller on Back.
+function M.run()
   while true do
-    local pick = menu("AO3 Archive", {
+    local pick = ui.menu("AO3 archive", {
       "Archive Books/AO3 to Downloads",
       "Restore a zip from Downloads",
-      "Exit",
-    }, "Confirm = choose, Back = exit")
+      "Back",
+    }, "Confirm = choose, Back = menu")
     if not pick or pick == 3 then return end
 
     if pick == 1 then
-      local count, bytes = archive(function(msg) screen("Archiving", { msg }, "") end)
+      local count, bytes = archive(function(msg) show("Archiving", { msg }) end)
       if not count then
-        screen("Archive failed", { bytes }, "Back = menu"); wait_back()
+        show("Archive failed", { bytes }, "Back = menu"); ui.wait_back()
       else
-        screen("Archive done", {
+        show("Archive done", {
           string.format("%d books, %d bytes of EPUB", count, bytes),
           OUT,
           "stored zip, no compression",
-        }, "Back = menu"); wait_back()
+        }, "Back = menu")
+        ui.wait_back()
       end
     else
       local zips = {}
       for _, f in ipairs(fs.list(DIR) or {}) do
         if f:lower():match("%.zip$") then zips[#zips + 1] = f end
       end
-      local ci = menu("Restore from Downloads", zips, "Confirm = restore, Back = menu")
+      local ci = ui.menu("Restore from Downloads", zips, "Confirm = restore, Back = menu")
       if ci then
         local made, skipped, failed, refused = restore(DIR .. "/" .. zips[ci],
-          function(msg) screen("Restoring", { msg }, "") end)
+          function(msg) show("Restoring", { msg }) end)
         if not made then
-          screen("Restore failed", { skipped }, "Back = menu"); wait_back()
+          show("Restore failed", { skipped }, "Back = menu"); ui.wait_back()
         else
-          screen("Restore done", {
+          show("Restore done", {
             string.format("restored %d, skipped %d (already there)", made, skipped),
             string.format("failed %d, refused %d (compressed or bad name)", failed, refused),
-          }, "Back = menu"); wait_back()
+          }, "Back = menu")
+          ui.wait_back()
         end
       end
     end
   end
 end
 
-local ok, err = pcall(main)
-if not ok then
-  gfx.clear(); gfx.text(10, 10, "err: " .. tostring(err):sub(1, 60), "ui12", "b"); gfx.present()
-  wait_back()
-end
-app.exit()
+return M

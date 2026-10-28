@@ -5,41 +5,23 @@
 -- skipped, so a rescan is quick. Back stops a scan safely; the index stays
 -- consistent. Failures go to data:index.log. No radio, no network.
 
+local ui = require("ui")
+
+local M = {}
+
 local DIR = "sd:Books/AO3"
 local LOG = "data:index.log"
-local HEAD_H, FOOT_H, MARGIN = 46, 34, 12
 
-local W, H = 0, 0
 local force = false     -- Up toggles: re-scrape even unchanged files
 local msg = ""          -- result of the last scan, shown on the menu
 
-local function fit(s, max_w, font, flags)
-  if gfx.text_width(s, font, flags) <= max_w then return s end
-  local n = utf8.len(s) or #s
-  while n > 1 do
-    n = n - 1
-    local t = s:sub(1, utf8.offset(s, n + 1) - 1) .. "..."
-    if gfx.text_width(t, font, flags) <= max_w then return t end
-  end
-  return "..."
-end
-
-local function header(title)
-  gfx.rect(0, 0, W, HEAD_H, true, true)
-  gfx.text(MARGIN, 13, title, "sans16", "bw")
-end
-
-local function footer(hint)
-  gfx.rect(0, H - FOOT_H, W, 1, true, true)
-  gfx.text(MARGIN, H - FOOT_H + 9, fit(hint, W - 2 * MARGIN, "ui12", "b"), "ui12", "b")
-end
-
 local function draw_menu(st, entries)
+  local W, H = gfx.size()
   gfx.clear()
-  header("AO3 Indexer")
-  local y = HEAD_H + 22
+  ui.header("AO3 indexer")
+  local y = ui.TITLE_H + 22
   local function line(s)
-    gfx.text(MARGIN, y, fit(s, W - 2 * MARGIN, "sans14", ""), "sans14")
+    gfx.text(14, y, ui.clip(s, W - 28, "sans14"), "sans14")
     y = y + 30
   end
   line("Folder: Books/AO3")
@@ -52,28 +34,29 @@ local function draw_menu(st, entries)
   line("Force rescan: " .. (force and "ON" or "off") .. "   (Up toggles)")
   if msg ~= "" then
     y = y + 14
-    for _, l in ipairs(gfx.wrap(msg, W - 2 * MARGIN, "sans14")) do
-      gfx.text(MARGIN, y, l, "sans14")
+    for _, l in ipairs(gfx.wrap(msg, W - 28, "sans14")) do
+      gfx.text(14, y, l, "sans14")
       y = y + 26
     end
   end
-  footer("OK: scan     Back: exit")
+  ui.footer("OK: scan     Back: menu")
   gfx.present()
 end
 
 local function draw_progress(seen, total, cur, s)
+  local W = gfx.size()
   gfx.clear()
-  header("AO3 Indexer")
-  gfx.text(MARGIN, HEAD_H + 18, "Scanning Books/AO3 ...", "sans14")
-  local bx, by, bw, bh = MARGIN, HEAD_H + 56, W - 2 * MARGIN, 24
+  ui.header("AO3 indexer")
+  gfx.text(14, ui.TITLE_H + 18, "Scanning Books/AO3 ...", "sans14")
+  local bx, by, bw, bh = 14, ui.TITLE_H + 56, W - 28, 24
   gfx.rect(bx, by, bw, bh)
   local fw = (total > 0) and ((bw - 4) * seen // total) or 0
   if fw > 0 then gfx.rect(bx + 2, by + 2, fw, bh - 4, true, true) end
-  gfx.text(MARGIN, by + 34, seen .. " / " .. total .. " entries", "ui12")
-  gfx.text(MARGIN, by + 66, "New " .. s.new .. "   Changed " .. s.changed
+  gfx.text(14, by + 34, seen .. " / " .. total .. " entries", "ui12")
+  gfx.text(14, by + 66, "New " .. s.new .. "   Changed " .. s.changed
     .. "   Unchanged " .. s.same .. "   Failed " .. s.failed, "ui12")
-  gfx.text(MARGIN, by + 96, fit(cur or "", W - 2 * MARGIN, "ui12", ""), "ui12")
-  footer("Back: stop")
+  gfx.text(14, by + 96, ui.clip(cur or "", W - 28, "ui12"), "ui12")
+  ui.footer("Back: stop")
   gfx.present("fast")
 end
 
@@ -81,7 +64,7 @@ local function log(name, why)
   fs.append(LOG, name .. ": " .. tostring(why) .. "\n")
 end
 
--- One .epub entry from the folder listing. Returns nothing; updates stats.
+-- One .epub entry from the folder listing. Updates the stats in s.
 local function index_one(st, idx, scrape, e, s)
   local name = e.name
   local path = DIR .. "/" .. name
@@ -97,7 +80,7 @@ local function index_one(st, idx, scrape, e, s)
   local function fail(why)
     log(name, why)
     s.failed = s.failed + 1
-    if slot then idx.seen(st, hash) end   -- keep the old record, like the native indexer
+    if slot then idx.seen(st, hash) end   -- keep the old record
   end
 
   if #name > 96 then return fail("file name longer than 96 bytes") end
@@ -112,7 +95,7 @@ local function index_one(st, idx, scrape, e, s)
   if slot then s.changed = s.changed + 1 else s.new = s.new + 1 end
 end
 
--- Walk the folder in pages. Returns stats, aborted, or nil, err.
+-- Walk the folder in pages. Returns stats, or nil, err.
 local function scan(st)
   local idx = require("ao3.index")
   local scrape = require("ao3.scrape")
@@ -156,11 +139,12 @@ local function summary(s)
   return head .. tail
 end
 
-local function __main()
-  W, H = gfx.size()
+-- Returns to the caller on Back.
+function M.run()
   local idx = require("ao3.index")
   local st, err = idx.open()
   if not st then error(err or "cannot open data:ao3.idx") end
+  force, msg = false, ""
 
   while true do
     local items, total = fs.list(DIR, { detail = true, limit = 1 })
@@ -173,15 +157,9 @@ local function __main()
       local s, e2 = scan(st)
       msg = s and summary(s) or ("Scan failed: " .. tostring(e2))
     elseif ev == "back" then
-      break
+      return
     end
   end
-  app.exit()
 end
 
-local ok, err = pcall(__main)
-if not ok then
-  gfx.clear(); gfx.text(10, 10, "err: " .. tostring(err):sub(1, 60), "ui12", "b"); gfx.present()
-  while input.wait() ~= "back" do end
-  app.exit()
-end
+return M

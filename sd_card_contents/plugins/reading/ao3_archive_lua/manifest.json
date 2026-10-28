@@ -1,1 +1,0 @@
-{"title": "AO3 Archive", "description": "Pack your AO3 EPUBs into one zip in Downloads, or restore a zip back into Books/AO3. Stored zip, no compression. Restore skips books already there.", "storage": {"read": ["Books/AO3", "Downloads"], "write": ["Books/AO3", "Downloads"]}}
