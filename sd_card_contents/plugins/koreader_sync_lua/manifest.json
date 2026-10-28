@@ -1,0 +1,1 @@
+{"title": "KOReader Sync", "description": "Push this reader's progress to a KOReader sync server (kosync) and read back the server copy.", "permissions": ["library", "network"]}
