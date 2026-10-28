@@ -53,7 +53,7 @@ word. Order = leverage per effort, cheapest first. Everything here is NOT built 
 | 8 | `net.mdns_advertise` (+ the UDP discovery companions use) | Calibre/transfer discovery | S | ✔ only `mdns_query` exists |
 | 9 | small getters: `system.reboot`, `system.language`, `system.mem`, `device.caps().model`, `time.tz`, `system.panic_info` | diagnostics, localisation | S | `system.reboot` + `system.language` **done**; `system.mem` ≈ `system.heap()`/`system.lua_mem()` (already exists); `device.caps().model`, `time.tz`, `system.panic_info` still open |
 | 10 | `wifi.set_mac` | MAC rotation | S | **done**: `wifi.set_mac(mac)`/`wifi.get_mac()` → runtime STA MAC, unicast/all-zero guards, refuses mid-radio-session (device-verified) |
-| 11 | `gfx.wrap` / `gfx.char_width` / hyphenation helper | every text app hand-rolls line breaking | S | |
+| 11 | `gfx.wrap` / `gfx.char_width` / hyphenation helper | every text app hand-rolls line breaking | S | **`gfx.wrap(text, max_width[, font, flags])` done** (device-verified) — word-wrap with hard-break, `\n`, space collapse. `gfx.char_width` ≈ `gfx.text_width(string)`; hyphenation (needs dictionaries) stays out |
 | 12 | `crypto.aes_gcm` (+ `x25519`, `hkdf`) | encrypted logs, app-to-app crypto | S-M | **`aes_gcm` done** (NIST-vector verified); `x25519`/`hkdf` still open |
 | 13 | `decimal.*` (decNumber) | exact Calculator (Lua floats are 32-bit) | S | |
 | 14 | **`xml.parse` (expat, already linked)** | OPDS/RSS/Atom, EPUB NCX/nav, TOC, AO3 niceties | M | **done**: `xml.parse(text)` → `{tag, attrs, [children]}` tree (text merged, CDATA, 64 KB input / depth 32); the most-wanted primitive |
