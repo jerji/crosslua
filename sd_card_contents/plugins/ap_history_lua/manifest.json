@@ -1,0 +1,1 @@
+{"title": "AP History", "description": "Passive: log every AP heard with first/last seen and peak signal. Writes CSV on exit. Receive only.", "permissions": ["network", "monitor"]}
