@@ -1,0 +1,1 @@
+{"title": "RF Kill", "description": "One button turns off WiFi client, hotspot and ESP-NOW. Nothing is wiped.", "permissions": ["network", "espnow"]}
