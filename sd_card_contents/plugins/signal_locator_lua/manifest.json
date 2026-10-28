@@ -1,0 +1,1 @@
+{"title": "Signal Locator", "description": "Pick an AP, lock its channel, follow its RSSI meter with a peak hold. Receive only.", "permissions": ["network", "monitor"]}
