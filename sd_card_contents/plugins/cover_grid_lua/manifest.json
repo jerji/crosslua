@@ -1,0 +1,1 @@
+{"title": "Cover Grid", "description": "Grid of cover images (BMP/JPEG) from Books, drawn with gfx.image. Confirm opens one cover full-screen.", "storage": {"read": ["Books"]}}
