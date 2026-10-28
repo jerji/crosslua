@@ -1663,7 +1663,10 @@ class LuaAppActivity::Backend final : public crosslua::Backend {
       snprintf(err, cap, "a radio mode is active (call wifi.off() first)");
       return false;
     }
-    if (WiFi.getMode() == WIFI_MODE_NULL) WiFi.mode(WIFI_STA);  // init the driver so the MAC can be programmed
+    if (WiFi.getMode() == WIFI_MODE_NULL) {
+      WiFi.mode(WIFI_STA);  // init the driver so the MAC can be programmed
+      if (setFloorFn) setFloorFn(LUA_HEAP_FLOOR_ONLINE);  // the radio owns its RAM now (same as wifi.connect / hotspot)
+    }
     if (esp_wifi_set_mac(WIFI_IF_STA, mac) != ESP_OK) {
       snprintf(err, cap, "could not set the MAC address");
       return false;
