@@ -138,9 +138,8 @@ local function study(d)
     else
       local card = store.get(h, num)
       local qtext, atext = store.text(h, num)
-      if not card or not qtext then
-        -- unreadable record or line: skip it rather than loop forever
-      else
+      -- unreadable record or line: skip it rather than loop forever
+      if card and qtext then
         local c = counts()                                  -- counts exclude the card in hand: add it back (Anki shows it)
         if source == "new" then c.new = c.new + 1 elseif source == "review" then c.review = c.review + 1
         else c.learn = c.learn + 1 end
