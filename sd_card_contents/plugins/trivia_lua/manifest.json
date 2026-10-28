@@ -1,0 +1,1 @@
+{"title": "Trivia", "description": "Question pack on the card: QUIZMASTER reads out clues, SOLO scores you. Reads and keeps state in the card's Trivia folder.", "storage": {"read": ["Trivia"], "write": ["Trivia"]}}
