@@ -82,8 +82,11 @@ int audio_playing(lua_State* L) {
 }  // namespace
 
 void registerAudio(lua_State* L, Ctx* c) {
-  static const luaL_Reg fns[] = {{"play", audio_play}, {"stop", audio_stop}, {"volume", audio_volume},
-                                 {"playing", audio_playing}, {nullptr, nullptr}};
+  static const luaL_Reg fns[] = {{"play", audio_play},
+                                 {"stop", audio_stop},
+                                 {"volume", audio_volume},
+                                 {"playing", audio_playing},
+                                 {nullptr, nullptr}};
   regTable(L, c, "audio", fns);
 }
 

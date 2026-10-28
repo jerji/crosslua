@@ -1,11 +1,11 @@
 // zip.* — read entries of a ZIP/EPUB without holding it in RAM. Paths use the normal fs scopes (app:/data:/sd:).
 //
-// Same discipline as LuaNet.cpp: arguments become plain pointers, the backend works on POD + one malloc'd buffer, and the
-// result is pushed from inside lua_pcall so an out-of-memory error can never skip the free().
-#include <cctype>
-#include <cstdlib>
+// Same discipline as LuaNet.cpp: arguments become plain pointers, the backend works on POD + one malloc'd buffer, and
+// the result is pushed from inside lua_pcall so an out-of-memory error can never skip the free().
 #include <strings.h>
 
+#include <cctype>
+#include <cstdlib>
 #include <cstring>
 
 #include "LuaInternal.h"
@@ -173,8 +173,8 @@ int zip_inflate(lua_State* L) {
 }
 
 // gfx.image(path, x, y [, box_w, box_h]) -> drawn_w, drawn_h | nil, err
-// PNG/JPEG/BMP from app:/data:/sd: (sd: needs "library"), decoded row by row into the current frame, fitted into the box
-// (default: from x,y to the screen edge), never upscaled, centred in the box, dithered to black/white. Call
+// PNG/JPEG/BMP from app:/data:/sd: (sd: needs "library"), decoded row by row into the current frame, fitted into the
+// box (default: from x,y to the screen edge), never upscaled, centred in the box, dithered to black/white. Call
 // gfx.present() afterwards like for any drawing.
 static int gfx_image(lua_State* L) {
   char path[MAX_PATH_LEN + 80];
@@ -207,7 +207,8 @@ static int gfx_image(lua_State* L) {
   lua_gc(L, LUA_GCCOLLECT);
   int dw = 0, dh = 0;
   char err[96] = {0};
-  if (!be(L).drawImage(path, x, y, bw, bh, &dw, &dh, err, sizeof(err))) return pushFail(L, err[0] ? err : "cannot draw image");
+  if (!be(L).drawImage(path, x, y, bw, bh, &dw, &dh, err, sizeof(err)))
+    return pushFail(L, err[0] ? err : "cannot draw image");
   lua_pushinteger(L, dw);
   lua_pushinteger(L, dh);
   return 2;
@@ -220,7 +221,8 @@ void registerZip(lua_State* L, Ctx* c) {
   regTable(L, c, "epub", epubFns);
 }
 
-// gfx.image shares the path sandbox with zip/fs but belongs to gfx, which is always present: registered eagerly, not with zip.
+// gfx.image shares the path sandbox with zip/fs but belongs to gfx, which is always present: registered eagerly, not
+// with zip.
 void registerGfxImage(lua_State* L) {
   lua_getglobal(L, "gfx");
   if (lua_istable(L, -1)) {

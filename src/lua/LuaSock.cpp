@@ -1,6 +1,7 @@
-// net.* — raw TCP client sockets. See docs/lua/NET_SOCKETS_PLAN.md and docs/lua/API.md. Needs "permissions": ["network"]
-// in the app's manifest and WiFi up (wifi.connect()), exactly like http.*. The backend wraps the Arduino NetworkClient
-// that CrossPoint already links (no new network code); this file only validates arguments and shapes results.
+// net.* — raw TCP client sockets. See docs/lua/NET_SOCKETS_PLAN.md and docs/lua/API.md. Needs "permissions":
+// ["network"] in the app's manifest and WiFi up (wifi.connect()), exactly like http.*. The backend wraps the Arduino
+// NetworkClient that CrossPoint already links (no new network code); this file only validates arguments and shapes
+// results.
 //
 // Same rule as LuaNet.cpp: no C++ object with a destructor lives across a call that can raise a Lua error.
 #include <cstdlib>
@@ -11,11 +12,12 @@
 namespace crosslua {
 namespace {
 
-// The WiFi radio itself (~57 KB) is already up when a socket is opened. Measured on the X4 (WiFi up, 44.7 KB free): an open
-// idle socket costs 3.4-3.8 KB, one after a ping/echo 6.8 KB, one with a full receive window ~16 KB, and a 64 KB burst dips
-// free heap to ~16.7 KB. Refuse a new connection below 16 KB free rather than starve the stack.
+// The WiFi radio itself (~57 KB) is already up when a socket is opened. Measured on the X4 (WiFi up, 44.7 KB free): an
+// open idle socket costs 3.4-3.8 KB, one after a ping/echo 6.8 KB, one with a full receive window ~16 KB, and a 64 KB
+// burst dips free heap to ~16.7 KB. Refuse a new connection below 16 KB free rather than starve the stack.
 constexpr size_t SOCK_MIN_FREE_BYTES = 16 * 1024;
-// A TLS session needs real, contiguous RAM (measured on the X4, same floors as HttpDownloader::MIN_TLS_FREE_HEAP / MIN_TLS_MAX_ALLOC).
+// A TLS session needs real, contiguous RAM (measured on the X4, same floors as HttpDownloader::MIN_TLS_FREE_HEAP /
+// MIN_TLS_MAX_ALLOC).
 constexpr size_t TLS_MIN_FREE_BYTES = 40000, TLS_MIN_BLOCK_BYTES = 20000;
 constexpr int64_t CA_MIN_BYTES = 32, CA_MAX_BYTES = 8192;
 constexpr int DEFAULT_CONNECT_MS = 5000, MIN_CONNECT_MS = 100, MAX_CONNECT_MS = 15000;
@@ -25,8 +27,6 @@ constexpr size_t MAX_WRITE = 16 * 1024;
 const char* const NOT_CONNECTED = "not connected (no network joined): call wifi.connect() first";
 const char* const BAD_HANDLE = "not an open socket handle";
 const char* const BAD_HOST = "invalid host name";
-
-
 
 int pushFail(lua_State* L, const char* msg) {
   lua_pushnil(L);
@@ -38,7 +38,8 @@ int pushFail(lua_State* L, const char* msg) {
 // kind: 1 TCP (read/write/available/connected), 2 UDP (udp_send/udp_recv). Returns 0 when ok, else pushes nil,err.
 int checkKind(lua_State* L, int slot, int kind, const char* what) {
   const int k = be(L).netKind(slot);
-  if (k == kind || (kind == 1 && k == 4)) return 0;  // a TLS client (kind 4) is a TCP socket for read/write/available/connected
+  if (k == kind || (kind == 1 && k == 4))
+    return 0;  // a TLS client (kind 4) is a TCP socket for read/write/available/connected
   char msg[64];
   snprintf(msg, sizeof(msg), "not a %s socket", what);
   return pushFail(L, msg);
@@ -57,7 +58,8 @@ bool hostOk(const char* h, size_t n) {
   if (n == 0 || n > MAX_HOST) return false;
   for (size_t i = 0; i < n; i++) {
     const char c = h[i];
-    const bool ok = (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '.' || c == '-' || c == '_';
+    const bool ok =
+        (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '.' || c == '-' || c == '_';
     if (!ok) return false;
   }
   return true;
@@ -112,7 +114,8 @@ int net_info(lua_State* L) {
   return 1;
 }
 
-// net.resolve(host) -> "a.b.c.d" | nil, err. An IPv4 literal is returned as is (no DNS traffic). Uses the system DNS timeout.
+// net.resolve(host) -> "a.b.c.d" | nil, err. An IPv4 literal is returned as is (no DNS traffic). Uses the system DNS
+// timeout.
 int net_resolve(lua_State* L) {
   size_t n = 0;
   const char* host = luaL_checklstring(L, 1, &n);
@@ -123,15 +126,17 @@ int net_resolve(lua_State* L) {
     return 1;
   }
   char ip[16] = {0}, err[96] = {0};
-  if (!be(L).netResolve(host, ip, sizeof(ip), err, sizeof(err))) return pushFail(L, err[0] ? err : "cannot resolve host");
+  if (!be(L).netResolve(host, ip, sizeof(ip), err, sizeof(err)))
+    return pushFail(L, err[0] ? err : "cannot resolve host");
   lua_pushstring(L, ip);
   return 1;
 }
 
-// net.connect(host, port [, {timeout_ms = 5000, tls = false, ca = path, insecure = false}]) -> handle | nil, err. Blocks up to
-// timeout_ms (100..15000). tls=true opens a TLS client and needs EXACTLY ONE trust choice: ca = "<PEM file>" (the server must
-// chain to that certificate: pin your server's CA) or insecure = true (encrypted, but anyone can impersonate the server).
-// ca/insecure without tls=true are refused, never silently ignored. One TLS socket at a time (the session costs ~40 KB).
+// net.connect(host, port [, {timeout_ms = 5000, tls = false, ca = path, insecure = false}]) -> handle | nil, err.
+// Blocks up to timeout_ms (100..15000). tls=true opens a TLS client and needs EXACTLY ONE trust choice: ca = "<PEM
+// file>" (the server must chain to that certificate: pin your server's CA) or insecure = true (encrypted, but anyone
+// can impersonate the server). ca/insecure without tls=true are refused, never silently ignored. One TLS socket at a
+// time (the session costs ~40 KB).
 int net_connect(lua_State* L) {
   size_t n = 0;
   const char* host = luaL_checklstring(L, 1, &n);
@@ -152,14 +157,16 @@ int net_connect(lua_State* L) {
     lua_pop(L, 1);
     lua_getfield(L, 3, "ca");
     if (!lua_isnil(L, -1)) {
-      if (lua_type(L, -1) != LUA_TSTRING) return luaL_argerror(L, 3, "ca must be a path string");  // no number->string coercion
-      caSpec = lua_tostring(L, -1);  // the string stays referenced by the options table
+      if (lua_type(L, -1) != LUA_TSTRING)
+        return luaL_argerror(L, 3, "ca must be a path string");  // no number->string coercion
+      caSpec = lua_tostring(L, -1);                              // the string stays referenced by the options table
     }
     lua_pop(L, 1);
   }
   if (int r = gateOnline(L)) return r;
   if (!hostOk(host, n)) return pushFail(L, BAD_HOST);
-  if (port < 1 || port > 65535 || port != static_cast<int>(port)) return pushFail(L, "port must be an integer 1..65535");
+  if (port < 1 || port > 65535 || port != static_cast<int>(port))
+    return pushFail(L, "port must be an integer 1..65535");
   if (timeout < MIN_CONNECT_MS || timeout > MAX_CONNECT_MS || timeout != static_cast<int>(timeout))
     return pushFail(L, "timeout_ms must be an integer 100..15000");
   if (!wantTls && (insecure || caSpec)) return pushFail(L, "ca and insecure only apply with tls=true");
@@ -175,8 +182,8 @@ int net_connect(lua_State* L) {
   const size_t freeNow = be(L).freeHeap();
   if (freeNow < SOCK_MIN_FREE_BYTES) {
     char msg[96];
-    snprintf(msg, sizeof(msg), "not enough free RAM for a socket (free %uK, need %uK)", static_cast<unsigned>(freeNow / 1024),
-             static_cast<unsigned>(SOCK_MIN_FREE_BYTES / 1024));
+    snprintf(msg, sizeof(msg), "not enough free RAM for a socket (free %uK, need %uK)",
+             static_cast<unsigned>(freeNow / 1024), static_cast<unsigned>(SOCK_MIN_FREE_BYTES / 1024));
     return pushFail(L, msg);
   }
   char err[96] = {0};
@@ -233,10 +240,13 @@ int net_read(lua_State* L) {
     lua_pushliteral(L, "");  // nothing yet: no buffer is allocated
     return 1;
   }
-  ReadReq req{&be(L), slot, static_cast<size_t>(avail) < static_cast<size_t>(max) ? static_cast<size_t>(avail) : static_cast<size_t>(max)};
-  // The data waiting in the stack IS the memory pressure: copying it into a Lua string releases at least as much as it needs, so
-  // refusing it because free heap is under the Lua floor would make things worse. Relax the floor for this one allocation and
-  // restore it right after, inside a protected call so an out-of-memory error cannot skip the restore.
+  ReadReq req{
+      &be(L), slot,
+      static_cast<size_t>(avail) < static_cast<size_t>(max) ? static_cast<size_t>(avail) : static_cast<size_t>(max)};
+  // The data waiting in the stack IS the memory pressure: copying it into a Lua string releases at least as much as it
+  // needs, so refusing it because free heap is under the Lua floor would make things worse. Relax the floor for this
+  // one allocation and restore it right after, inside a protected call so an out-of-memory error cannot skip the
+  // restore.
   const int base = lua_gettop(L);
   req.be->heapRelax(true);
   lua_pushcfunction(L, read_body);
@@ -292,15 +302,16 @@ int net_connected(lua_State* L) {
 int net_udp_open(lua_State* L) {
   const lua_Number port = luaL_checknumber(L, 1);
   if (int r = gateOnline(L)) return r;
-  if (port < 0 || port > 65535 || port != static_cast<int>(port)) return pushFail(L, "port must be an integer 0..65535 (0 = system-assigned)");
+  if (port < 0 || port > 65535 || port != static_cast<int>(port))
+    return pushFail(L, "port must be an integer 0..65535 (0 = system-assigned)");
   bool free = false;
   for (int i = 0; i < Backend::MAX_SOCKETS; i++) free = free || !be(L).netIsOpen(i);
   if (!free) return pushFail(L, "too many open sockets (max 8)");
   const size_t freeNow = be(L).freeHeap();
   if (freeNow < SOCK_MIN_FREE_BYTES) {
     char msg[96];
-    snprintf(msg, sizeof(msg), "not enough free RAM for a socket (free %uK, need %uK)", static_cast<unsigned>(freeNow / 1024),
-             static_cast<unsigned>(SOCK_MIN_FREE_BYTES / 1024));
+    snprintf(msg, sizeof(msg), "not enough free RAM for a socket (free %uK, need %uK)",
+             static_cast<unsigned>(freeNow / 1024), static_cast<unsigned>(SOCK_MIN_FREE_BYTES / 1024));
     return pushFail(L, msg);
   }
   char err[96] = {0};
@@ -323,7 +334,8 @@ int net_udp_send(lua_State* L) {
   if (int r = slotArg(L, 1, &slot)) return r;
   if (int r = checkKind(L, slot, 2, "UDP")) return r;
   if (!hostOk(host, n)) return pushFail(L, BAD_HOST);
-  if (port < 1 || port > 65535 || port != static_cast<int>(port)) return pushFail(L, "port must be an integer 1..65535");
+  if (port < 1 || port > 65535 || port != static_cast<int>(port))
+    return pushFail(L, "port must be an integer 1..65535");
   if (len > MAX_WRITE) return pushFail(L, "data too large (max 16384 bytes)");
   if (len == 0) return pushFail(L, "data must not be empty");
   char err[96] = {0};
@@ -402,15 +414,16 @@ int gateListen(lua_State* L) {
 int net_listen(lua_State* L) {
   const lua_Number port = luaL_checknumber(L, 1);
   if (int r = gateListen(L)) return r;
-  if (port < 1 || port > 65535 || port != static_cast<int>(port)) return pushFail(L, "port must be an integer 1..65535");
+  if (port < 1 || port > 65535 || port != static_cast<int>(port))
+    return pushFail(L, "port must be an integer 1..65535");
   bool free = false;
   for (int i = 0; i < Backend::MAX_SOCKETS; i++) free = free || !be(L).netIsOpen(i);
   if (!free) return pushFail(L, "too many open sockets (max 8)");
   const size_t freeNow = be(L).freeHeap();
   if (freeNow < SOCK_MIN_FREE_BYTES) {
     char msg[96];
-    snprintf(msg, sizeof(msg), "not enough free RAM for a socket (free %uK, need %uK)", static_cast<unsigned>(freeNow / 1024),
-             static_cast<unsigned>(SOCK_MIN_FREE_BYTES / 1024));
+    snprintf(msg, sizeof(msg), "not enough free RAM for a socket (free %uK, need %uK)",
+             static_cast<unsigned>(freeNow / 1024), static_cast<unsigned>(SOCK_MIN_FREE_BYTES / 1024));
     return pushFail(L, msg);
   }
   char err[96] = {0};
@@ -476,12 +489,20 @@ int net_mdns_query(lua_State* L) {
 }  // namespace
 
 void registerSock(lua_State* L, Ctx* c) {
-  static const luaL_Reg fns[] = {{"info", net_info},           {"resolve", net_resolve}, {"connect", net_connect},
-                                 {"read", net_read},           {"write", net_write},     {"available", net_available},
-                                 {"connected", net_connected}, {"close", net_close},
-                                 {"udp_open", net_udp_open},   {"udp_send", net_udp_send}, {"udp_recv", net_udp_recv},
+  static const luaL_Reg fns[] = {{"info", net_info},
+                                 {"resolve", net_resolve},
+                                 {"connect", net_connect},
+                                 {"read", net_read},
+                                 {"write", net_write},
+                                 {"available", net_available},
+                                 {"connected", net_connected},
+                                 {"close", net_close},
+                                 {"udp_open", net_udp_open},
+                                 {"udp_send", net_udp_send},
+                                 {"udp_recv", net_udp_recv},
                                  {"udp_close", net_udp_close},
-                                 {"listen", net_listen},       {"accept", net_accept},
+                                 {"listen", net_listen},
+                                 {"accept", net_accept},
                                  {"mdns_query", net_mdns_query},
                                  {nullptr, nullptr}};
   regTable(L, c, "net", fns);

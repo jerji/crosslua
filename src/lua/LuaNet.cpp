@@ -15,14 +15,16 @@ namespace {
 
 // WiFi radio ~56 KB + TLS floor 40 KB (see HttpDownloader::MIN_TLS_FREE_HEAP), measured on hardware.
 constexpr size_t NET_MIN_FREE_BYTES = 96 * 1024;  // WiFi (~57 KB measured) + the 40 KB a TLS session wants
-// wifi.connect{tls=false}: apps that only use plain TCP/UDP never open a TLS session. Radio ~57 KB + the 16 KB the socket layer
-// refuses to go below (SOCK_MIN_FREE_BYTES in LuaSock.cpp) + ~7 KB margin. https then fails at request time with its own message.
+// wifi.connect{tls=false}: apps that only use plain TCP/UDP never open a TLS session. Radio ~57 KB + the 16 KB the
+// socket layer refuses to go below (SOCK_MIN_FREE_BYTES in LuaSock.cpp) + ~7 KB margin. https then fails at request
+// time with its own message.
 constexpr size_t NET_MIN_FREE_BYTES_PLAIN = 80 * 1024;
 constexpr size_t MAX_URL = 600;
 constexpr int MAX_HEADERS = 12;
 constexpr size_t MAX_HEADER_LEN = 400;
 constexpr size_t MAX_CONTENT_TYPE_LEN = 100;
-constexpr int MAX_RESPONSE_HEADERS = 48;  // distinct headers kept from a response (the backend already caps the block at 4 KB)
+constexpr int MAX_RESPONSE_HEADERS =
+    48;  // distinct headers kept from a response (the backend already caps the block at 4 KB)
 constexpr size_t MAX_POST_BODY = 8 * 1024;
 constexpr size_t DEFAULT_MAX_BODY = 16 * 1024;
 constexpr size_t HARD_MAX_BODY = 64 * 1024;
@@ -52,9 +54,10 @@ int wifi_connect_k(lua_State* L, int, lua_KContext) {
   return pushNo(L, "not connected (no network joined)");
 }
 
-// wifi.connect([{tls = false}]) -> true | false, reason. Parks the script while the system's WiFi screen (usually just an auto-join
-// of the saved network) runs; the screen is then the system's, so the app must redraw afterwards. The default demands enough RAM
-// for https; {tls=false} (plain TCP/UDP apps) demands less and leaves https to fail cleanly at request time.
+// wifi.connect([{tls = false}]) -> true | false, reason. Parks the script while the system's WiFi screen (usually just
+// an auto-join of the saved network) runs; the screen is then the system's, so the app must redraw afterwards. The
+// default demands enough RAM for https; {tls=false} (plain TCP/UDP apps) demands less and leaves https to fail cleanly
+// at request time.
 int wifi_connect(lua_State* L) {
   bool needTls = true;
   if (!lua_isnoneornil(L, 1)) {
@@ -81,13 +84,14 @@ int wifi_connect(lua_State* L) {
   const size_t need = needTls ? NET_MIN_FREE_BYTES : NET_MIN_FREE_BYTES_PLAIN;
   if (freeNow < need) {
     char msg[160];
-    snprintf(msg, sizeof(msg), "not enough free RAM for WiFi%s (free %uK, need %uK): this app is too big for network use",
+    snprintf(msg, sizeof(msg),
+             "not enough free RAM for WiFi%s (free %uK, need %uK): this app is too big for network use",
              needTls ? " + TLS" : "", static_cast<unsigned>(freeNow / 1024), static_cast<unsigned>(need / 1024));
     return pushNo(L, msg);
   }
   be(L).wifiRequestConnect();
-  lua_pushinteger(L, -1);   // no timeout...
-  lua_pushboolean(L, 0);    // ...and input events do not wake it: only the host's resume does
+  lua_pushinteger(L, -1);  // no timeout...
+  lua_pushboolean(L, 0);   // ...and input events do not wake it: only the host's resume does
   return lua_yieldk(L, 2, 0, wifi_connect_k);
 }
 
@@ -136,7 +140,8 @@ int wifi_scan(lua_State* L) {
   return 2;
 }
 
-constexpr size_t SOFTAP_MIN_FREE_BYTES = 80 * 1024;  // measured on the X4: the hotspot costs ~60 KB, and net.listen then needs its own 16 KB floor
+constexpr size_t SOFTAP_MIN_FREE_BYTES =
+    80 * 1024;  // measured on the X4: the hotspot costs ~60 KB, and net.listen then needs its own 16 KB floor
 constexpr int SOFTAP_MAX_CLIENTS = 4;
 
 bool printableAscii(const char* s, size_t n) {
@@ -145,9 +150,10 @@ bool printableAscii(const char* s, size_t n) {
   return true;
 }
 
-// wifi.softap(ssid [, {password = "8..63 chars" (omit = OPEN network), channel = 1..11, max_clients = 1..4}]) -> true, ip | false, reason
-// Starts this device's own WiFi network (needs "network" + "hotspot" + the user's approval). Not combinable with a joined network.
-// net.listen / net.accept / net.udp_* then serve the clients that join; wifi.off() stops the hotspot.
+// wifi.softap(ssid [, {password = "8..63 chars" (omit = OPEN network), channel = 1..11, max_clients = 1..4}]) -> true,
+// ip | false, reason Starts this device's own WiFi network (needs "network" + "hotspot" + the user's approval). Not
+// combinable with a joined network. net.listen / net.accept / net.udp_* then serve the clients that join; wifi.off()
+// stops the hotspot.
 int wifi_softap(lua_State* L) {
   size_t sl = 0;
   const char* ssid = luaL_checklstring(L, 1, &sl);
@@ -184,12 +190,14 @@ int wifi_softap(lua_State* L) {
     if (pl < 8 || pl > 63 || !printableAscii(password, pl))
       return pushNo(L, "password must be 8..63 printable ASCII characters (leave it out for an open network)");
   }
-  if (channel < 1 || channel > 11 || channel != static_cast<int>(channel)) return pushNo(L, "channel must be an integer 1..11");
+  if (channel < 1 || channel > 11 || channel != static_cast<int>(channel))
+    return pushNo(L, "channel must be an integer 1..11");
   if (maxClients < 1 || maxClients > SOFTAP_MAX_CLIENTS || maxClients != static_cast<int>(maxClients))
     return pushNo(L, "max_clients must be an integer 1..4");
   char cur[40], curIp[20];
   int clients = 0;
-  if (be(L).softApInfo(cur, sizeof(cur), curIp, sizeof(curIp), &clients)) return pushNo(L, "a hotspot is already running (wifi.off() stops it)");
+  if (be(L).softApInfo(cur, sizeof(cur), curIp, sizeof(curIp), &clients))
+    return pushNo(L, "a hotspot is already running (wifi.off() stops it)");
   if (be(L).wifiConnected()) return pushNo(L, "WiFi is joined as a client: call wifi.off() before starting a hotspot");
   if (be(L).bleRunning()) return pushNo(L, "bluetooth is running: call ble.stop() before starting a hotspot");
   if (be(L).espnowRunning()) return pushNo(L, "espnow is running: call espnow.stop() before starting a hotspot");
@@ -198,12 +206,13 @@ int wifi_softap(lua_State* L) {
   const size_t freeNow = be(L).freeHeap();
   if (freeNow < SOFTAP_MIN_FREE_BYTES) {
     char msg[120];
-    snprintf(msg, sizeof(msg), "not enough free RAM for a hotspot (free %uK, need %uK)", static_cast<unsigned>(freeNow / 1024),
-             static_cast<unsigned>(SOFTAP_MIN_FREE_BYTES / 1024));
+    snprintf(msg, sizeof(msg), "not enough free RAM for a hotspot (free %uK, need %uK)",
+             static_cast<unsigned>(freeNow / 1024), static_cast<unsigned>(SOFTAP_MIN_FREE_BYTES / 1024));
     return pushNo(L, msg);
   }
   char ip[20] = {0}, err[96] = {0};
-  if (!be(L).softApStart(ssid, password, static_cast<int>(channel), static_cast<int>(maxClients), ip, sizeof(ip), err, sizeof(err)))
+  if (!be(L).softApStart(ssid, password, static_cast<int>(channel), static_cast<int>(maxClients), ip, sizeof(ip), err,
+                         sizeof(err)))
     return pushNo(L, err[0] ? err : "cannot start the hotspot");
   lua_pushboolean(L, 1);
   lua_pushstring(L, ip);
@@ -297,7 +306,8 @@ bool methodTakesBody(const char* m) { return !strcmp(m, "POST") || !strcmp(m, "P
 
 // http.request{ url=, method="GET"|"POST"|"PUT"|"PATCH"|"DELETE", headers={name=value,...}, body=, content_type=, ca=,
 //               response_headers=bool, save_to="data:path", max_body=N }
-//   -> { status=, ok=, bytes=, body=, headers= } | nil, err      (body is absent in save_to mode; headers only on request)
+//   -> { status=, ok=, bytes=, body=, headers= } | nil, err      (body is absent in save_to mode; headers only on
+//   request)
 // body is allowed for POST/PUT/PATCH and is sent as content_type (default application/x-www-form-urlencoded).
 // ca = "<PEM file>" verifies the https server against that certificate; without it the server is NOT authenticated.
 // A non-2xx status is NOT an error (you get status + body); transport failures, aborts (Back) and size-cap hits are.
@@ -331,12 +341,14 @@ int http_request(lua_State* L) {
     contentType = lua_tostring(L, -1);
     if (!body) return pushFail(L, "content_type needs a body");
     const size_t cl = strlen(contentType);
-    if (cl == 0 || cl > MAX_CONTENT_TYPE_LEN || strpbrk(contentType, "\r\n")) return pushFail(L, "illegal content_type");
+    if (cl == 0 || cl > MAX_CONTENT_TYPE_LEN || strpbrk(contentType, "\r\n"))
+      return pushFail(L, "illegal content_type");
   }
   if (body && !contentType) contentType = "application/x-www-form-urlencoded";
 
   lua_getfield(L, 1, "response_headers");
-  if (!lua_isnil(L, -1) && lua_type(L, -1) != LUA_TBOOLEAN) return luaL_argerror(L, 1, "response_headers must be a boolean");
+  if (!lua_isnil(L, -1) && lua_type(L, -1) != LUA_TBOOLEAN)
+    return luaL_argerror(L, 1, "response_headers must be a boolean");
   const bool wantHeaders = lua_toboolean(L, -1) != 0;
 
   lua_getfield(L, 1, "ca");
@@ -349,7 +361,8 @@ int http_request(lua_State* L) {
 
   lua_getfield(L, 1, "max_body");
   const lua_Number mb = lua_isnil(L, -1) ? static_cast<lua_Number>(DEFAULT_MAX_BODY) : luaL_checknumber(L, -1);
-  if (mb < 1 || mb > static_cast<lua_Number>(HARD_MAX_BODY)) return pushFail(L, "max_body must be 1..65536 (use save_to for bigger responses)");
+  if (mb < 1 || mb > static_cast<lua_Number>(HARD_MAX_BODY))
+    return pushFail(L, "max_body must be 1..65536 (use save_to for bigger responses)");
 
   lua_getfield(L, 1, "save_to");
   char savePath[MAX_PATH_LEN + 80];
@@ -360,8 +373,9 @@ int http_request(lua_State* L) {
     const char* err = nullptr;
     if (!resolvePath(be(L), spec, savePath, sizeof(savePath), &sc, &err)) return pushFail(L, err);
     if (!writeAllowed(be(L), sc, savePath))
-      return pushFail(L, be(L).grantCount() > 0 ? "save_to must be a data: path or an sd: folder this app has a write grant for"
-                                                 : "save_to must be a data: path");
+      return pushFail(L, be(L).grantCount() > 0
+                             ? "save_to must be a data: path or an sd: folder this app has a write grant for"
+                             : "save_to must be a data: path");
     if (strcmp(method, "GET")) return pushFail(L, "save_to is only supported for GET");
     if (wantHeaders || caPem) return pushFail(L, "save_to cannot be combined with ca or response_headers yet");
     savePtr = savePath;
@@ -377,12 +391,14 @@ int http_request(lua_State* L) {
     lua_pushnil(L);
     while (lua_next(L, hIdx)) {
       if (nh >= MAX_HEADERS) return pushFail(L, "too many headers");
-      if (lua_type(L, -2) != LUA_TSTRING || lua_type(L, -1) != LUA_TSTRING) return pushFail(L, "headers must be a table of string = string");
+      if (lua_type(L, -2) != LUA_TSTRING || lua_type(L, -1) != LUA_TSTRING)
+        return pushFail(L, "headers must be a table of string = string");
       const char* k = lua_tostring(L, -2);
       const char* v = lua_tostring(L, -1);
       if (strlen(k) > MAX_HEADER_LEN || strlen(v) > MAX_HEADER_LEN || strpbrk(k, "\r\n:") || strpbrk(v, "\r\n"))
         return pushFail(L, "illegal header");
-      if (body && !strcasecmp(k, "content-type")) return pushFail(L, "set content_type instead of a Content-Type header");
+      if (body && !strcasecmp(k, "content-type"))
+        return pushFail(L, "set content_type instead of a Content-Type header");
       headers[nh].name = k;
       headers[nh].value = v;
       nh++;
@@ -451,8 +467,9 @@ int http_get(lua_State* L) {
 }  // namespace
 
 void registerNet(lua_State* L, Ctx* c) {
-  static const luaL_Reg wifiFns[] = {{"connect", wifi_connect}, {"status", wifi_status}, {"off", wifi_off},
-                                   {"scan", wifi_scan}, {"softap", wifi_softap}, {"softap_info", wifi_softap_info}, {nullptr, nullptr}};
+  static const luaL_Reg wifiFns[] = {
+      {"connect", wifi_connect}, {"status", wifi_status},           {"off", wifi_off}, {"scan", wifi_scan},
+      {"softap", wifi_softap},   {"softap_info", wifi_softap_info}, {nullptr, nullptr}};
   regTable(L, c, "wifi", wifiFns);
   registerWifiMonitor(L, c);  // wifi.monitor_* joins the same lazy table
   registerWifiTx(L, c);       // wifi.tx_* too

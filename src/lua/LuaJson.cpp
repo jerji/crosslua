@@ -48,14 +48,26 @@ bool read4(Parser& ps, unsigned* out) {
   return true;
 }
 int putUtf8(unsigned cp, char* o) {
-  if (cp < 0x80) { o[0] = static_cast<char>(cp); return 1; }
-  if (cp < 0x800) { o[0] = static_cast<char>(0xC0 | (cp >> 6)); o[1] = static_cast<char>(0x80 | (cp & 0x3F)); return 2; }
-  if (cp < 0x10000) {
-    o[0] = static_cast<char>(0xE0 | (cp >> 12)); o[1] = static_cast<char>(0x80 | ((cp >> 6) & 0x3F));
-    o[2] = static_cast<char>(0x80 | (cp & 0x3F)); return 3;
+  if (cp < 0x80) {
+    o[0] = static_cast<char>(cp);
+    return 1;
   }
-  o[0] = static_cast<char>(0xF0 | (cp >> 18)); o[1] = static_cast<char>(0x80 | ((cp >> 12) & 0x3F));
-  o[2] = static_cast<char>(0x80 | ((cp >> 6) & 0x3F)); o[3] = static_cast<char>(0x80 | (cp & 0x3F)); return 4;
+  if (cp < 0x800) {
+    o[0] = static_cast<char>(0xC0 | (cp >> 6));
+    o[1] = static_cast<char>(0x80 | (cp & 0x3F));
+    return 2;
+  }
+  if (cp < 0x10000) {
+    o[0] = static_cast<char>(0xE0 | (cp >> 12));
+    o[1] = static_cast<char>(0x80 | ((cp >> 6) & 0x3F));
+    o[2] = static_cast<char>(0x80 | (cp & 0x3F));
+    return 3;
+  }
+  o[0] = static_cast<char>(0xF0 | (cp >> 18));
+  o[1] = static_cast<char>(0x80 | ((cp >> 12) & 0x3F));
+  o[2] = static_cast<char>(0x80 | ((cp >> 6) & 0x3F));
+  o[3] = static_cast<char>(0x80 | (cp & 0x3F));
+  return 4;
 }
 
 // Parses a string starting after the opening quote; pushes it. Unescaped runs are copied in bulk.
@@ -89,23 +101,53 @@ bool parseString(Parser& ps) {
     }
     q++;
     switch (*q) {
-      case '"': out[n++] = '"'; q++; break;
-      case '\\': out[n++] = '\\'; q++; break;
-      case '/': out[n++] = '/'; q++; break;
-      case 'b': out[n++] = '\b'; q++; break;
-      case 'f': out[n++] = '\f'; q++; break;
-      case 'n': out[n++] = '\n'; q++; break;
-      case 'r': out[n++] = '\r'; q++; break;
-      case 't': out[n++] = '\t'; q++; break;
+      case '"':
+        out[n++] = '"';
+        q++;
+        break;
+      case '\\':
+        out[n++] = '\\';
+        q++;
+        break;
+      case '/':
+        out[n++] = '/';
+        q++;
+        break;
+      case 'b':
+        out[n++] = '\b';
+        q++;
+        break;
+      case 'f':
+        out[n++] = '\f';
+        q++;
+        break;
+      case 'n':
+        out[n++] = '\n';
+        q++;
+        break;
+      case 'r':
+        out[n++] = '\r';
+        q++;
+        break;
+      case 't':
+        out[n++] = '\t';
+        q++;
+        break;
       case 'u': {
         ps.p = q + 1;
         unsigned cp;
-        if (!read4(ps, &cp)) { lua_pop(ps.L, 1); return fail(ps, "bad \\u escape"); }
+        if (!read4(ps, &cp)) {
+          lua_pop(ps.L, 1);
+          return fail(ps, "bad \\u escape");
+        }
         if (cp >= 0xD800 && cp < 0xDC00) {  // high surrogate: need a low one
           unsigned lo;
           if (ps.end - ps.p >= 6 && ps.p[0] == '\\' && ps.p[1] == 'u') {
             ps.p += 2;
-            if (!read4(ps, &lo) || lo < 0xDC00 || lo > 0xDFFF) { lua_pop(ps.L, 1); return fail(ps, "bad surrogate pair"); }
+            if (!read4(ps, &lo) || lo < 0xDC00 || lo > 0xDFFF) {
+              lua_pop(ps.L, 1);
+              return fail(ps, "bad surrogate pair");
+            }
             cp = 0x10000 + ((cp - 0xD800) << 10) + (lo - 0xDC00);
           } else {
             lua_pop(ps.L, 1);
@@ -119,7 +161,9 @@ bool parseString(Parser& ps) {
         q = ps.p;
         break;
       }
-      default: lua_pop(ps.L, 1); return fail(ps, "bad escape");
+      default:
+        lua_pop(ps.L, 1);
+        return fail(ps, "bad escape");
     }
   }
   ps.p = q + 1;
@@ -219,8 +263,16 @@ bool parseValue(Parser& ps) {
     }
   }
   if (c == '-' || (c >= '0' && c <= '9')) return parseNumber(ps);
-  if (ps.end - ps.p >= 4 && !memcmp(ps.p, "true", 4)) { ps.p += 4; lua_pushboolean(ps.L, 1); return true; }
-  if (ps.end - ps.p >= 5 && !memcmp(ps.p, "false", 5)) { ps.p += 5; lua_pushboolean(ps.L, 0); return true; }
+  if (ps.end - ps.p >= 4 && !memcmp(ps.p, "true", 4)) {
+    ps.p += 4;
+    lua_pushboolean(ps.L, 1);
+    return true;
+  }
+  if (ps.end - ps.p >= 5 && !memcmp(ps.p, "false", 5)) {
+    ps.p += 5;
+    lua_pushboolean(ps.L, 0);
+    return true;
+  }
   if (ps.end - ps.p >= 4 && !memcmp(ps.p, "null", 4)) {
     ps.p += 4;
     lua_getfield(ps.L, LUA_REGISTRYINDEX, "crosslua.json.null");
@@ -289,13 +341,41 @@ void addString(Enc& e, const char* s, size_t len) {
     char esc[8];
     size_t en = 0;
     switch (ch) {
-      case '"': esc[0] = '\\'; esc[1] = '"'; en = 2; break;
-      case '\\': esc[0] = '\\'; esc[1] = '\\'; en = 2; break;
-      case '\n': esc[0] = '\\'; esc[1] = 'n'; en = 2; break;
-      case '\r': esc[0] = '\\'; esc[1] = 'r'; en = 2; break;
-      case '\t': esc[0] = '\\'; esc[1] = 't'; en = 2; break;
-      case '\b': esc[0] = '\\'; esc[1] = 'b'; en = 2; break;
-      case '\f': esc[0] = '\\'; esc[1] = 'f'; en = 2; break;
+      case '"':
+        esc[0] = '\\';
+        esc[1] = '"';
+        en = 2;
+        break;
+      case '\\':
+        esc[0] = '\\';
+        esc[1] = '\\';
+        en = 2;
+        break;
+      case '\n':
+        esc[0] = '\\';
+        esc[1] = 'n';
+        en = 2;
+        break;
+      case '\r':
+        esc[0] = '\\';
+        esc[1] = 'r';
+        en = 2;
+        break;
+      case '\t':
+        esc[0] = '\\';
+        esc[1] = 't';
+        en = 2;
+        break;
+      case '\b':
+        esc[0] = '\\';
+        esc[1] = 'b';
+        en = 2;
+        break;
+      case '\f':
+        esc[0] = '\\';
+        esc[1] = 'f';
+        en = 2;
+        break;
       default:
         if (ch < 0x20) en = static_cast<size_t>(snprintf(esc, sizeof(esc), "\\u%04x", ch));
     }
@@ -322,9 +402,15 @@ lua_Integer arrayLength(lua_State* L, int idx) {
   lua_pushnil(L);
   while (lua_next(L, idx < 0 ? idx - 1 : idx)) {
     lua_pop(L, 1);
-    if (!lua_isinteger(L, -1)) { lua_pop(L, 1); return 0; }
+    if (!lua_isinteger(L, -1)) {
+      lua_pop(L, 1);
+      return 0;
+    }
     const lua_Integer k = lua_tointeger(L, -1);
-    if (k < 1) { lua_pop(L, 1); return 0; }
+    if (k < 1) {
+      lua_pop(L, 1);
+      return 0;
+    }
     if (k > n) n = k;
     count++;
   }
@@ -333,12 +419,20 @@ lua_Integer arrayLength(lua_State* L, int idx) {
 
 bool encodeValue(Enc& e, int idx, int depth) {
   lua_State* L = e.L;
-  if (depth > MAX_DEPTH) { e.err = "too deeply nested (or circular)"; return false; }
+  if (depth > MAX_DEPTH) {
+    e.err = "too deeply nested (or circular)";
+    return false;
+  }
   luaL_checkstack(L, 8, "json");
   switch (lua_type(L, idx)) {
-    case LUA_TNIL: addPiece(e, "null", 4); return true;
+    case LUA_TNIL:
+      addPiece(e, "null", 4);
+      return true;
     case LUA_TBOOLEAN:
-      if (lua_toboolean(L, idx)) addPiece(e, "true", 4); else addPiece(e, "false", 5);
+      if (lua_toboolean(L, idx))
+        addPiece(e, "true", 4);
+      else
+        addPiece(e, "false", 5);
       return true;
     case LUA_TNUMBER: {
       char buf[48];
@@ -347,7 +441,10 @@ bool encodeValue(Enc& e, int idx, int depth) {
         n = snprintf(buf, sizeof(buf), "%d", static_cast<int>(lua_tointeger(L, idx)));
       } else {
         const double v = lua_tonumber(L, idx);
-        if (std::isnan(v) || std::isinf(v)) { e.err = "cannot encode NaN/Infinity"; return false; }
+        if (std::isnan(v) || std::isinf(v)) {
+          e.err = "cannot encode NaN/Infinity";
+          return false;
+        }
         n = snprintf(buf, sizeof(buf), "%.7g", v);
       }
       addPiece(e, buf, static_cast<size_t>(n));
@@ -360,7 +457,10 @@ bool encodeValue(Enc& e, int idx, int depth) {
       return true;
     }
     case LUA_TLIGHTUSERDATA:
-      if (isNull(L, idx)) { addPiece(e, "null", 4); return true; }
+      if (isNull(L, idx)) {
+        addPiece(e, "null", 4);
+        return true;
+      }
       e.err = "cannot encode userdata";
       return false;
     case LUA_TTABLE: {

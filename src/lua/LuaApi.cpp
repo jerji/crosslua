@@ -16,7 +16,6 @@ extern "C" {
 namespace crosslua {
 namespace {
 
-
 // Coordinates may arrive as floats (x/2); accept any number.
 inline int ci(lua_State* L, int i) { return static_cast<int>(luaL_checknumber(L, i)); }
 
@@ -37,12 +36,23 @@ TextOpts parseTextOpts(lua_State* L, int fontArg) {
   if (lua_isstring(L, fontArg + 1)) {
     for (const char* p = lua_tostring(L, fontArg + 1); *p; p++) {
       switch (*p) {
-        case 'b': o.style |= 1; break;
-        case 'i': o.style |= 2; break;
-        case 'w': o.black = false; break;
-        case 'c': o.align = 'c'; break;
-        case 'r': o.align = 'r'; break;
-        default: break;
+        case 'b':
+          o.style |= 1;
+          break;
+        case 'i':
+          o.style |= 2;
+          break;
+        case 'w':
+          o.black = false;
+          break;
+        case 'c':
+          o.align = 'c';
+          break;
+        case 'r':
+          o.align = 'r';
+          break;
+        default:
+          break;
       }
     }
   }
@@ -65,17 +75,33 @@ bool clipLine(int w, int h, int& x0, int& y0, int& x1, int& y1) {
   auto code = [&](int x, int y) { return (x < 0 ? 1 : 0) | (x >= w ? 2 : 0) | (y < 0 ? 4 : 0) | (y >= h ? 8 : 0); };
   int c0 = code(x0, y0), c1 = code(x1, y1);
   for (int guard = 0; guard < 8; guard++) {
-    if (!(c0 | c1)) return true;   // both inside
-    if (c0 & c1) return false;     // both on the same outside side
+    if (!(c0 | c1)) return true;  // both inside
+    if (c0 & c1) return false;    // both on the same outside side
     const int out = c0 ? c0 : c1;
     int64_t x = 0, y = 0;
     const int64_t dx = x1 - x0, dy = y1 - y0;
-    if (out & 8) { y = h - 1; x = x0 + dx * (y - y0) / dy; }
-    else if (out & 4) { y = 0; x = x0 + dx * (y - y0) / dy; }
-    else if (out & 2) { x = w - 1; y = y0 + dy * (x - x0) / dx; }
-    else { x = 0; y = y0 + dy * (x - x0) / dx; }
-    if (out == c0) { x0 = static_cast<int>(x); y0 = static_cast<int>(y); c0 = code(x0, y0); }
-    else { x1 = static_cast<int>(x); y1 = static_cast<int>(y); c1 = code(x1, y1); }
+    if (out & 8) {
+      y = h - 1;
+      x = x0 + dx * (y - y0) / dy;
+    } else if (out & 4) {
+      y = 0;
+      x = x0 + dx * (y - y0) / dy;
+    } else if (out & 2) {
+      x = w - 1;
+      y = y0 + dy * (x - x0) / dx;
+    } else {
+      x = 0;
+      y = y0 + dy * (x - x0) / dx;
+    }
+    if (out == c0) {
+      x0 = static_cast<int>(x);
+      y0 = static_cast<int>(y);
+      c0 = code(x0, y0);
+    } else {
+      x1 = static_cast<int>(x);
+      y1 = static_cast<int>(y);
+      c1 = code(x1, y1);
+    }
   }
   return false;
 }
@@ -102,7 +128,8 @@ int gfx_rect(lua_State* L) {
   if (w <= 0 || h <= 0) return 0;
   const int W = be(L).width(), H = be(L).height();
   if (filled) {
-    const int x1 = std::min<int64_t>(static_cast<int64_t>(x) + w, W), y1 = std::min<int64_t>(static_cast<int64_t>(y) + h, H);
+    const int x1 = std::min<int64_t>(static_cast<int64_t>(x) + w, W),
+              y1 = std::min<int64_t>(static_cast<int64_t>(y) + h, H);
     x = std::max(x, 0);
     y = std::max(y, 0);
     if (x1 > x && y1 > y) be(L).rect(x, y, x1 - x, y1 - y, black, true);
@@ -147,9 +174,12 @@ int gfx_present(lua_State* L) {
   int mode = 0;
   if (lua_isstring(L, 1)) {
     const char* m = lua_tostring(L, 1);
-    if (!strcmp(m, "half")) mode = 1;
-    else if (!strcmp(m, "full")) mode = 2;
-    else if (strcmp(m, "fast")) return luaL_error(L, "present mode must be fast|half|full");
+    if (!strcmp(m, "half"))
+      mode = 1;
+    else if (!strcmp(m, "full"))
+      mode = 2;
+    else if (strcmp(m, "fast"))
+      return luaL_error(L, "present mode must be fast|half|full");
   }
   be(L).present(mode);
   return 0;
@@ -159,8 +189,10 @@ int gfx_present(lua_State* L) {
 // input.poll() -> event name or nil (never blocks)
 int input_poll(lua_State* L) {
   const char* e = be(L).popEvent();
-  if (e) lua_pushstring(L, e);
-  else lua_pushnil(L);
+  if (e)
+    lua_pushstring(L, e);
+  else
+    lua_pushnil(L);
   return 1;
 }
 // input.wait([timeout_ms]) -> event name, or nil on timeout. Without timeout waits forever.
@@ -211,7 +243,7 @@ int app_open_book(lua_State* L) {
     lua_pushstring(L, "no such file");
     return 2;
   }
-  lua_pushinteger(L, -1);   // park forever: the host switches to the reader and tears this VM down
+  lua_pushinteger(L, -1);  // park forever: the host switches to the reader and tears this VM down
   lua_pushboolean(L, 0);
   return lua_yield(L, 2);
 }
@@ -234,7 +266,8 @@ int app_restart(lua_State* L) {
       continue;
     }
     if (segStart && (c == '.' || c == ' ')) ok = false;
-    ok = ok && ((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '_' || c == '-' || c == '.');
+    ok = ok && ((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '_' || c == '-' ||
+                c == '.');
     segStart = false;
   }
   if (!ok || strstr(entry, "..") || strstr(entry, "//")) {
@@ -246,7 +279,8 @@ int app_restart(lua_State* L) {
   snprintf(spec, sizeof(spec), "app:%s", entry);
   Scope sc;
   const char* err = nullptr;
-  if (!resolvePath(be(L), spec, path, sizeof(path), &sc, &err) || be(L).fsSize(path) < 0 || !be(L).requestRestart(entry)) {
+  if (!resolvePath(be(L), spec, path, sizeof(path), &sc, &err) || be(L).fsSize(path) < 0 ||
+      !be(L).requestRestart(entry)) {
     lua_pushboolean(L, 0);
     lua_pushstring(L, err ? err : "no such entry script");
     return 2;
@@ -323,7 +357,8 @@ int gfx_rounded_rect(lua_State* L) {
   const int r = static_cast<int>(luaL_checknumber(L, 5));
   const bool filled = lua_toboolean(L, 6);
   const bool black = lua_isnoneornil(L, 7) ? true : lua_toboolean(L, 7);
-  if (w < 0 || h < 0 || r < 0 || r * 2 > w || r * 2 > h) return pushErr2(L, "radius must be <= half of width and height");
+  if (w < 0 || h < 0 || r < 0 || r * 2 > w || r * 2 > h)
+    return pushErr2(L, "radius must be <= half of width and height");
   be(L).drawRoundedRect(x, y, w, h, r, black, filled);
   return 0;
 }
@@ -365,10 +400,22 @@ int dev_caps(lua_State* L) {
   const struct {
     const char* k;
     bool v;
-  } flags[] = {{"touch", c.touch},       {"haptic", c.haptic}, {"frontlight", c.frontlight}, {"warmlight", c.warmlight},
-               {"color", c.color},       {"audio", c.audio},   {"ble_keyboard", c.bleKeyboard}, {"usb_msc", c.usbMsc},
-               {"imu", c.imu},           {"gyro", c.gyro},     {"rtc", c.rtc},           {"temp_humidity", c.tempHumidity},
-               {"buzzer", c.buzzer},     {"mic", c.mic},       {"led", c.led},           {"tls13", c.tls13}};
+  } flags[] = {{"touch", c.touch},
+               {"haptic", c.haptic},
+               {"frontlight", c.frontlight},
+               {"warmlight", c.warmlight},
+               {"color", c.color},
+               {"audio", c.audio},
+               {"ble_keyboard", c.bleKeyboard},
+               {"usb_msc", c.usbMsc},
+               {"imu", c.imu},
+               {"gyro", c.gyro},
+               {"rtc", c.rtc},
+               {"temp_humidity", c.tempHumidity},
+               {"buzzer", c.buzzer},
+               {"mic", c.mic},
+               {"led", c.led},
+               {"tls13", c.tls13}};
   for (const auto& f : flags) {
     lua_pushboolean(L, f.v);
     lua_setfield(L, -2, f.k);
@@ -403,8 +450,8 @@ int dev_haptic(lua_State* L) {
 }
 // system.usb() -> boolean (cable connected)
 // system.sleep(seconds) -> true | nil, err. Arms a timer wake and enters the SAME deep-sleep flow the power button uses
-// (sleep screen, plugin events, rails off; the power button also wakes). The call never returns on the device: the wake is a
-// fresh boot. No permission: the power button always wakes the device, so nothing is locked away.
+// (sleep screen, plugin events, rails off; the power button also wakes). The call never returns on the device: the wake
+// is a fresh boot. No permission: the power button always wakes the device, so nothing is locked away.
 namespace {
 int pushFail(lua_State* L, const char* msg) {
   lua_pushnil(L);
@@ -416,14 +463,16 @@ int pushFail(lua_State* L, const char* msg) {
 int sys_sleep(lua_State* L) {
   if (lua_type(L, 1) != LUA_TNUMBER) return pushFail(L, "seconds must be an integer 1..604800 (a week)");
   const lua_Number sec = luaL_checknumber(L, 1);
-  if (sec < 1 || sec > 604800 || sec != static_cast<int>(sec)) return pushFail(L, "seconds must be an integer 1..604800 (a week)");
+  if (sec < 1 || sec > 604800 || sec != static_cast<int>(sec))
+    return pushFail(L, "seconds must be an integer 1..604800 (a week)");
   char err[96] = {0};
   if (!be(L).systemSleep(static_cast<int>(sec), err, sizeof(err))) return pushFail(L, err[0] ? err : "sleep failed");
   lua_pushboolean(L, 1);  // unreachable on the device; the host mock ends the script here
   return 1;
 }
 
-// system.last_wake() -> "timer" | "button" | "power-on" | "other". What woke the previous cycle ("power-on" = a real reset).
+// system.last_wake() -> "timer" | "button" | "power-on" | "other". What woke the previous cycle ("power-on" = a real
+// reset).
 int sys_last_wake(lua_State* L) {
   lua_pushstring(L, be(L).wakeCause());
   return 1;
@@ -444,11 +493,12 @@ int input_pos(lua_State* L) {
   lua_pushinteger(L, y);
   return 2;
 }
-// input.key() -> {char = "a" | nil, key = "enter" | nil, code, ctrl, shift, alt, gui} for the "key" event input.poll()/input.wait()
-// returned last (a Bluetooth keyboard press); nil for any other event. A printable key has `char`, a special key has `key`.
+// input.key() -> {char = "a" | nil, key = "enter" | nil, code, ctrl, shift, alt, gui} for the "key" event
+// input.poll()/input.wait() returned last (a Bluetooth keyboard press); nil for any other event. A printable key has
+// `char`, a special key has `key`.
 int input_key(lua_State* L) {
-  static const char* const SPECIAL[] = {nullptr,   "enter", "backspace", "tab",  "escape", "delete", "left",
-                                        "right",   "up",    "down",      "home", "end",    "pageup", "pagedown"};
+  static const char* const SPECIAL[] = {nullptr, "enter", "backspace", "tab",  "escape", "delete", "left",
+                                        "right", "up",    "down",      "home", "end",    "pageup", "pagedown"};
   Backend::KeyInfo k;
   memset(&k, 0, sizeof(k));
   if (!be(L).eventKey(&k)) {
@@ -457,7 +507,7 @@ int input_key(lua_State* L) {
   }
   lua_createtable(L, 0, 7);
   if (k.ch) {
-    char c[2] = {k.ch, 0};
+    const char c[2] = {k.ch, 0};
     lua_pushstring(L, c);
     lua_setfield(L, -2, "char");
   }
@@ -503,11 +553,15 @@ int input_text(lua_State* L) {
   };
   if (tl > TEXT_MAX_TITLE) return fail("title too long (max 60 characters)");
   if (il > TEXT_MAX_INITIAL) return fail("initial text too long (max 256 bytes)");
-  if (maxLen < 1 || maxLen > 256 || maxLen != static_cast<int>(maxLen)) return fail("max_len must be an integer 1..256");
+  if (maxLen < 1 || maxLen > 256 || maxLen != static_cast<int>(maxLen))
+    return fail("max_len must be an integer 1..256");
   int m = -1;
-  if (!strcmp(mode, "text")) m = 0;
-  else if (!strcmp(mode, "password")) m = 1;
-  else if (!strcmp(mode, "url")) m = 2;
+  if (!strcmp(mode, "text"))
+    m = 0;
+  else if (!strcmp(mode, "password"))
+    m = 1;
+  else if (!strcmp(mode, "url"))
+    m = 2;
   if (m < 0) return fail("mode must be text, password or url");
   if (il > static_cast<size_t>(maxLen)) return fail("initial text is longer than max_len");
   be(L).textRequest(title, initial, static_cast<int>(maxLen), m);
@@ -516,7 +570,8 @@ int input_text(lua_State* L) {
   return lua_yieldk(L, 2, 0, text_k);
 }
 
-// device.motion() -> { ax, ay, az (g), gx, gy, gz (deg/s), gyro = boolean } | nil, err. One sample, board-independent axes.
+// device.motion() -> { ax, ay, az (g), gx, gy, gz (deg/s), gyro = boolean } | nil, err. One sample, board-independent
+// axes.
 int dev_motion(lua_State* L) {
   Backend::Motion m;
   switch (be(L).motionRead(&m)) {
@@ -596,7 +651,8 @@ int dev_tone(lua_State* L) {
   return 1;
 }
 
-// ---- led (boards with addressable LEDs) ------------------------------------------------------------------------------
+// ---- led (boards with addressable LEDs)
+// ------------------------------------------------------------------------------
 const char* const NO_LEDS = "no LEDs on this device";
 bool colorByte(lua_State* L, int i, int* out) {
   const lua_Number v = luaL_checknumber(L, i);
@@ -680,8 +736,10 @@ int led_brightness(lua_State* L) {
 // Epoch seconds fit a 32-bit Lua integer until 2038.
 int time_now(lua_State* L) {
   const int64_t e = be(L).epochNow();
-  if (e <= 0) lua_pushnil(L);
-  else lua_pushinteger(L, static_cast<lua_Integer>(e));
+  if (e <= 0)
+    lua_pushnil(L);
+  else
+    lua_pushinteger(L, static_cast<lua_Integer>(e));
   return 1;
 }
 // time.date([epoch]) -> {year, month, day, hour, min, sec, wday (1 = Sunday), yday} in local time | nil if no clock
@@ -703,7 +761,8 @@ int time_date(lua_State* L) {
 
 // time.sync([timeout_s]) -> true | false, err. SNTP over the current WiFi connection (network permission).
 int time_sync(lua_State* L) {
-  if (!be(L).netAllowed()) return pushErr2(L, "network not permitted: add \"permissions\": [\"network\"] to this app's manifest.json");
+  if (!be(L).netAllowed())
+    return pushErr2(L, "network not permitted: add \"permissions\": [\"network\"] to this app's manifest.json");
   const int secs = lua_isnoneornil(L, 1) ? 5 : static_cast<int>(luaL_checknumber(L, 1));
   if (secs < 1 || secs > 60) return pushErr2(L, "timeout must be 1..60 seconds");
   char err[96] = {0};
@@ -775,24 +834,27 @@ void regTable(lua_State* L, Ctx* c, const char* name, const luaL_Reg* funcs) {
 }
 
 namespace {
-// ---- Lazy namespaces -----------------------------------------------------------------------------------------------------
-// Measured on the X4: registering every namespace at start costs ~8 KB of Lua heap. Only gfx/input/app/system/print/require/load
-// are always present; the rest are built the first time a script reads the global. The globals table gets a protected metatable
-// whose __index does that. Consequences: pairs(_G) does not list namespaces nobody has touched yet, and a script cannot install
-// its own metatable on _G ("cannot change a protected metatable").
+// ---- Lazy namespaces
+// ----------------------------------------------------------------------------------------------------- Measured on the
+// X4: registering every namespace at start costs ~8 KB of Lua heap. Only gfx/input/app/system/print/require/load are
+// always present; the rest are built the first time a script reads the global. The globals table gets a protected
+// metatable whose __index does that. Consequences: pairs(_G) does not list namespaces nobody has touched yet, and a
+// script cannot install its own metatable on _G ("cannot change a protected metatable").
 void loadTime(lua_State* L, Ctx* c) {
-  static const luaL_Reg timeFns[] = {{"now", time_now}, {"date", time_date}, {"sync", time_sync}, {"set", time_set},
-                                     {nullptr, nullptr}};
+  static const luaL_Reg timeFns[] = {
+      {"now", time_now}, {"date", time_date}, {"sync", time_sync}, {"set", time_set}, {nullptr, nullptr}};
   regTable(L, c, "time", timeFns);
 }
 void loadDevice(lua_State* L, Ctx* c) {
-  static const luaL_Reg devFns[] = {{"frontlight", dev_frontlight}, {"caps", dev_caps}, {"haptic", dev_haptic},
-                                    {"motion", dev_motion}, {"environment", dev_environment}, {"tone", dev_tone}, {nullptr, nullptr}};
+  static const luaL_Reg devFns[] = {
+      {"frontlight", dev_frontlight},   {"caps", dev_caps}, {"haptic", dev_haptic}, {"motion", dev_motion},
+      {"environment", dev_environment}, {"tone", dev_tone}, {nullptr, nullptr}};
   regTable(L, c, "device", devFns);
 }
 void loadLed(lua_State* L, Ctx* c) {
-  static const luaL_Reg ledFns[] = {{"count", led_count}, {"set", led_set},   {"all", led_all},
-                                    {"off", led_off},     {"brightness", led_brightness}, {nullptr, nullptr}};
+  static const luaL_Reg ledFns[] = {
+      {"count", led_count},           {"set", led_set},  {"all", led_all}, {"off", led_off},
+      {"brightness", led_brightness}, {nullptr, nullptr}};
   regTable(L, c, "led", ledFns);
 }
 void loadCoroutine(lua_State* L, Ctx*) {
@@ -809,10 +871,12 @@ struct LazyNs {
   void (*load)(lua_State*, Ctx*);
 };
 // Several names share a loader (wifi+http, zip+epub): the loader defines all of its globals at once.
-const LazyNs LAZY[] = {{"time", loadTime},   {"device", loadDevice}, {"led", loadLed},         {"fs", registerFs},
-                       {"json", registerJson}, {"wifi", registerNet},  {"http", registerNet},    {"net", registerSock},
-                       {"zip", registerZip},   {"epub", registerZip},  {"crypto", registerCrypto}, {"audio", registerAudio}, {"mic", registerMic}, {"espnow", registerEspNow},
-                       {"ble", registerBle}, {"coroutine", loadCoroutine}, {"utf8", loadUtf8}};
+const LazyNs LAZY[] = {{"time", loadTime},           {"device", loadDevice},     {"led", loadLed},
+                       {"fs", registerFs},           {"json", registerJson},     {"wifi", registerNet},
+                       {"http", registerNet},        {"net", registerSock},      {"zip", registerZip},
+                       {"epub", registerZip},        {"crypto", registerCrypto}, {"audio", registerAudio},
+                       {"mic", registerMic},         {"espnow", registerEspNow}, {"ble", registerBle},
+                       {"coroutine", loadCoroutine}, {"utf8", loadUtf8}};
 
 // _G.__index(G, key): runs only for globals that do not exist yet.
 int lazy_index(lua_State* L) {
@@ -850,20 +914,36 @@ void registerApi(LuaVm& vm, Backend& backend) {
   c->be = &backend;
   c->vm = &vm;
   lua_setfield(L, LUA_REGISTRYINDEX, "crosslua.ctx");  // keeps the Ctx alive for the life of the state
-  *static_cast<Ctx**>(lua_getextraspace(L)) = c;       // where ctx(L) finds it (also inherited by coroutines)
+  // cppcheck-suppress dangerousTypeCast // lua_getextraspace() is Lua's own macro, its C cast is not ours
+  *static_cast<Ctx**>(lua_getextraspace(L)) = c;  // where ctx(L) finds it (also inherited by coroutines)
 
-  static const luaL_Reg gfx[] = {{"size", gfx_size},     {"clear", gfx_clear},   {"pixel", gfx_pixel},
-                                 {"line", gfx_line},     {"rect", gfx_rect},     {"text", gfx_text},
-                                 {"qr", gfx_qr}, {"rounded_rect", gfx_rounded_rect},
-                                 {"text_width", gfx_text_width}, {"line_height", gfx_line_height},
-                                 {"present", gfx_present}, {nullptr, nullptr}};
-  static const luaL_Reg input[] = {{"poll", input_poll}, {"wait", input_wait}, {"pos", input_pos}, {"key", input_key}, {"text", input_text}, {nullptr, nullptr}};
-  static const luaL_Reg app[] = {{"sleep", app_sleep}, {"exit", app_exit}, {"name", app_name},
-                                 {"dir", app_dir},     {"open_book", app_open_book},
-                                 {"restart", app_restart}, {"entry", app_entry}, {nullptr, nullptr}};
-  static const luaL_Reg sys[] = {{"millis", sys_millis}, {"heap", sys_heap},       {"lua_mem", sys_lua_mem},
-                                 {"battery", sys_battery}, {"mac", sys_mac}, {"usb", sys_usb}, {"dev_floor", sys_dev_floor},
-                                 {"sleep", sys_sleep}, {"last_wake", sys_last_wake}, {nullptr, nullptr}};
+  static const luaL_Reg gfx[] = {{"size", gfx_size},
+                                 {"clear", gfx_clear},
+                                 {"pixel", gfx_pixel},
+                                 {"line", gfx_line},
+                                 {"rect", gfx_rect},
+                                 {"text", gfx_text},
+                                 {"qr", gfx_qr},
+                                 {"rounded_rect", gfx_rounded_rect},
+                                 {"text_width", gfx_text_width},
+                                 {"line_height", gfx_line_height},
+                                 {"present", gfx_present},
+                                 {nullptr, nullptr}};
+  static const luaL_Reg input[] = {{"poll", input_poll}, {"wait", input_wait}, {"pos", input_pos},
+                                   {"key", input_key},   {"text", input_text}, {nullptr, nullptr}};
+  static const luaL_Reg app[] = {
+      {"sleep", app_sleep},         {"exit", app_exit},       {"name", app_name},   {"dir", app_dir},
+      {"open_book", app_open_book}, {"restart", app_restart}, {"entry", app_entry}, {nullptr, nullptr}};
+  static const luaL_Reg sys[] = {{"millis", sys_millis},
+                                 {"heap", sys_heap},
+                                 {"lua_mem", sys_lua_mem},
+                                 {"battery", sys_battery},
+                                 {"mac", sys_mac},
+                                 {"usb", sys_usb},
+                                 {"dev_floor", sys_dev_floor},
+                                 {"sleep", sys_sleep},
+                                 {"last_wake", sys_last_wake},
+                                 {nullptr, nullptr}};
   regTable(L, c, "gfx", gfx);
   regTable(L, c, "input", input);
   regTable(L, c, "app", app);

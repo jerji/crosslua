@@ -1,7 +1,8 @@
-// espnow.* — ESP-NOW: connectionless 802.11 vendor frames between nearby devices (no access point, no router, no DHCP). Needs
-// "network" + "espnow" in the manifest and the user's approval. The radio is exclusive: it cannot run next to a joined WiFi network
-// or a hotspot (the same chip, one channel). Receiving is polled from a small ring the backend fills from the WiFi task, so no Lua
-// code ever runs in a callback. Arguments are validated into plain values before the backend is touched.
+// espnow.* — ESP-NOW: connectionless 802.11 vendor frames between nearby devices (no access point, no router, no DHCP).
+// Needs "network" + "espnow" in the manifest and the user's approval. The radio is exclusive: it cannot run next to a
+// joined WiFi network or a hotspot (the same chip, one channel). Receiving is polled from a small ring the backend
+// fills from the WiFi task, so no Lua code ever runs in a callback. Arguments are validated into plain values before
+// the backend is touched.
 #include <cstring>
 
 #include "LuaInternal.h"
@@ -69,25 +70,28 @@ int espnow_start(lua_State* L) {
     }
   }
   if (int r = gateEspNow(L)) return r;
-  if (channel < 1 || channel > ESPNOW_CHANNELS || channel != static_cast<int>(channel)) return pushFail(L, "channel must be an integer 1..13");
+  if (channel < 1 || channel > ESPNOW_CHANNELS || channel != static_cast<int>(channel))
+    return pushFail(L, "channel must be an integer 1..13");
   if (be(L).espnowRunning()) return pushFail(L, "espnow is already running (espnow.stop() first)");
   if (be(L).bleRunning()) return pushFail(L, "bluetooth is running: call ble.stop() first");
   if (be(L).monitorRunning()) return pushFail(L, "the WiFi sniffer is running: call wifi.monitor_stop() first");
   if (be(L).txRunning()) return pushFail(L, "the injector is running: call wifi.tx_stop() first");
   if (be(L).netReady()) return pushFail(L, "the radio is in use by WiFi or the hotspot: call wifi.off() first");
-  // When another radio mode is already running the radio's RAM is spent either way (the rings/buffers are static), so the
-  // start floor only applies to a cold radio.
-  const size_t floor = (be(L).monitorRunning() || be(L).txRunning() || be(L).espnowRunning()) ? 0 : be(L).radioFloorBytes();
+  // When another radio mode is already running the radio's RAM is spent either way (the rings/buffers are static), so
+  // the start floor only applies to a cold radio.
+  const size_t floor =
+      (be(L).monitorRunning() || be(L).txRunning() || be(L).espnowRunning()) ? 0 : be(L).radioFloorBytes();
   const size_t freeNow = be(L).freeHeap();
   if (freeNow < floor) {
     char msg[96];
-    snprintf(msg, sizeof(msg), "not enough free RAM for espnow (free %uK, need %uK)", static_cast<unsigned>(freeNow / 1024),
-             static_cast<unsigned>(floor / 1024));
+    snprintf(msg, sizeof(msg), "not enough free RAM for espnow (free %uK, need %uK)",
+             static_cast<unsigned>(freeNow / 1024), static_cast<unsigned>(floor / 1024));
     return pushFail(L, msg);
   }
   uint8_t mac[6] = {0};
   char err[96] = {0};
-  if (!be(L).espnowStart(static_cast<int>(channel), mac, err, sizeof(err))) return pushFail(L, err[0] ? err : "cannot start espnow");
+  if (!be(L).espnowStart(static_cast<int>(channel), mac, err, sizeof(err)))
+    return pushFail(L, err[0] ? err : "cannot start espnow");
   char ms[18];
   macToString(mac, ms);
   lua_pushboolean(L, 1);
@@ -106,8 +110,10 @@ int espnow_send(lua_State* L) {
   uint8_t mac[6];
   bool bc = broadcast;
   if (!broadcast) {
-    if (!strcmp(to, "broadcast")) bc = true;
-    else if (!parseMac(to, mac)) return pushFail(L, "mac must be 'aa:bb:cc:dd:ee:ff' or \"broadcast\"");
+    if (!strcmp(to, "broadcast"))
+      bc = true;
+    else if (!parseMac(to, mac))
+      return pushFail(L, "mac must be 'aa:bb:cc:dd:ee:ff' or \"broadcast\"");
   }
   if (bc) memset(mac, 0xFF, sizeof(mac));
   if (n < 1 || n > static_cast<size_t>(ESPNOW_MAX_DATA)) return pushFail(L, "data must be 1..250 bytes");
@@ -141,7 +147,8 @@ int espnow_info(lua_State* L) {
   if (int r = gateEspNow(L)) return r;
   uint8_t mac[6];
   int channel = 0, dropped = 0;
-  if (!be(L).espnowInfo(mac, &channel, &dropped)) return pushFail(L, "espnow is not started (call espnow.start() first)");
+  if (!be(L).espnowInfo(mac, &channel, &dropped))
+    return pushFail(L, "espnow is not started (call espnow.start() first)");
   char ms[18];
   macToString(mac, ms);
   lua_createtable(L, 0, 3);
@@ -165,7 +172,7 @@ int espnow_stop(lua_State* L) {
 
 void registerEspNow(lua_State* L, Ctx* c) {
   static const luaL_Reg fns[] = {{"start", espnow_start}, {"send", espnow_send}, {"recv", espnow_recv},
-                                 {"info", espnow_info},   {"stop", espnow_stop},  {nullptr, nullptr}};
+                                 {"info", espnow_info},   {"stop", espnow_stop}, {nullptr, nullptr}};
   regTable(L, c, "espnow", fns);
 }
 

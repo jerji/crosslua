@@ -15,9 +15,9 @@
 namespace crosslua {
 namespace {
 
-constexpr size_t MAX_DATA = 64 * 1024;   // one-shot input / hash:update() chunk
-constexpr size_t MAX_KEYISH = 1024;      // pbkdf2 password and salt
-constexpr size_t MAX_HEX_IN = 16 * 1024; // crypto.hex input -> 32 KB string
+constexpr size_t MAX_DATA = 64 * 1024;    // one-shot input / hash:update() chunk
+constexpr size_t MAX_KEYISH = 1024;       // pbkdf2 password and salt
+constexpr size_t MAX_HEX_IN = 16 * 1024;  // crypto.hex input -> 32 KB string
 constexpr size_t MAX_B64_IN = 24 * 1024;
 constexpr uint32_t MAX_PBKDF2_WORK = 20000;  // iterations x 32-byte output blocks (blocking: about a second or two)
 const char* const HASH_MT = "crosslua.hash";
@@ -28,7 +28,9 @@ int pushFail(lua_State* L, const char* msg) {
   return 2;
 }
 
-const uint8_t* dataArg(lua_State* L, int i, size_t* n) { return reinterpret_cast<const uint8_t*>(luaL_checklstring(L, i, n)); }
+const uint8_t* dataArg(lua_State* L, int i, size_t* n) {
+  return reinterpret_cast<const uint8_t*>(luaL_checklstring(L, i, n));
+}
 
 // ---- one-shot hashes -----------------------------------------------------------------------------------------------
 constexpr size_t DIGEST256 = 32, DIGEST1 = 20;
@@ -115,15 +117,19 @@ int hash_digest(lua_State* L) {
 }
 int hash_gc(lua_State* L) {  // wipes the context (mbedtls_*_free zeroizes)
   HashObj* h = static_cast<HashObj*>(lua_touserdata(L, 1));
-  if (h && h->alg == 1) mbedtls_sha1_free(&h->s1);
-  else if (h && h->alg == 2) mbedtls_sha256_free(&h->s256);
+  if (h && h->alg == 1)
+    mbedtls_sha1_free(&h->s1);
+  else if (h && h->alg == 2)
+    mbedtls_sha256_free(&h->s256);
   return 0;
 }
 
-// ---- pbkdf2 / random -------------------------------------------------------------------------------------------------
-// RFC 8018 PBKDF2-HMAC-SHA256 as a loop over mbedtls HMAC (what mbedtls_pkcs5_pbkdf2_hmac does, without needing the
-// PKCS5 module linked into the firmware image).
-bool pbkdf2(const uint8_t* pw, size_t pl, const uint8_t* salt, size_t sl, uint32_t iterations, uint8_t* out, size_t outLen) {
+// ---- pbkdf2 / random
+// ------------------------------------------------------------------------------------------------- RFC 8018
+// PBKDF2-HMAC-SHA256 as a loop over mbedtls HMAC (what mbedtls_pkcs5_pbkdf2_hmac does, without needing the PKCS5 module
+// linked into the firmware image).
+bool pbkdf2(const uint8_t* pw, size_t pl, const uint8_t* salt, size_t sl, uint32_t iterations, uint8_t* out,
+            size_t outLen) {
   mbedtls_md_context_t ctx;
   mbedtls_md_init(&ctx);
   const mbedtls_md_info_t* info = mbedtls_md_info_from_type(MBEDTLS_MD_SHA256);
@@ -135,7 +141,8 @@ bool pbkdf2(const uint8_t* pw, size_t pl, const uint8_t* salt, size_t sl, uint32
          mbedtls_md_hmac_update(&ctx, idx, 4) == 0 && mbedtls_md_hmac_finish(&ctx, u) == 0;
     memcpy(t, u, 32);
     for (uint32_t i = 1; ok && i < iterations; i++) {
-      ok = mbedtls_md_hmac_reset(&ctx) == 0 && mbedtls_md_hmac_update(&ctx, u, 32) == 0 && mbedtls_md_hmac_finish(&ctx, u) == 0;
+      ok = mbedtls_md_hmac_reset(&ctx) == 0 && mbedtls_md_hmac_update(&ctx, u, 32) == 0 &&
+           mbedtls_md_hmac_finish(&ctx, u) == 0;
       for (int j = 0; j < 32; j++) t[j] ^= u[j];
     }
     const size_t take = outLen < 32 ? outLen : 32;
@@ -146,27 +153,31 @@ bool pbkdf2(const uint8_t* pw, size_t pl, const uint8_t* salt, size_t sl, uint32
   mbedtls_md_free(&ctx);
   return ok;
 }
-// crypto.pbkdf2_sha256(password, salt, iterations, len) -> bytes | nil, err. Blocking: iterations x ceil(len/32) <= 20000.
+// crypto.pbkdf2_sha256(password, salt, iterations, len) -> bytes | nil, err. Blocking: iterations x ceil(len/32) <=
+// 20000.
 int cr_pbkdf2(lua_State* L) {
   size_t pl, sl;
   const uint8_t* pw = dataArg(L, 1, &pl);
   const uint8_t* salt = dataArg(L, 2, &sl);
   const lua_Number it = luaL_checknumber(L, 3), len = luaL_checknumber(L, 4);
   if (pl > MAX_KEYISH || sl > MAX_KEYISH) return pushFail(L, "password and salt must be at most 1 KB");
-  if (it < 1 || it > MAX_PBKDF2_WORK || it != static_cast<uint32_t>(it)) return pushFail(L, "iterations must be an integer 1..20000");
+  if (it < 1 || it > MAX_PBKDF2_WORK || it != static_cast<uint32_t>(it))
+    return pushFail(L, "iterations must be an integer 1..20000");
   if (len < 1 || len > 64 || len != static_cast<size_t>(len)) return pushFail(L, "len must be an integer 1..64");
   const uint32_t blocks = (static_cast<uint32_t>(len) + 31) / 32;
-  if (static_cast<uint32_t>(it) * blocks > MAX_PBKDF2_WORK) return pushFail(L, "too much work: iterations x ceil(len/32) must be <= 20000");
+  if (static_cast<uint32_t>(it) * blocks > MAX_PBKDF2_WORK)
+    return pushFail(L, "too much work: iterations x ceil(len/32) must be <= 20000");
   uint8_t out[64];
-  if (!pbkdf2(pw, pl, salt, sl, static_cast<uint32_t>(it), out, static_cast<size_t>(len))) return pushFail(L, "pbkdf2 failed");
+  if (!pbkdf2(pw, pl, salt, sl, static_cast<uint32_t>(it), out, static_cast<size_t>(len)))
+    return pushFail(L, "pbkdf2 failed");
   lua_pushlstring(L, reinterpret_cast<const char*>(out), static_cast<size_t>(len));
   return 1;
 }
 // crypto.device_key(label) -> 32-byte binary string | nil, err. A key bound to THIS device and THIS app:
 //   HMAC-SHA256(key = device secret, msg = "crosslua-device-key:v1" 0x00 lower(app name) 0x00 label)
-// so the raw secret never reaches a script, another app (a different folder name) cannot derive this app's keys, and a card
-// copied to another device derives different keys. Use it as an extra input to a key derivation (see lib/vault.lua), never as the
-// only protection: a flash dump of the device recovers the secret.
+// so the raw secret never reaches a script, another app (a different folder name) cannot derive this app's keys, and a
+// card copied to another device derives different keys. Use it as an extra input to a key derivation (see
+// lib/vault.lua), never as the only protection: a flash dump of the device recovers the secret.
 constexpr size_t MAX_LABEL = 64, MAX_APPNAME = 100;
 int cr_device_key(lua_State* L) {
   size_t ln;
@@ -176,20 +187,25 @@ int cr_device_key(lua_State* L) {
   const size_t an = strlen(app);
   if (an < 1 || an > MAX_APPNAME) return pushFail(L, "this app's folder name is too long to derive a key from");
   uint8_t secret[32];
-  if (!be(L).deviceKeyMaterial(secret)) return pushFail(L, "no device secret available (the key storage could not be read)");
+  if (!be(L).deviceKeyMaterial(secret))
+    return pushFail(L, "no device secret available (the key storage could not be read)");
   static const char DOMAIN[] = "crosslua-device-key:v1";
   uint8_t msg[sizeof(DOMAIN) + 1 + MAX_APPNAME + 1 + MAX_LABEL];
   size_t m = 0;
   memcpy(msg + m, DOMAIN, sizeof(DOMAIN) - 1);
   m += sizeof(DOMAIN) - 1;
   msg[m++] = 0;
-  for (size_t i = 0; i < an; i++) msg[m++] = static_cast<uint8_t>((app[i] >= 'A' && app[i] <= 'Z') ? app[i] + 32 : app[i]);  // FAT ignores case
+  for (size_t i = 0; i < an; i++)
+    msg[m++] = static_cast<uint8_t>((app[i] >= 'A' && app[i] <= 'Z') ? app[i] + 32 : app[i]);  // FAT ignores case
   msg[m++] = 0;
   memcpy(msg + m, label, ln);
   m += ln;
   uint8_t out[DIGEST256];
   const int rc = mbedtls_md_hmac(mbedtls_md_info_from_type(MBEDTLS_MD_SHA256), secret, sizeof(secret), msg, m, out);
-  memset(secret, 0, sizeof(secret));  // plain memset can be elided, but the secret also lives in NVS and the caller's RAM: best effort
+  memset(
+      secret, 0,
+      sizeof(
+          secret));  // plain memset can be elided, but the secret also lives in NVS and the caller's RAM: best effort
   const int r = pushDigest(L, rc, out, sizeof(out));
   memset(out, 0, sizeof(out));
   return r;
@@ -204,7 +220,8 @@ int cr_random(lua_State* L) {
   return 1;
 }
 
-// ---- hex / base64 / constant-time compare ------------------------------------------------------------------------------
+// ---- hex / base64 / constant-time compare
+// ------------------------------------------------------------------------------
 int cr_hex(lua_State* L) {
   size_t n;
   const uint8_t* d = dataArg(L, 1, &n);
@@ -308,10 +325,11 @@ int cr_equal(lua_State* L) {
   return 1;
 }
 
-// ---- AES-CBC with PKCS#7 padding ---------------------------------------------------------------------------------------
-// crypto.aes_cbc_encrypt(key, iv, data) / crypto.aes_cbc_decrypt(key, iv, ciphertext) -> bytes | nil, err
-// key = 16/24/32 bytes, iv = 16 bytes (use crypto.random(16), never reuse an iv with one key). CBC does NOT authenticate:
-// store hmac_sha256(mac_key, iv .. ciphertext) next to the ciphertext and check it with crypto.equal BEFORE decrypting.
+// ---- AES-CBC with PKCS#7 padding
+// --------------------------------------------------------------------------------------- crypto.aes_cbc_encrypt(key,
+// iv, data) / crypto.aes_cbc_decrypt(key, iv, ciphertext) -> bytes | nil, err key = 16/24/32 bytes, iv = 16 bytes (use
+// crypto.random(16), never reuse an iv with one key). CBC does NOT authenticate: store hmac_sha256(mac_key, iv ..
+// ciphertext) next to the ciphertext and check it with crypto.equal BEFORE decrypting.
 constexpr size_t MAX_AES = 32 * 1024;
 int aesCbc(lua_State* L, bool encrypt) {
   size_t kl, il, dl;
@@ -324,7 +342,8 @@ int aesCbc(lua_State* L, bool encrypt) {
   if (!encrypt && (dl == 0 || dl % 16)) return pushFail(L, "ciphertext length must be a non-zero multiple of 16");
   const size_t total = encrypt ? dl + (16 - dl % 16) : dl;
   luaL_Buffer b;
-  uint8_t* buf = reinterpret_cast<uint8_t*>(luaL_buffinitsize(L, &b, total));  // may raise out-of-memory: nothing to leak yet
+  uint8_t* buf =
+      reinterpret_cast<uint8_t*>(luaL_buffinitsize(L, &b, total));  // may raise out-of-memory: nothing to leak yet
   uint8_t ivCopy[16];
   memcpy(ivCopy, iv, 16);
   if (encrypt) {
@@ -333,15 +352,18 @@ int aesCbc(lua_State* L, bool encrypt) {
   }
   mbedtls_aes_context aes;
   mbedtls_aes_init(&aes);
-  int rc = encrypt ? mbedtls_aes_setkey_enc(&aes, key, static_cast<unsigned>(kl * 8)) : mbedtls_aes_setkey_dec(&aes, key, static_cast<unsigned>(kl * 8));
-  if (rc == 0) rc = mbedtls_aes_crypt_cbc(&aes, encrypt ? MBEDTLS_AES_ENCRYPT : MBEDTLS_AES_DECRYPT, total, ivCopy, encrypt ? buf : d, buf);
+  int rc = encrypt ? mbedtls_aes_setkey_enc(&aes, key, static_cast<unsigned>(kl * 8))
+                   : mbedtls_aes_setkey_dec(&aes, key, static_cast<unsigned>(kl * 8));
+  if (rc == 0)
+    rc = mbedtls_aes_crypt_cbc(&aes, encrypt ? MBEDTLS_AES_ENCRYPT : MBEDTLS_AES_DECRYPT, total, ivCopy,
+                               encrypt ? buf : d, buf);
   mbedtls_aes_free(&aes);  // zeroizes the key schedule
   if (rc != 0) return pushFail(L, "aes failed");
   size_t outLen = total;
   if (!encrypt) {  // strip PKCS#7 padding (all pad bytes checked, no early exit on the first bad byte)
     const uint8_t pad = buf[total - 1];
     uint8_t bad = static_cast<uint8_t>(pad == 0 || pad > 16);
-    for (size_t i = 0; i < 16 && i < total; i++) bad |= static_cast<uint8_t>((i < pad) & (buf[total - 1 - i] != pad));
+    for (size_t i = 0; i < 16 && i < total; i++) bad |= static_cast<uint8_t>(i < pad ? (buf[total - 1 - i] ^ pad) : 0);
     if (bad) return pushFail(L, "bad padding (wrong key, wrong iv or corrupted data)");
     outLen = total - pad;
   }
@@ -354,12 +376,22 @@ int cr_aes_cbc_decrypt(lua_State* L) { return aesCbc(L, false); }
 }  // namespace
 
 void registerCrypto(lua_State* L, Ctx* c) {
-  static const luaL_Reg fns[] = {{"sha1", cr_sha1},         {"sha256", cr_sha256},     {"hmac_sha1", cr_hmac_sha1},
-                                 {"hmac_sha256", cr_hmac_sha256}, {"hash", cr_hash},   {"pbkdf2_sha256", cr_pbkdf2},
-                                 {"random", cr_random},     {"hex", cr_hex},           {"unhex", cr_unhex},
-                                 {"b64encode", cr_b64encode}, {"b64decode", cr_b64decode}, {"equal", cr_equal},
-                                 {"aes_cbc_encrypt", cr_aes_cbc_encrypt}, {"aes_cbc_decrypt", cr_aes_cbc_decrypt},
-                                 {"device_key", cr_device_key}, {nullptr, nullptr}};
+  static const luaL_Reg fns[] = {{"sha1", cr_sha1},
+                                 {"sha256", cr_sha256},
+                                 {"hmac_sha1", cr_hmac_sha1},
+                                 {"hmac_sha256", cr_hmac_sha256},
+                                 {"hash", cr_hash},
+                                 {"pbkdf2_sha256", cr_pbkdf2},
+                                 {"random", cr_random},
+                                 {"hex", cr_hex},
+                                 {"unhex", cr_unhex},
+                                 {"b64encode", cr_b64encode},
+                                 {"b64decode", cr_b64decode},
+                                 {"equal", cr_equal},
+                                 {"aes_cbc_encrypt", cr_aes_cbc_encrypt},
+                                 {"aes_cbc_decrypt", cr_aes_cbc_decrypt},
+                                 {"device_key", cr_device_key},
+                                 {nullptr, nullptr}};
   regTable(L, c, "crypto", fns);
   if (luaL_newmetatable(L, HASH_MT)) {
     static const luaL_Reg methods[] = {{"update", hash_update}, {"digest", hash_digest}, {nullptr, nullptr}};

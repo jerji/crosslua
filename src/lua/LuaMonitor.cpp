@@ -1,9 +1,9 @@
 // wifi.monitor — promiscuous 802.11 capture on a fixed channel, with an optional native PCAP writer.
-// Needs "network" + "monitor" in the manifest and the user's approval (the dialog label is "SNIFFER": passive capture of
-// everything in radio range is at least as sensitive as a microphone). The radio is exclusive: it cannot run next to a joined
-// WiFi network, a hotspot or espnow. Frames arrive in a small ring filled from the WiFi task; Lua polls it, so no Lua code ever
-// runs in the callback. Frames are truncated at 250 bytes in the ring; the PCAP file records the original length so a reader
-// knows what was cut. Arguments are validated before the backend is touched.
+// Needs "network" + "monitor" in the manifest and the user's approval (the dialog label is "SNIFFER": passive capture
+// of everything in radio range is at least as sensitive as a microphone). The radio is exclusive: it cannot run next to
+// a joined WiFi network, a hotspot or espnow. Frames arrive in a small ring filled from the WiFi task; Lua polls it, so
+// no Lua code ever runs in the callback. Frames are truncated at 250 bytes in the ring; the PCAP file records the
+// original length so a reader knows what was cut. Arguments are validated before the backend is touched.
 #include <cstring>
 
 #include "LuaInternal.h"
@@ -26,9 +26,7 @@ int gateMonitor(lua_State* L) {
   return 0;
 }
 
-int pushNotRunning(lua_State* L) {
-  return pushFail(L, "monitor is not running (call wifi.monitor_start() first)");
-}
+int pushNotRunning(lua_State* L) { return pushFail(L, "monitor is not running (call wifi.monitor_start() first)"); }
 
 // wifi.monitor_start([{channel=1..13, file="data:....pcap"}]) -> true | nil, err.
 // With `file`, a PCAP (LINKTYPE_IEEE802_11) is written natively, streamed, no heap: the same write rules as mic.record.
@@ -62,7 +60,8 @@ int monitor_start(lua_State* L) {
     }
   }
   if (int r = gateMonitor(L)) return r;
-  if (channel < 1 || channel > MON_CHANNELS || channel != static_cast<int>(channel)) return pushFail(L, "channel must be an integer 1..13");
+  if (channel < 1 || channel > MON_CHANNELS || channel != static_cast<int>(channel))
+    return pushFail(L, "channel must be an integer 1..13");
   if (be(L).monitorRunning()) return pushFail(L, "monitor is already running (wifi.monitor_stop() first)");
   if (be(L).bleRunning()) return pushFail(L, "bluetooth is running: call ble.stop() first");
   if (be(L).espnowRunning()) return pushFail(L, "espnow is running: call espnow.stop() first");
@@ -79,18 +78,20 @@ int monitor_start(lua_State* L) {
   }
   if (hasFile && be(L).fsSize(path) == -2) return pushFail(L, "is a directory");
   if (hasFile && !ensureParentDir(be(L), path)) return pushFail(L, "cannot create directory");
-  // When another radio mode is already running the radio's RAM is spent either way (the rings/buffers are static), so the
-  // start floor only applies to a cold radio.
-  const size_t floor = (be(L).monitorRunning() || be(L).txRunning() || be(L).espnowRunning()) ? 0 : be(L).radioFloorBytes();
+  // When another radio mode is already running the radio's RAM is spent either way (the rings/buffers are static), so
+  // the start floor only applies to a cold radio.
+  const size_t floor =
+      (be(L).monitorRunning() || be(L).txRunning() || be(L).espnowRunning()) ? 0 : be(L).radioFloorBytes();
   const size_t freeNow = be(L).freeHeap();
   if (freeNow < floor) {
     char msg[96];
-    snprintf(msg, sizeof(msg), "not enough free RAM for monitor (free %uK, need %uK)", static_cast<unsigned>(freeNow / 1024),
-             static_cast<unsigned>(floor / 1024));
+    snprintf(msg, sizeof(msg), "not enough free RAM for monitor (free %uK, need %uK)",
+             static_cast<unsigned>(freeNow / 1024), static_cast<unsigned>(floor / 1024));
     return pushFail(L, msg);
   }
   char err[96] = {0};
-  if (!be(L).monitorStart(static_cast<int>(channel), hasFile ? path : nullptr, err, sizeof(err))) return pushFail(L, err[0] ? err : "cannot start the monitor");
+  if (!be(L).monitorStart(static_cast<int>(channel), hasFile ? path : nullptr, err, sizeof(err)))
+    return pushFail(L, err[0] ? err : "cannot start the monitor");
   lua_pushboolean(L, 1);
   return 1;
 }
@@ -139,16 +140,18 @@ int monitor_info(lua_State* L) {
   return 1;
 }
 
-// wifi.monitor_channel(n) -> true | nil, err. Hops the radio to another channel (1..13) while the sniffer and/or the injector
-// run; both follow (one radio, one channel). Frames captured before the hop stay queued in the ring.
+// wifi.monitor_channel(n) -> true | nil, err. Hops the radio to another channel (1..13) while the sniffer and/or the
+// injector run; both follow (one radio, one channel). Frames captured before the hop stay queued in the ring.
 int monitor_channel(lua_State* L) {
   if (lua_type(L, 1) != LUA_TNUMBER) return pushFail(L, "channel must be an integer 1..13");
   const lua_Number n = luaL_checknumber(L, 1);
   if (int r = gateMonitor(L)) return r;
   if (n < 1 || n > MON_CHANNELS || n != static_cast<int>(n)) return pushFail(L, "channel must be an integer 1..13");
-  if (!be(L).monitorRunning() && !be(L).txRunning()) return pushFail(L, "no radio mode is running (wifi.monitor_start() or wifi.tx_start() first)");
+  if (!be(L).monitorRunning() && !be(L).txRunning())
+    return pushFail(L, "no radio mode is running (wifi.monitor_start() or wifi.tx_start() first)");
   char err[96] = {0};
-  if (!be(L).monitorSetChannel(static_cast<int>(n), err, sizeof(err))) return pushFail(L, err[0] ? err : "could not set the channel");
+  if (!be(L).monitorSetChannel(static_cast<int>(n), err, sizeof(err)))
+    return pushFail(L, err[0] ? err : "could not set the channel");
   lua_pushboolean(L, 1);
   return 1;
 }
@@ -166,8 +169,9 @@ int monitor_stop(lua_State* L) {
 // Merges into the existing (lazy) wifi table; called from registerNet after the rest of wifi.* is in place.
 void registerWifiMonitor(lua_State* L, Ctx* c) {
   (void)c;
-  static const luaL_Reg fns[] = {{"monitor_start", monitor_start}, {"monitor_recv", monitor_recv}, {"monitor_info", monitor_info},
-                                 {"monitor_stop", monitor_stop},   {"monitor_channel", monitor_channel}, {nullptr, nullptr}};
+  static const luaL_Reg fns[] = {{"monitor_start", monitor_start},     {"monitor_recv", monitor_recv},
+                                 {"monitor_info", monitor_info},       {"monitor_stop", monitor_stop},
+                                 {"monitor_channel", monitor_channel}, {nullptr, nullptr}};
   lua_getglobal(L, "wifi");
   luaL_setfuncs(L, fns, 0);
   lua_pop(L, 1);

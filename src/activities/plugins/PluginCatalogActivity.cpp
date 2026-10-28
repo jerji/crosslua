@@ -24,6 +24,7 @@
 #include <type_traits>
 
 #include "CrossPointSettings.h"
+#include "LuaAppActivity.h"
 #include "MappedInputManager.h"
 #include "PluginCatalogPaging.h"
 #include "activities/reader/DictionaryDefinitionActivity.h"  // plain-text README viewer
@@ -40,7 +41,6 @@
 #include "util/PluginHttp.h"
 #include "util/PluginLocations.h"
 #include "util/PluginPickerLayout.h"
-#include "LuaAppActivity.h"
 #include "util/QrUtils.h"
 #include "util/StringUtils.h"
 
@@ -216,7 +216,8 @@ std::vector<PluginRef> discoverPlugins() {
     if (e.hasManifest) readPluginMetadata(e.dir + "/manifest.json", ref);
     if (e.hasDevice) readPluginMetadata(ref.manifestPath, ref, true);
     // CrossLua: a folder with main.lua is an on-device Lua app (unless it is a catalog).
-    if (e.hasLua && ref.deviceKind == PluginLocations::DeviceKind::None) ref.deviceKind = PluginLocations::DeviceKind::Lua;
+    if (e.hasLua && ref.deviceKind == PluginLocations::DeviceKind::None)
+      ref.deviceKind = PluginLocations::DeviceKind::Lua;
     plugins.push_back(std::move(ref));
   }
   std::sort(plugins.begin(), plugins.end(), [](const PluginRef& lhs, const PluginRef& rhs) {

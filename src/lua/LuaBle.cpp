@@ -1,11 +1,12 @@
-// ble.* — Bluetooth LE central. Mode "keyboard": scan for a BLE HID keyboard, pair with it (bonds are kept in NVS and reconnect on
-// their own), and its key presses arrive as "key" events from input.wait()/input.poll(), with input.key() giving the details.
-// Mode "raw": the observer itself: ble.observe() + ble.adverts() hand the scripts every advertisement as received (advertising
-// data then scan response, up to 62 bytes) for them to parse. One mode at a time; the stack is the same ~50 KB either way.
-// Needs "bluetooth" in the manifest and the user's approval (a keyboard is a typing channel into the app).
-// ONE stack at a time (~50 KB of RAM) and EXCLUSIVE with every WiFi mode: start refuses while WiFi, the hotspot, espnow, the
-// sniffer or the injector holds the radio, and each of those refuses while Bluetooth is up. Everything is polled: the stack's
-// tasks fill small buffers, Lua reads them (no callbacks). Arguments are validated into plain values before the backend is touched.
+// ble.* — Bluetooth LE central. Mode "keyboard": scan for a BLE HID keyboard, pair with it (bonds are kept in NVS and
+// reconnect on their own), and its key presses arrive as "key" events from input.wait()/input.poll(), with input.key()
+// giving the details. Mode "raw": the observer itself: ble.observe() + ble.adverts() hand the scripts every
+// advertisement as received (advertising data then scan response, up to 62 bytes) for them to parse. One mode at a
+// time; the stack is the same ~50 KB either way. Needs "bluetooth" in the manifest and the user's approval (a keyboard
+// is a typing channel into the app). ONE stack at a time (~50 KB of RAM) and EXCLUSIVE with every WiFi mode: start
+// refuses while WiFi, the hotspot, espnow, the sniffer or the injector holds the radio, and each of those refuses while
+// Bluetooth is up. Everything is polled: the stack's tasks fill small buffers, Lua reads them (no callbacks). Arguments
+// are validated into plain values before the backend is touched.
 #include <cstring>
 
 #include "LuaInternal.h"
@@ -31,12 +32,14 @@ int gateBle(lua_State* L) {
   return 0;
 }
 
-// The keyboard calls only make sense in keyboard mode; the raw calls only in raw mode. 0 = fine, else the nil, err pair.
+// The keyboard calls only make sense in keyboard mode; the raw calls only in raw mode. 0 = fine, else the nil, err
+// pair.
 int needMode(lua_State* L, int mode) {
   if (!be(L).bleRunning()) return pushFail(L, "bluetooth is not running (call ble.start() first)");
   if (be(L).bleMode() == mode) return 0;
-  return pushFail(L, mode == Backend::BLE_MODE_KEYBOARD ? "this needs ble.start(\"keyboard\") (bluetooth is running in raw mode)"
-                                                         : "this needs ble.start(\"raw\") (bluetooth is running in keyboard mode)");
+  return pushFail(L, mode == Backend::BLE_MODE_KEYBOARD
+                         ? "this needs ble.start(\"keyboard\") (bluetooth is running in raw mode)"
+                         : "this needs ble.start(\"raw\") (bluetooth is running in keyboard mode)");
 }
 
 // "AA:BB:CC:DD:EE:FF" (hex digits, either case): the form the scan reports. Anything else never reaches the stack.
@@ -55,10 +58,14 @@ bool validAddr(const char* s, size_t n) {
 
 const char* linkName(int link) {
   switch (link) {
-    case Backend::BLE_CONNECTING: return "connecting";
-    case Backend::BLE_CONNECTED: return "connected";
-    case Backend::BLE_FAILED: return "failed";
-    default: return "idle";
+    case Backend::BLE_CONNECTING:
+      return "connecting";
+    case Backend::BLE_CONNECTED:
+      return "connected";
+    case Backend::BLE_FAILED:
+      return "failed";
+    default:
+      return "idle";
   }
 }
 
@@ -82,7 +89,8 @@ int ble_start(lua_State* L) {
   if (!lua_isnoneornil(L, 1)) {
     if (lua_type(L, 1) != LUA_TSTRING) return pushFail(L, "mode must be \"keyboard\" or \"raw\"");
     mode = lua_tostring(L, 1);
-    if (strcmp(mode, "keyboard") != 0 && strcmp(mode, "raw") != 0) return pushFail(L, "mode must be \"keyboard\" or \"raw\"");
+    if (strcmp(mode, "keyboard") != 0 && strcmp(mode, "raw") != 0)
+      return pushFail(L, "mode must be \"keyboard\" or \"raw\"");
   }
   if (int r = gateBle(L)) return r;
   if (be(L).bleRunning()) return pushFail(L, "bluetooth is already running (ble.stop() first)");
@@ -94,8 +102,8 @@ int ble_start(lua_State* L) {
   const size_t freeNow = be(L).freeHeap();
   if (freeNow < floor) {
     char msg[96];
-    snprintf(msg, sizeof(msg), "not enough free RAM for bluetooth (free %uK, need %uK)", static_cast<unsigned>(freeNow / 1024),
-             static_cast<unsigned>(floor / 1024));
+    snprintf(msg, sizeof(msg), "not enough free RAM for bluetooth (free %uK, need %uK)",
+             static_cast<unsigned>(freeNow / 1024), static_cast<unsigned>(floor / 1024));
     return pushFail(L, msg);
   }
   char err[96] = {0};
@@ -111,7 +119,8 @@ int ble_stop(lua_State* L) {
   return 1;
 }
 
-// ble.scan([ms]) -> true | nil, err. Starts a scan that ends by itself after `ms` (500..60000, default 5000); read it with ble.devices().
+// ble.scan([ms]) -> true | nil, err. Starts a scan that ends by itself after `ms` (500..60000, default 5000); read it
+// with ble.devices().
 int ble_scan(lua_State* L) {
   lua_Number ms = BLE_SCAN_DEFAULT_MS;
   if (!lua_isnoneornil(L, 1)) {
@@ -119,7 +128,8 @@ int ble_scan(lua_State* L) {
     ms = lua_tonumber(L, 1);
   }
   if (int r = gateBle(L)) return r;
-  if (ms < BLE_SCAN_MIN_MS || ms > BLE_SCAN_MAX_MS || ms != static_cast<int>(ms)) return pushFail(L, "ms must be an integer 500..60000");
+  if (ms < BLE_SCAN_MIN_MS || ms > BLE_SCAN_MAX_MS || ms != static_cast<int>(ms))
+    return pushFail(L, "ms must be an integer 500..60000");
   if (int r = needMode(L, Backend::BLE_MODE_KEYBOARD)) return r;
   char err[96] = {0};
   if (!be(L).bleScan(static_cast<int>(ms), err, sizeof(err))) return pushFail(L, err[0] ? err : "cannot scan");
@@ -134,7 +144,8 @@ int ble_scan_stop(lua_State* L) {
   return 1;
 }
 
-// ble.devices() -> { {addr, name, rssi, connectable, hid}, ... } (strongest first is NOT promised: sort in Lua). nil, err when stopped.
+// ble.devices() -> { {addr, name, rssi, connectable, hid}, ... } (strongest first is NOT promised: sort in Lua). nil,
+// err when stopped.
 int ble_devices(lua_State* L) {
   if (int r = gateBle(L)) return r;
   if (int r = needMode(L, Backend::BLE_MODE_KEYBOARD)) return r;
@@ -148,7 +159,8 @@ int ble_devices(lua_State* L) {
   return 1;
 }
 
-// ble.connect(addr) -> true | nil, err. Starts pairing/connecting; ble.state() reports how it went (bonded peers reconnect alone).
+// ble.connect(addr) -> true | nil, err. Starts pairing/connecting; ble.state() reports how it went (bonded peers
+// reconnect alone).
 int ble_connect(lua_State* L) {
   size_t n = 0;
   const char* addr = luaL_checklstring(L, 1, &n);
@@ -168,8 +180,9 @@ int ble_disconnect(lua_State* L) {
   return 1;
 }
 
-// ble.state() -> {running, mode, link = "idle"|"connecting"|"connected"|"failed", scanning, addr, name, passkey, reason}.
-// `passkey` is set only while pairing waits for it to be typed on the keyboard (then Enter); `reason` only after a failure.
+// ble.state() -> {running, mode, link = "idle"|"connecting"|"connected"|"failed", scanning, addr, name, passkey,
+// reason}. `passkey` is set only while pairing waits for it to be typed on the keyboard (then Enter); `reason` only
+// after a failure.
 int ble_state(lua_State* L) {
   if (int r = gateBle(L)) return r;
   const bool running = be(L).bleRunning();
@@ -186,8 +199,10 @@ int ble_state(lua_State* L) {
   Backend::BleState s;
   memset(&s, 0, sizeof(s));
   const bool raw = be(L).bleMode() == Backend::BLE_MODE_RAW;
-  if (raw) s.scanning = be(L).bleObserving();
-  else be(L).bleState(&s);
+  if (raw)
+    s.scanning = be(L).bleObserving();
+  else
+    be(L).bleState(&s);
   lua_pushstring(L, raw ? "raw" : "keyboard");
   lua_setfield(L, -2, "mode");
   lua_pushstring(L, linkName(s.link));
@@ -241,9 +256,10 @@ int ble_forget(lua_State* L) {
   return 1;
 }
 
-// ble.observe([ms [, {active=false}]]) -> true | nil, err. Raw mode. Listens for advertisements for `ms` (500..600000, default 5000;
-// 0 = until ble.observe_stop()). Passive by default: it sends nothing, so devices that put their name in the scan response show no
-// name; active=true asks them for it (a scan request goes out for every scannable device it hears). Starting again clears the table.
+// ble.observe([ms [, {active=false}]]) -> true | nil, err. Raw mode. Listens for advertisements for `ms` (500..600000,
+// default 5000; 0 = until ble.observe_stop()). Passive by default: it sends nothing, so devices that put their name in
+// the scan response show no name; active=true asks them for it (a scan request goes out for every scannable device it
+// hears). Starting again clears the table.
 int ble_observe(lua_State* L) {
   lua_Number ms = BLE_SCAN_DEFAULT_MS;
   bool active = false;
@@ -255,16 +271,21 @@ int ble_observe(lua_State* L) {
     if (lua_type(L, 2) != LUA_TTABLE) return pushFail(L, "options must be a table like {active=true}");
     lua_getfield(L, 2, "active");
     if (!lua_isnil(L, -1)) {
-      if (lua_type(L, -1) != LUA_TBOOLEAN) { lua_pop(L, 1); return pushFail(L, "active must be a boolean"); }
+      if (lua_type(L, -1) != LUA_TBOOLEAN) {
+        lua_pop(L, 1);
+        return pushFail(L, "active must be a boolean");
+      }
       active = lua_toboolean(L, -1) != 0;
     }
     lua_pop(L, 1);
   }
   if (int r = gateBle(L)) return r;
-  if (ms != static_cast<int>(ms) || (ms != 0 && (ms < BLE_OBSERVE_MIN_MS || ms > BLE_OBSERVE_MAX_MS))) return pushFail(L, "ms must be 0 or an integer 500..600000");
+  if (ms != static_cast<int>(ms) || (ms != 0 && (ms < BLE_OBSERVE_MIN_MS || ms > BLE_OBSERVE_MAX_MS)))
+    return pushFail(L, "ms must be 0 or an integer 500..600000");
   if (int r = needMode(L, Backend::BLE_MODE_RAW)) return r;
   char err[96] = {0};
-  if (!be(L).bleObserve(static_cast<int>(ms), active, err, sizeof(err))) return pushFail(L, err[0] ? err : "cannot observe");
+  if (!be(L).bleObserve(static_cast<int>(ms), active, err, sizeof(err)))
+    return pushFail(L, err[0] ? err : "cannot observe");
   lua_pushboolean(L, 1);
   return 1;
 }
@@ -277,8 +298,9 @@ int ble_observe_stop(lua_State* L) {
 }
 
 // ble.adverts() -> list, dropped | nil, err. One entry per device heard since ble.observe() started, first heard first:
-// {addr, addr_type, rssi, adv_type, connectable, scannable, adv_len, age_ms, data}. `data` is the advertising data followed by the
-// scan response as raw bytes (parse the length/type/value structures yourself); `dropped` counts devices that did not fit (32).
+// {addr, addr_type, rssi, adv_type, connectable, scannable, adv_len, age_ms, data}. `data` is the advertising data
+// followed by the scan response as raw bytes (parse the length/type/value structures yourself); `dropped` counts
+// devices that did not fit (32).
 int ble_adverts(lua_State* L) {
   if (int r = gateBle(L)) return r;
   if (int r = needMode(L, Backend::BLE_MODE_RAW)) return r;
@@ -304,7 +326,8 @@ int ble_adverts(lua_State* L) {
     lua_setfield(L, -2, "adv_len");
     lua_pushinteger(L, static_cast<lua_Integer>(a[i].ageMs));
     lua_setfield(L, -2, "age_ms");
-    lua_pushlstring(L, reinterpret_cast<const char*>(a[i].data), a[i].len > sizeof(a[i].data) ? sizeof(a[i].data) : a[i].len);
+    lua_pushlstring(L, reinterpret_cast<const char*>(a[i].data),
+                    a[i].len > sizeof(a[i].data) ? sizeof(a[i].data) : a[i].len);
     lua_setfield(L, -2, "data");
     lua_rawseti(L, -2, i + 1);
   }
@@ -315,10 +338,12 @@ int ble_adverts(lua_State* L) {
 }  // namespace
 
 void registerBle(lua_State* L, Ctx* c) {
-  static const luaL_Reg fns[] = {{"start", ble_start},     {"stop", ble_stop},       {"scan", ble_scan},     {"scan_stop", ble_scan_stop},
-                                 {"devices", ble_devices}, {"connect", ble_connect}, {"disconnect", ble_disconnect},
-                                 {"state", ble_state},     {"paired", ble_paired},   {"forget", ble_forget},
-                                 {"observe", ble_observe}, {"observe_stop", ble_observe_stop}, {"adverts", ble_adverts}, {nullptr, nullptr}};
+  static const luaL_Reg fns[] = {
+      {"start", ble_start},           {"stop", ble_stop},       {"scan", ble_scan},
+      {"scan_stop", ble_scan_stop},   {"devices", ble_devices}, {"connect", ble_connect},
+      {"disconnect", ble_disconnect}, {"state", ble_state},     {"paired", ble_paired},
+      {"forget", ble_forget},         {"observe", ble_observe}, {"observe_stop", ble_observe_stop},
+      {"adverts", ble_adverts},       {nullptr, nullptr}};
   regTable(L, c, "ble", fns);
 }
 

@@ -1,18 +1,21 @@
 // Host-side tests for the CrossLua VM core + API bindings (no device needed).
 // Build/run: test/lua_host/run.sh
+#include <dirent.h>
+
 #include <algorithm>
 #include <cassert>
-#include <ctime>
-#include <dirent.h>
-#include <fstream>
-#include <sstream>
-#include <functional>
 #include <cmath>
+#include <ctime>
+#include <fstream>
+#include <functional>
+#include <sstream>
 extern "C" {
-#include "src/lua/PermText.h"
 #include "lauxlib.h"
 #include "lua.h"
+#include "src/lua/PermText.h"
 }
+#include <InflateReader.h>
+
 #include <cstdio>
 #include <cstring>
 #include <deque>
@@ -21,16 +24,17 @@ extern "C" {
 #include <string>
 #include <vector>
 
-#include <InflateReader.h>
-
-static const char DEFL_RAW[] = "\013\311HU(,\315L\316VH*\312/\317SH\313\257P\310*\315-(V\310/K-R(\001J\347$VU*\244\344\247\353)\204\214*\036U<\252\230\332\212\001";
+static const char DEFL_RAW[] =
+    "\013\311HU(,\315L\316VH*\312/\317SH\313\257P\310*\315-(V\310/"
+    "K-R(\001J\347$VU*\244\344\247\353)\204\214*\036U<\252\230\332\212\001";
 static const size_t DEFL_RAW_LEN = 55;
 static const char DEFL_ZLIB[] = "x\234\253\312\311L\322-/J,(HMQ(H\254\314\311OL\261Rx4gr\325p\227\000\000*vf\275";
 static const size_t DEFL_ZLIB_LEN = 37;
 static const char DEFL_BAD[] = "\x73\x00\x99\x99";
 
 extern "C" {
-// uzlib references these from its gzip/zlib header helpers; InflateReader never calls them (the firmware linker drops them).
+// uzlib references these from its gzip/zlib header helpers; InflateReader never calls them (the firmware linker drops
+// them).
 unsigned int uzlib_adler32(const void*, unsigned int, unsigned int) { return 0; }
 unsigned int uzlib_crc32(const void*, unsigned int, unsigned int) { return 0; }
 }
@@ -52,7 +56,10 @@ struct MockBackend : Backend {
   int height() override { return 480; }
   void clear(bool white) override { calls.push_back(white ? "clear:white" : "clear:black"); }
   void pixel(int x, int y, bool b) override { calls.push_back("pixel:" + std::to_string(x) + "," + std::to_string(y)); }
-  void line(int a, int b, int c, int d, bool) override { calls.push_back("line:" + std::to_string(a) + "," + std::to_string(b) + "," + std::to_string(c) + "," + std::to_string(d)); }
+  void line(int a, int b, int c, int d, bool) override {
+    calls.push_back("line:" + std::to_string(a) + "," + std::to_string(b) + "," + std::to_string(c) + "," +
+                    std::to_string(d));
+  }
   void rect(int x, int y, int ww, int h, bool b, bool f) override {
     calls.push_back("rect:" + std::to_string(x) + "," + std::to_string(y) + "," + std::to_string(ww) + "," +
                     std::to_string(h) + (f ? ":fill" : ":line") + (b ? ":b" : ":w"));
@@ -76,10 +83,13 @@ struct MockBackend : Backend {
   const char* popEvent() override {
     havePos = false;  // an empty poll or a button event has no position
     haveKey = false;  // ...and no key details either
-    // an "@ms" token holds every later event back until the mock clock reaches ms (a user who walks away and comes back)
+    // an "@ms" token holds every later event back until the mock clock reaches ms (a user who walks away and comes
+    // back)
     while (!events.empty() && events.front()[0] == '@') {
-      if (now >= static_cast<uint32_t>(std::stoul(events.front().substr(1)))) events.pop_front();
-      else return nullptr;
+      if (now >= static_cast<uint32_t>(std::stoul(events.front().substr(1))))
+        events.pop_front();
+      else
+        return nullptr;
     }
     if (events.empty()) return nullptr;
     static std::string hold;
@@ -110,7 +120,8 @@ struct MockBackend : Backend {
   void log(const char* m) override { logs.push_back(m); }
   std::string appNameVal = "test";
   bool secretOk = true;
-  uint8_t secretBytes[32] = {0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31};
+  uint8_t secretBytes[32] = {0,  1,  2,  3,  4,  5,  6,  7,  8,  9,  10, 11, 12, 13, 14, 15,
+                             16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31};
   const char* appName() override { return appNameVal.c_str(); }
   bool deviceKeyMaterial(uint8_t out[32]) override {
     if (!secretOk) return false;
@@ -168,29 +179,48 @@ struct MockBackend : Backend {
     return true;
   }
   // ---- network mock: scripted responses, records what reached the backend --------------------------------------
-  struct FakeResp { int status = 200; std::string body; std::string error; std::string headers; /* raw "Name: value\n" lines */ };
+  struct FakeResp {
+    int status = 200;
+    std::string body;
+    std::string error;
+    std::string headers; /* raw "Name: value\n" lines */
+  };
   std::map<std::string, FakeResp> routes;  // by full url
   bool net = true, wifiUp = false, wifiAsked = false;
   size_t largest = 100000;
-  struct SeenReq { std::string method, url, body, savePath, contentType, ca; bool hasContentType = false, hasCa = false, wantHeaders = false; std::vector<std::pair<std::string, std::string>> headers; size_t maxBody = 0; };
+  struct SeenReq {
+    std::string method, url, body, savePath, contentType, ca;
+    bool hasContentType = false, hasCa = false, wantHeaders = false;
+    std::vector<std::pair<std::string, std::string>> headers;
+    size_t maxBody = 0;
+  };
   std::vector<SeenReq> seen;
   bool netAllowed() override { return net; }
 
   // raw TCP sockets: scripted peers
-  struct MockSock { bool used = false; int kind = 0; std::string host; int port = 0; std::string rx, tx; bool peerClosed = false; };
-  int udpPortCounter = 0;        // ephemeral ports for udp_open(0)
-  bool udpSendFail = false;      // udpSend reports an error on demand
+  struct MockSock {
+    bool used = false;
+    int kind = 0;
+    std::string host;
+    int port = 0;
+    std::string rx, tx;
+    bool peerClosed = false;
+  };
+  int udpPortCounter = 0;    // ephemeral ports for udp_open(0)
+  bool udpSendFail = false;  // udpSend reports an error on demand
   const char* udpPeerIp = "192.0.2.9";
   MockSock socks[Backend::MAX_SOCKETS];
-  std::map<std::string, std::string> sockReply, dnsMap;  // "host:port" -> bytes the peer sends right after connect; name -> ip
+  std::map<std::string, std::string> sockReply,
+      dnsMap;  // "host:port" -> bytes the peer sends right after connect; name -> ip
   std::set<std::string> sockRefused, sockClosesAfterReply;
   std::vector<std::string> dnsAsked;
   std::vector<int> connectOpts;  // timeout_ms of every connect that reached the backend
   std::string txLog;             // "host:port<-data" for every write
   int connectCalls = 0;
-  bool netReadFail = false;  // netRead reports "closed" although bytes were pending (the peer vanished between the two calls)
+  bool netReadFail =
+      false;  // netRead reports "closed" although bytes were pending (the peer vanished between the two calls)
   const char* connectFailMsg = nullptr;  // when set, netConnect fails with this message (e.g. "cancelled")
-  int relaxOn = 0, relaxOff = 0;  // heapRelax(true/false) calls: must always balance
+  int relaxOn = 0, relaxOff = 0;         // heapRelax(true/false) calls: must always balance
   void heapRelax(bool on) override { (on ? relaxOn : relaxOff)++; }
   size_t writeChunk = 0;  // 0 = accept everything; otherwise at most this many bytes per write (partial writes)
   bool netLocal(char* ip, char* mask, char* gw, char* dns, size_t cap) override {
@@ -311,15 +341,19 @@ struct MockBackend : Backend {
     if (netIsOpen(s)) socks[s] = MockSock{};
   }
   // --- listen / accept mock ---
-  bool listenOk = true;  // false = netListen fails
-  bool acceptOk = true;  // false = netAccept returns error
+  bool listenOk = true;                             // false = netListen fails
+  bool acceptOk = true;                             // false = netAccept returns error
   std::map<int, std::deque<MockSock>> acceptQueue;  // server slot -> queued clients
-  int acceptCount = 0;  // clients accepted via netAccept so far (for unique slot content)
-  int serverPort = 0;   // last port listened on
-  bool listenPermitted = false;   // manifest declared "listen"
-  bool listenApproved = true;     // user approved the listen request on the permission screen (default: approved, like grants in the mock)
+  int acceptCount = 0;                              // clients accepted via netAccept so far (for unique slot content)
+  int serverPort = 0;                               // last port listened on
+  bool listenPermitted = false;                     // manifest declared "listen"
+  bool listenApproved =
+      true;  // user approved the listen request on the permission screen (default: approved, like grants in the mock)
   int netListen(int port, char* err, size_t errCap) override {
-    if (!listenOk) { snprintf(err, errCap, "listen failed (mock)"); return -1; }
+    if (!listenOk) {
+      snprintf(err, errCap, "listen failed (mock)");
+      return -1;
+    }
     for (int i = 0; i < Backend::MAX_SOCKETS; i++) {
       if (socks[i].used) continue;
       socks[i] = MockSock{};
@@ -353,39 +387,60 @@ struct MockBackend : Backend {
   // Pure manifest+approval flags: the binding checks the base network permission separately (gateListen / net_accept).
   bool listenAllowed() override { return listenPermitted && listenApproved; }
   // --- audio mock ---
-  bool audioPermitted = false;   // manifest declared "audio"
-  bool audioApproved = true;     // user approved (mock default like listen)
-  bool audioOk = true;           // false = play fails (mock codec error)
-  struct AudioCall { std::string path; bool loop; };
+  bool audioPermitted = false;  // manifest declared "audio"
+  bool audioApproved = true;    // user approved (mock default like listen)
+  bool audioOk = true;          // false = play fails (mock codec error)
+  struct AudioCall {
+    std::string path;
+    bool loop;
+  };
   std::vector<AudioCall> audioPlays;
   int audioStops = 0, audioVolumes = 0, audioVolumeLast = -1;
   bool audioPlayingState = false;
   bool audioAllowed() override { return audioPermitted && audioApproved; }
   bool audioPlay(const char* path, bool loop, char* err, size_t errCap) override {
-    if (!audioOk) { snprintf(err, errCap, "cannot play (mock codec error)"); return false; }
+    if (!audioOk) {
+      snprintf(err, errCap, "cannot play (mock codec error)");
+      return false;
+    }
     audioPlays.push_back({path, loop});
     audioPlayingState = true;
     return true;
   }
-  void audioStop() override { audioStops++; audioPlayingState = false; }
-  void audioVolume(int pct) override { audioVolumes++; audioVolumeLast = pct; }
+  void audioStop() override {
+    audioStops++;
+    audioPlayingState = false;
+  }
+  void audioVolume(int pct) override {
+    audioVolumes++;
+    audioVolumeLast = pct;
+  }
   bool audioPlaying() override { return audioPlayingState; }
   // --- microphone mock ---
   bool micPermitted = false, micApproved = true, micOk = true;
-  struct MicCall { std::string path; int seconds; };
+  struct MicCall {
+    std::string path;
+    int seconds;
+  };
   std::vector<MicCall> micRecords;
   std::vector<int> micLevels;  // ms of every level() that reached the backend
   int micPeak = 1234;
   bool micAllowed() override { return micPermitted && micApproved; }
   bool micRecord(const char* path, int seconds, int* bytes, char* err, size_t errCap) override {
-    if (!micOk) { snprintf(err, errCap, "no microphone on this board"); return false; }
+    if (!micOk) {
+      snprintf(err, errCap, "no microphone on this board");
+      return false;
+    }
     micRecords.push_back({path, seconds});
     files[path] = std::string(44 + seconds * 32000, 'W');  // what the firmware would have written
     *bytes = static_cast<int>(files[path].size());
     return true;
   }
   bool micLevel(int ms, int* peak, char* err, size_t errCap) override {
-    if (!micOk) { snprintf(err, errCap, "no microphone on this board"); return false; }
+    if (!micOk) {
+      snprintf(err, errCap, "no microphone on this board");
+      return false;
+    }
     micLevels.push_back(ms);
     *peak = micPeak;
     return true;
@@ -410,7 +465,8 @@ struct MockBackend : Backend {
     }
     return static_cast<int>(mdnsResults.size());
   }
-  bool mdnsResult(int i, char* hostname, size_t hnCap, char* ip, size_t ipCap, int* port, char* instanceName, size_t inCap) override {
+  bool mdnsResult(int i, char* hostname, size_t hnCap, char* ip, size_t ipCap, int* port, char* instanceName,
+                  size_t inCap) override {
     if (i < 0 || i >= static_cast<int>(mdnsResults.size())) return false;
     const auto& r = mdnsResults[i];
     snprintf(hostname, hnCap, "%s", r.hostname.c_str());
@@ -422,22 +478,36 @@ struct MockBackend : Backend {
   bool wifiConnected() override { return wifiUp; }
   // --- hotspot mock ---
   bool apUp = false, hotspotPermitted = false, hotspotApproved = true, apFail = false;
-  struct ApCall { std::string ssid, password; bool open; int channel, maxClients; };
+  struct ApCall {
+    std::string ssid, password;
+    bool open;
+    int channel, maxClients;
+  };
   std::vector<ApCall> apCalls;
   int apClients = 0;
   bool netReady() override { return wifiUp || apUp; }
   // --- ESP-NOW mock ---
   bool enPermitted = false, enApproved = true, enUp = false, enFail = false, enSendFail = false;
   int enChannel = 0, enDropped = 0;
-  struct EnSent { uint8_t mac[6]; bool broadcast; std::string data; };
+  struct EnSent {
+    uint8_t mac[6];
+    bool broadcast;
+    std::string data;
+  };
   std::vector<EnSent> enSent;
-  struct EnIn { uint8_t mac[6]; std::string data; };
+  struct EnIn {
+    uint8_t mac[6];
+    std::string data;
+  };
   std::vector<EnIn> enInbox;  // scripted frames, delivered oldest first
   size_t radioFloorBytes() override { return radioEverStarted ? 48 * 1024 : 80 * 1024; }
   bool espnowAllowed() override { return net && enPermitted && enApproved; }
   bool espnowRunning() override { return enUp; }
   bool espnowStart(int channel, uint8_t mac[6], char* err, size_t errCap) override {
-    if (enFail) { snprintf(err, errCap, "esp_now_init failed (mock)"); return false; }
+    if (enFail) {
+      snprintf(err, errCap, "esp_now_init failed (mock)");
+      return false;
+    }
     enUp = true;
     radioEverStarted = true;
     enChannel = channel;
@@ -447,7 +517,10 @@ struct MockBackend : Backend {
   }
   void espnowStop() override { enUp = false; }
   bool espnowSend(const uint8_t mac[6], bool broadcast, const void* d, size_t n, char* err, size_t errCap) override {
-    if (enSendFail) { snprintf(err, errCap, "the radio refused the frame (mock)"); return false; }
+    if (enSendFail) {
+      snprintf(err, errCap, "the radio refused the frame (mock)");
+      return false;
+    }
     EnSent e;
     memcpy(e.mac, mac, 6);
     e.broadcast = broadcast;
@@ -470,12 +543,17 @@ struct MockBackend : Backend {
   int monChannel = 0, monCaptured = 0, monDropped = 0;
   uint32_t monFileBytes = 0;
   char monPathOut[160] = {0};
-  struct MonIn { std::string data; int rssi; int channel; };
+  struct MonIn {
+    std::string data;
+    int rssi;
+    int channel;
+  };
   std::vector<MonIn> monInbox;
   // --- wifi.tx mock ---
   bool txPermitted = false, txApproved = true, txUp = false, txFail = false;
   // --- ble mock (keyboard mode) ---
-  bool blePermitted = false, bleApproved = true, bleSupportedVal = true, bleUp = false, bleStartFail = false, bleScanFail = false, bleConnFail = false;
+  bool blePermitted = false, bleApproved = true, bleSupportedVal = true, bleUp = false, bleStartFail = false,
+       bleScanFail = false, bleConnFail = false;
   bool bleScanned = false, bleScanningNow = false;
   std::vector<BleDevice> bleSeen, bleBonds;
   BleState bleStateVal = {};
@@ -504,65 +582,108 @@ struct MockBackend : Backend {
   bool bleRunning() override { return bleUp; }
   bool bleStart(const char* mode, char* err, size_t errCap) override {
     bleStartCalls++;
-    if (bleStartFail) { snprintf(err, errCap, "nimble init failed (mock)"); return false; }
+    if (bleStartFail) {
+      snprintf(err, errCap, "nimble init failed (mock)");
+      return false;
+    }
     bleUp = true;
     radioEverStarted = true;
     bleModeStarted = mode;
     bleScanned = false;
     return true;
   }
-  void bleStop() override { bleStopCalls++; bleUp = false; bleScanningNow = false; bleObservingNow = false; }
+  void bleStop() override {
+    bleStopCalls++;
+    bleUp = false;
+    bleScanningNow = false;
+    bleObservingNow = false;
+  }
   // raw mode (the observer): a table the tests fill, observed only after bleObserve() like the real stack
   std::vector<BleAdvert> bleAdvertsSeen;
   bool bleObservingNow = false, bleObserveFail = false, bleObserveFailSilent = false, bleObserveActive = false;
   int bleObserveCalls = 0, bleObserveStops = 0, bleDroppedVal = 0, bleObserveMs = -1;
-  int bleMode() override { return !bleUp ? BLE_MODE_NONE : (bleModeStarted == "raw" ? BLE_MODE_RAW : BLE_MODE_KEYBOARD); }
+  int bleMode() override {
+    return !bleUp ? BLE_MODE_NONE : (bleModeStarted == "raw" ? BLE_MODE_RAW : BLE_MODE_KEYBOARD);
+  }
   bool bleObserve(int ms, bool active, char* err, size_t errCap) override {
     bleObserveCalls++;
-    if (bleObserveFail || bleObserveFailSilent) { if (!bleObserveFailSilent) snprintf(err, errCap, "observer refused (mock)"); return false; }
+    if (bleObserveFail || bleObserveFailSilent) {
+      if (!bleObserveFailSilent) snprintf(err, errCap, "observer refused (mock)");
+      return false;
+    }
     bleObserveMs = ms;
     bleObserveActive = active;
     bleObservingNow = true;
     return true;
   }
-  void bleObserveStop() override { bleObserveStops++; bleObservingNow = false; }
+  void bleObserveStop() override {
+    bleObserveStops++;
+    bleObservingNow = false;
+  }
   bool bleObserving() override { return bleObservingNow; }
   int bleAdverts(BleAdvert* out, int cap, int* dropped) override {
-    if (!bleObservingNow && bleObserveCalls == 0) { *dropped = 0; return 0; }
+    if (!bleObservingNow && bleObserveCalls == 0) {
+      *dropped = 0;
+      return 0;
+    }
     *dropped = bleDroppedVal;
     int n = 0;
-    for (const BleAdvert& a : bleAdvertsSeen) { if (n >= cap) break; out[n++] = a; }
+    for (const BleAdvert& a : bleAdvertsSeen) {
+      if (n >= cap) break;
+      out[n++] = a;
+    }
     return n;
   }
   bool bleScan(int ms, char* err, size_t errCap) override {
-    if (bleScanFail) { snprintf(err, errCap, "scan refused (mock)"); return false; }
+    if (bleScanFail) {
+      snprintf(err, errCap, "scan refused (mock)");
+      return false;
+    }
     bleScanMsLog.push_back(ms);
     bleScanned = true;
     bleScanningNow = true;
     return true;
   }
-  void bleScanStop() override { bleScanStops++; bleScanningNow = false; }
+  void bleScanStop() override {
+    bleScanStops++;
+    bleScanningNow = false;
+  }
   int bleDevices(BleDevice* out, int cap) override {
     if (!bleScanned) return 0;
     int n = 0;
-    for (const BleDevice& d : bleSeen) { if (n >= cap) break; out[n++] = d; }
+    for (const BleDevice& d : bleSeen) {
+      if (n >= cap) break;
+      out[n++] = d;
+    }
     return n;
   }
   bool bleConnect(const char* addr, char* err, size_t errCap) override {
     bleConnectLog.push_back(addr);
-    if (bleConnFail) { snprintf(err, errCap, "pairing refused (mock)"); return false; }
+    if (bleConnFail) {
+      snprintf(err, errCap, "pairing refused (mock)");
+      return false;
+    }
     return true;
   }
   void bleDisconnect() override { bleDisconnects++; }
-  void bleState(BleState* s) override { *s = bleStateVal; s->scanning = bleScanningNow || bleStateVal.scanning; }
+  void bleState(BleState* s) override {
+    *s = bleStateVal;
+    s->scanning = bleScanningNow || bleStateVal.scanning;
+  }
   int blePaired(BleDevice* out, int cap) override {
     int n = 0;
-    for (const BleDevice& d : bleBonds) { if (n >= cap) break; out[n++] = d; }
+    for (const BleDevice& d : bleBonds) {
+      if (n >= cap) break;
+      out[n++] = d;
+    }
     return n;
   }
   bool bleForget(const char* addr) override {
     for (size_t i = 0; i < bleBonds.size(); i++)
-      if (!strcmp(bleBonds[i].addr, addr)) { bleBonds.erase(bleBonds.begin() + i); return true; }
+      if (!strcmp(bleBonds[i].addr, addr)) {
+        bleBonds.erase(bleBonds.begin() + i);
+        return true;
+      }
     return false;
   }
   bool eventKey(KeyInfo* k) override {
@@ -576,7 +697,10 @@ struct MockBackend : Backend {
   bool sleepFail = false;
   const char* wakeCause() override { return wakeCauseVal.c_str(); }
   bool systemSleep(int seconds, char* err, size_t errCap) override {
-    if (sleepFail) { snprintf(err, errCap, "could not arm the timer wake (mock)"); return false; }
+    if (sleepFail) {
+      snprintf(err, errCap, "could not arm the timer wake (mock)");
+      return false;
+    }
     sleepSeconds = seconds;
     return true;  // on the device this never returns
   }
@@ -584,7 +708,10 @@ struct MockBackend : Backend {
   bool txAllowed() override { return net && txPermitted && txApproved; }
   bool txRunning() override { return txUp; }
   bool txStart(int channel, char* err, size_t errCap) override {
-    if (txFail) { snprintf(err, errCap, "esp_wifi_80211_tx refused (mock)"); return false; }
+    if (txFail) {
+      snprintf(err, errCap, "esp_wifi_80211_tx refused (mock)");
+      return false;
+    }
     txUp = true;
     radioEverStarted = true;
     txChannelVal = channel;
@@ -594,8 +721,14 @@ struct MockBackend : Backend {
   void txStop() override { txUp = false; }
   bool txSend(const void* f, size_t n, char* err, size_t errCap) override {
     (void)f;
-    if (n < 24) { snprintf(err, errCap, "frame too short (mock)"); return false; }  // catches a strlen truncation in the binding
-    if (txFail) { snprintf(err, errCap, "the radio refused the frame (mock)"); return false; }
+    if (n < 24) {
+      snprintf(err, errCap, "frame too short (mock)");
+      return false;
+    }  // catches a strlen truncation in the binding
+    if (txFail) {
+      snprintf(err, errCap, "the radio refused the frame (mock)");
+      return false;
+    }
     txSent++;
     return true;
   }
@@ -610,12 +743,18 @@ struct MockBackend : Backend {
   bool monitorAllowed() override { return net && monPermitted && monApproved; }
   bool monitorRunning() override { return monUp; }
   bool monitorStart(int channel, const char* pcapPath, char* err, size_t errCap) override {
-    if (monFail) { snprintf(err, errCap, "esp_wifi_set_promiscuous failed (mock)"); return false; }
+    if (monFail) {
+      snprintf(err, errCap, "esp_wifi_set_promiscuous failed (mock)");
+      return false;
+    }
     monUp = true;
     radioEverStarted = true;
     monChannel = channel;
     monFileBytes = pcapPath ? 24 : 0;  // a PCAP global header
-    if (pcapPath) snprintf(monPathOut, sizeof(monPathOut), "%s", pcapPath); else monPathOut[0] = 0;
+    if (pcapPath)
+      snprintf(monPathOut, sizeof(monPathOut), "%s", pcapPath);
+    else
+      monPathOut[0] = 0;
     return true;
   }
   void monitorStop(uint32_t* pcapBytes) override {
@@ -638,13 +777,20 @@ struct MockBackend : Backend {
   }
   bool monSetFail = false;
   bool monitorSetChannel(int channel, char* err, size_t errCap) override {
-    if (monSetFail) { snprintf(err, errCap, "could not set the channel (mock)"); return false; }
-    if (!monUp && !txUp) { snprintf(err, errCap, "no radio mode is running (mock)"); return false; }
+    if (monSetFail) {
+      snprintf(err, errCap, "could not set the channel (mock)");
+      return false;
+    }
+    if (!monUp && !txUp) {
+      snprintf(err, errCap, "no radio mode is running (mock)");
+      return false;
+    }
     monChannel = channel;
     txChannelVal = channel;
     return true;
   }
-  bool monitorInfo(int* channel, int* captured, int* dropped, char* path, size_t pathCap, uint32_t* pcapBytes) override {
+  bool monitorInfo(int* channel, int* captured, int* dropped, char* path, size_t pathCap,
+                   uint32_t* pcapBytes) override {
     if (!monUp) return false;
     *channel = monChannel;
     *captured = monCaptured;
@@ -662,8 +808,12 @@ struct MockBackend : Backend {
     return true;
   }
   bool hotspotAllowed() override { return net && hotspotPermitted && hotspotApproved; }
-  bool softApStart(const char* ssid, const char* password, int channel, int maxClients, char* ip, size_t ipCap, char* err, size_t errCap) override {
-    if (apFail) { snprintf(err, errCap, "cannot start the hotspot (mock)"); return false; }
+  bool softApStart(const char* ssid, const char* password, int channel, int maxClients, char* ip, size_t ipCap,
+                   char* err, size_t errCap) override {
+    if (apFail) {
+      snprintf(err, errCap, "cannot start the hotspot (mock)");
+      return false;
+    }
     apCalls.push_back({ssid, password ? password : "", password == nullptr, channel, maxClients});
     apUp = true;
     snprintf(ip, ipCap, "192.168.4.1");
@@ -679,30 +829,59 @@ struct MockBackend : Backend {
   void wifiRequestConnect() override { wifiAsked = true; }
   bool wifiInfo(char* ssid, size_t sc, char* ip, size_t ic, int* rssi) override {
     if (!wifiUp) return false;
-    snprintf(ssid, sc, "TestNet"); snprintf(ip, ic, "192.168.1.50"); *rssi = -57;
+    snprintf(ssid, sc, "TestNet");
+    snprintf(ip, ic, "192.168.1.50");
+    *rssi = -57;
     return true;
   }
-  void wifiOff() override { wifiUp = false; apUp = false; enUp = false; monUp = false; txUp = false; }  // like the firmware: the hotspot and espnow stop too
+  void wifiOff() override {
+    wifiUp = false;
+    apUp = false;
+    enUp = false;
+    monUp = false;
+    txUp = false;
+  }  // like the firmware: the hotspot and espnow stop too
   size_t largestFreeBlock() override { return largest; }
   bool httpRequest(const HttpRequest& rq, HttpResult& res) override {
     SeenReq r;
-    r.method = rq.method; r.url = rq.url; r.body = std::string(rq.body ? rq.body : "", rq.bodyLen);
-    r.savePath = rq.savePath ? rq.savePath : ""; r.maxBody = rq.maxBody;
-    r.hasContentType = rq.contentType != nullptr; r.contentType = rq.contentType ? rq.contentType : "";
-    r.hasCa = rq.caPem != nullptr; r.ca = rq.caPem ? rq.caPem : ""; r.wantHeaders = rq.wantHeaders;
+    r.method = rq.method;
+    r.url = rq.url;
+    r.body = std::string(rq.body ? rq.body : "", rq.bodyLen);
+    r.savePath = rq.savePath ? rq.savePath : "";
+    r.maxBody = rq.maxBody;
+    r.hasContentType = rq.contentType != nullptr;
+    r.contentType = rq.contentType ? rq.contentType : "";
+    r.hasCa = rq.caPem != nullptr;
+    r.ca = rq.caPem ? rq.caPem : "";
+    r.wantHeaders = rq.wantHeaders;
     for (int i = 0; i < rq.headerCount; i++) r.headers.emplace_back(rq.headers[i].name, rq.headers[i].value);
     seen.push_back(r);
-    if (!wifiUp) { snprintf(res.error, sizeof(res.error), "wifi is not connected (call wifi.connect() first)"); return false; }
+    if (!wifiUp) {
+      snprintf(res.error, sizeof(res.error), "wifi is not connected (call wifi.connect() first)");
+      return false;
+    }
     auto it = routes.find(rq.url);
-    if (it == routes.end()) { snprintf(res.error, sizeof(res.error), "request failed (no response)"); return false; }
+    if (it == routes.end()) {
+      snprintf(res.error, sizeof(res.error), "request failed (no response)");
+      return false;
+    }
     const FakeResp& f = it->second;
-    if (!f.error.empty()) { snprintf(res.error, sizeof(res.error), "%s", f.error.c_str()); return false; }
+    if (!f.error.empty()) {
+      snprintf(res.error, sizeof(res.error), "%s", f.error.c_str());
+      return false;
+    }
     res.status = f.status;
     if (rq.savePath) {
-      if (f.status >= 200 && f.status < 300) { files[rq.savePath] = f.body; res.bytes = f.body.size(); }
+      if (f.status >= 200 && f.status < 300) {
+        files[rq.savePath] = f.body;
+        res.bytes = f.body.size();
+      }
       return true;
     }
-    if (f.body.size() > rq.maxBody) { snprintf(res.error, sizeof(res.error), "response larger than max_body (%zu bytes): use save_to", rq.maxBody); return false; }
+    if (f.body.size() > rq.maxBody) {
+      snprintf(res.error, sizeof(res.error), "response larger than max_body (%zu bytes): use save_to", rq.maxBody);
+      return false;
+    }
     res.body = (char*)malloc(f.body.size() ? f.body.size() : 1);  // like the firmware: malloc'd, the caller frees
     memcpy(res.body, f.body.data(), f.body.size());
     res.bodyLen = res.bytes = f.body.size();
@@ -720,20 +899,24 @@ struct MockBackend : Backend {
   bool libraryAllowed() override { return library; }
   std::map<std::string, std::pair<std::string, std::string>> epubs;  // abs path -> {title, author}
   std::vector<std::string> epubAsked;
-  bool epubMeta(const char* path, char* title, size_t titleCap, char* author, size_t authorCap, char* err, size_t errCap) override {
+  bool epubMeta(const char* path, char* title, size_t titleCap, char* author, size_t authorCap, char* err,
+                size_t errCap) override {
     epubAsked.push_back(path);
     auto it = epubs.find(path);
     if (it == epubs.end()) {
       snprintf(err, errCap, "mock: no such book");
       return false;
     }
-    snprintf(title, titleCap, "%s", it->second.first.c_str());    // truncates like the firmware (may cut mid-character)
+    snprintf(title, titleCap, "%s", it->second.first.c_str());  // truncates like the firmware (may cut mid-character)
     snprintf(author, authorCap, "%s", it->second.second.c_str());
     return true;
   }
   int zipList(const char* path, ZipEntryInfo* out, int maxEntries, int* total, char* err, size_t errCap) override {
     auto it = zips.find(path);
-    if (it == zips.end()) { snprintf(err, errCap, "cannot open zip (missing, not a zip, or damaged)"); return -1; }
+    if (it == zips.end()) {
+      snprintf(err, errCap, "cannot open zip (missing, not a zip, or damaged)");
+      return -1;
+    }
     *total = (int)it->second.size();
     int n = 0;
     for (auto& e : it->second) {
@@ -744,12 +927,19 @@ struct MockBackend : Backend {
     }
     return n;
   }
-  bool zipRead(const char* path, const char* name, size_t maxBytes, char** data, size_t* len, char* err, size_t errCap) override {
+  bool zipRead(const char* path, const char* name, size_t maxBytes, char** data, size_t* len, char* err,
+               size_t errCap) override {
     auto it = zips.find(path);
-    if (it == zips.end()) { snprintf(err, errCap, "cannot open zip (missing, not a zip, or damaged)"); return false; }
+    if (it == zips.end()) {
+      snprintf(err, errCap, "cannot open zip (missing, not a zip, or damaged)");
+      return false;
+    }
     for (auto& e : it->second) {
       if (e.first != name) continue;
-      if (e.second.size() > maxBytes) { snprintf(err, errCap, "entry is %zu bytes, over max_bytes (%zu)", e.second.size(), maxBytes); return false; }
+      if (e.second.size() > maxBytes) {
+        snprintf(err, errCap, "entry is %zu bytes, over max_bytes (%zu)", e.second.size(), maxBytes);
+        return false;
+      }
       *data = (char*)malloc(e.second.size() ? e.second.size() : 1);  // malloc'd like the firmware; the binding frees it
       memcpy(*data, e.second.data(), e.second.size());
       *len = e.second.size();
@@ -767,28 +957,43 @@ struct MockBackend : Backend {
   std::vector<Backend::WifiScanInfo> nets{{"NetA", -40, true}, {"", -60, false}, {"NetC", -75, true}};
   bool syncOk = true;
   std::string mac_ = "AA:BB:CC:DD:EE:FF";
-  std::string qrSeen;                      // "text|x|y|side"
+  std::string qrSeen;  // "text|x|y|side"
   int roundedSeen = 0;
   bool flPresent = true;
   bool flOn = false;
   int flBr = 60, flWarm = 30;
   int wifiScan(WifiScanInfo* out, int maxEntries, int* total, char* err, size_t errCap) override {
-    if (nets.empty()) { snprintf(err, errCap, "scan failed"); return -1; }
+    if (nets.empty()) {
+      snprintf(err, errCap, "scan failed");
+      return -1;
+    }
     *total = (int)nets.size();
     int c = 0;
-    for (auto& n : nets) { if (c >= maxEntries) break; out[c++] = n; }
+    for (auto& n : nets) {
+      if (c >= maxEntries) break;
+      out[c++] = n;
+    }
     return c;
   }
   bool timeSync(int, char* err, size_t errCap) override {
-    if (!syncOk) { snprintf(err, errCap, "sync failed"); return false; }
+    if (!syncOk) {
+      snprintf(err, errCap, "sync failed");
+      return false;
+    }
     epoch = 1769000000;
     return true;
   }
-  bool timeSet(int64_t e) override { epoch = e; return true; }
+  bool timeSet(int64_t e) override {
+    epoch = e;
+    return true;
+  }
   bool fsRename(const char* from, const char* to, char* err, size_t errCap) override {
     // deliberately permissive (overwrites): the binding itself must refuse an existing target
     auto it = files.find(from);
-    if (it == files.end()) { snprintf(err, errCap, "no such file"); return false; }
+    if (it == files.end()) {
+      snprintf(err, errCap, "no such file");
+      return false;
+    }
     files[to] = it->second;
     files.erase(it);
     return true;
@@ -800,7 +1005,9 @@ struct MockBackend : Backend {
   }
   bool frontlightGet(bool* on, int* brightness, int* warmth) override {
     if (!flPresent) return false;
-    *on = flOn; *brightness = flBr; *warmth = flWarm;
+    *on = flOn;
+    *brightness = flBr;
+    *warmth = flWarm;
     return true;
   }
   void frontlightSet(int brightness, int warmth, int on) override {
@@ -809,50 +1016,97 @@ struct MockBackend : Backend {
     if (on >= 0) flOn = on == 1;
   }
   // The real InflateReader code (same as the firmware) over the generated vectors above.
-  bool inflate(const char* data, size_t n, bool zlib, size_t maxOut, char** out, size_t* outLen, char* err, size_t errCap) override {
-    *out = nullptr; *outLen = 0;
-    if (zlib) { if (n < 3 || (data[0] & 0x0f) != 8) { snprintf(err, errCap, "not a zlib stream"); return false; } data += 2; n -= 2; }
+  bool inflate(const char* data, size_t n, bool zlib, size_t maxOut, char** out, size_t* outLen, char* err,
+               size_t errCap) override {
+    *out = nullptr;
+    *outLen = 0;
+    if (zlib) {
+      if (n < 3 || (data[0] & 0x0f) != 8) {
+        snprintf(err, errCap, "not a zlib stream");
+        return false;
+      }
+      data += 2;
+      n -= 2;
+    }
     InflateReader reader;
-    if (!reader.init(false)) { snprintf(err, errCap, "out of memory"); return false; }
+    if (!reader.init(false)) {
+      snprintf(err, errCap, "out of memory");
+      return false;
+    }
     reader.setSource(reinterpret_cast<const uint8_t*>(data), n);
     size_t cap = 4096 < maxOut ? 4096 : maxOut;
     uint8_t* buf = (uint8_t*)malloc(cap);
-    if (!buf) { snprintf(err, errCap, "out of memory"); return false; }
+    if (!buf) {
+      snprintf(err, errCap, "out of memory");
+      return false;
+    }
     size_t have = 0;
     for (;;) {
       size_t produced = 0;
       InflateStatus st = reader.readAtMost(buf + have, cap - have, &produced);
       have += produced;
       if (st == InflateStatus::Done) break;
-      if (st == InflateStatus::Error) { free(buf); snprintf(err, errCap, "corrupt deflate stream"); return false; }
-      if (cap >= maxOut) { free(buf); snprintf(err, errCap, "inflated data over %zu bytes", maxOut); return false; }
+      if (st == InflateStatus::Error) {
+        free(buf);
+        snprintf(err, errCap, "corrupt deflate stream");
+        return false;
+      }
+      if (cap >= maxOut) {
+        free(buf);
+        snprintf(err, errCap, "inflated data over %zu bytes", maxOut);
+        return false;
+      }
       cap = cap * 2 < maxOut ? cap * 2 : maxOut;
       uint8_t* nb = (uint8_t*)realloc(buf, cap);
-      if (!nb) { free(buf); snprintf(err, errCap, "out of memory"); return false; }
+      if (!nb) {
+        free(buf);
+        snprintf(err, errCap, "out of memory");
+        return false;
+      }
       buf = nb;
     }
-    *out = (char*)buf; *outLen = have;
+    *out = (char*)buf;
+    *outLen = have;
     return true;
   }
   void drawRoundedRect(int x, int y, int w, int h, int radius, bool black, bool filled) override {
-    (void)x; (void)y; (void)w; (void)h; (void)radius; (void)black; (void)filled; roundedSeen++;
+    (void)x;
+    (void)y;
+    (void)w;
+    (void)h;
+    (void)radius;
+    (void)black;
+    (void)filled;
+    roundedSeen++;
   }
   // ---- image mock: path -> source size; records the last draw so tests can check fit/centre/permissions ---------
   std::map<std::string, std::pair<int, int>> images;
-  struct ImageCall { std::string path; int x = 0, y = 0, w = 0, h = 0; };
+  struct ImageCall {
+    std::string path;
+    int x = 0, y = 0, w = 0, h = 0;
+  };
   std::vector<ImageCall> imageCalls;
   std::string imageErr;  // non-empty = the decoder "fails" with this message
-  bool drawImage(const char* absPath, int x, int y, int maxW, int maxH, int* outW, int* outH, char* err, size_t errCap) override {
-    if (!imageErr.empty()) { snprintf(err, errCap, "%s", imageErr.c_str()); return false; }
+  bool drawImage(const char* absPath, int x, int y, int maxW, int maxH, int* outW, int* outH, char* err,
+                 size_t errCap) override {
+    if (!imageErr.empty()) {
+      snprintf(err, errCap, "%s", imageErr.c_str());
+      return false;
+    }
     auto it = images.find(absPath);
-    if (it == images.end()) { snprintf(err, errCap, "cannot read the image header (corrupt or unsupported)"); return false; }
+    if (it == images.end()) {
+      snprintf(err, errCap, "cannot read the image header (corrupt or unsupported)");
+      return false;
+    }
     int dw = it->second.first, dh = it->second.second;
     if (dw > maxW || dh > maxH) {
       const double sc = std::min((double)maxW / dw, (double)maxH / dh);
-      dw = std::max(1, (int)(dw * sc)); dh = std::max(1, (int)(dh * sc));
+      dw = std::max(1, (int)(dw * sc));
+      dh = std::max(1, (int)(dh * sc));
     }
     imageCalls.push_back({absPath, x + (maxW - dw) / 2, y + (maxH - dh) / 2, dw, dh});
-    *outW = dw; *outH = dh;
+    *outW = dw;
+    *outH = dh;
     return true;
   }
   // ---- storage grants mock: (relative path, write?) pairs the "user approved" ---------------------------------------
@@ -887,13 +1141,15 @@ struct MockBackend : Backend {
     textMode = mode;
   }
   // sensors / outputs
-  bool motionPresent = false, motionGyro = true, motionFail = false, envPresent = false, envFail = false, buzzerPresent = false;
+  bool motionPresent = false, motionGyro = true, motionFail = false, envPresent = false, envFail = false,
+       buzzerPresent = false;
   int ledN = 0;
   std::vector<std::string> toneCalls, ledCalls;
   SensorStatus motionRead(Backend::Motion* o) override {
     if (!motionPresent) return SensorStatus::Absent;
     if (motionFail) return SensorStatus::ReadFailed;
-    *o = {0.5f, -0.25f, 1.0f, motionGyro ? 10.0f : 0.0f, motionGyro ? -20.0f : 0.0f, motionGyro ? 30.0f : 0.0f, motionGyro};
+    *o = {0.5f,      -0.25f, 1.0f, motionGyro ? 10.0f : 0.0f, motionGyro ? -20.0f : 0.0f, motionGyro ? 30.0f : 0.0f,
+          motionGyro};
     return SensorStatus::Ok;
   }
   SensorStatus envRead(float* t, float* h) override {
@@ -915,26 +1171,48 @@ struct MockBackend : Backend {
   }
   int ledCount() override { return ledN; }
   void ledSet(int i, int r, int g, int b) override {
-    ledCalls.push_back((i < 0 ? std::string("all ") : "set " + std::to_string(i) + " ") + std::to_string(r) + " " + std::to_string(g) + " " + std::to_string(b));
+    ledCalls.push_back((i < 0 ? std::string("all ") : "set " + std::to_string(i) + " ") + std::to_string(r) + " " +
+                       std::to_string(g) + " " + std::to_string(b));
   }
   void ledOff() override { ledCalls.push_back("off"); }
   void ledBrightness(int v) override { ledCalls.push_back("brightness " + std::to_string(v)); }
   uint64_t rng = 0x9e3779b97f4a7c15ull;  // xorshift: deterministic but different on every call
-  void randomBytes(uint8_t* out, size_t n) override { for (size_t i = 0; i < n; i++) { rng ^= rng << 13; rng ^= rng >> 7; rng ^= rng << 17; out[i] = (uint8_t)(rng >> 24); } }
+  void randomBytes(uint8_t* out, size_t n) override {
+    for (size_t i = 0; i < n; i++) {
+      rng ^= rng << 13;
+      rng ^= rng >> 7;
+      rng ^= rng << 17;
+      out[i] = (uint8_t)(rng >> 24);
+    }
+  }
   int grantCount() override { return (int)grants.size(); }
-  const char* grantPath(int i, bool* write) override { *write = grants[i].second; return grants[i].first.c_str(); }
+  const char* grantPath(int i, bool* write) override {
+    *write = grants[i].second;
+    return grants[i].first.c_str();
+  }
   // ---- restart mock: records the requested entry script ---------------------------------------------------------
   std::string restartedTo;
-  bool requestRestart(const char* entry) override { restartedTo = entry; return true; }
+  bool requestRestart(const char* entry) override {
+    restartedTo = entry;
+    return true;
+  }
   const char* entryName() override { return "main.lua"; }
   int64_t epoch = 0;  // 0 = clock not trusted
-  int64_t epochNow() override { return epoch ? epoch + now / 1000 : 0; }  // epoch = clock at app start; advances with mock millis
+  int64_t epochNow() override {
+    return epoch ? epoch + now / 1000 : 0;
+  }  // epoch = clock at app start; advances with mock millis
   bool localDate(int64_t e, int out[8]) override {
     time_t t = (time_t)e;
     struct tm g;
     gmtime_r(&t, &g);  // mock "local time" = UTC
-    out[0] = g.tm_year + 1900; out[1] = g.tm_mon + 1; out[2] = g.tm_mday; out[3] = g.tm_hour;
-    out[4] = g.tm_min; out[5] = g.tm_sec; out[6] = g.tm_wday + 1; out[7] = g.tm_yday + 1;
+    out[0] = g.tm_year + 1900;
+    out[1] = g.tm_mon + 1;
+    out[2] = g.tm_mday;
+    out[3] = g.tm_hour;
+    out[4] = g.tm_min;
+    out[5] = g.tm_sec;
+    out[6] = g.tm_wday + 1;
+    out[7] = g.tm_yday + 1;
     return true;
   }
   bool fsWrite(const char* p, const void* d, size_t n, bool append) override {
@@ -1000,12 +1278,12 @@ struct MockBackend : Backend {
 };
 
 static int g_fail = 0;
-#define CHECK(c)                                                         \
-  do {                                                                   \
-    if (!(c)) {                                                          \
-      printf("  FAIL line %d: %s\n", __LINE__, #c);                      \
-      g_fail++;                                                          \
-    }                                                                    \
+#define CHECK(c)                                    \
+  do {                                              \
+    if (!(c)) {                                     \
+      printf("  FAIL line %d: %s\n", __LINE__, #c); \
+      g_fail++;                                     \
+    }                                               \
   } while (0)
 
 // Drive like the Activity does. Returns final status. Feeds queued events when Waiting.
@@ -1038,14 +1316,17 @@ static bool setup(LuaVm& vm, MockBackend& be, const char* src, size_t budget = 9
   return vm.load("test.lua", src, strlen(src));
 }
 
-static void dump(MockBackend& be) { for (auto& l : be.logs) printf("    log| %s\n", l.c_str()); }
+static void dump(MockBackend& be) {
+  for (auto& l : be.logs) printf("    log| %s\n", l.c_str());
+}
 #define TEST(name) printf("[test] %s\n", name)
 
 int main() {
   setvbuf(stdout, nullptr, _IONBF, 0);
   {
     TEST("hello draws and finishes");
-    LuaVm vm; MockBackend be;
+    LuaVm vm;
+    MockBackend be;
     setup(vm, be, "gfx.clear() gfx.text(10,20,'hi') gfx.rect(1,2,3,4,true) gfx.present()");
     CHECK(run(vm, be) == Status::Finished);
     CHECK(be.calls.size() == 4);
@@ -1055,15 +1336,17 @@ int main() {
   }
   {
     TEST("text flags: center/right/bold/white, float coords");
-    LuaVm vm; MockBackend be;
+    LuaVm vm;
+    MockBackend be;
     setup(vm, be, "gfx.text(400.0/1,10,'abcd','small','bcw') gfx.text(100,0,'ab','ui','r')");
     CHECK(run(vm, be) == Status::Finished);
     CHECK(be.calls[0] == "text:380,10:abcd:f-2:s1:w");  // 400 - 40/2
-    CHECK(be.calls[1] == "text:80,0:ab:f1:s0:b");      // 100 - 20
+    CHECK(be.calls[1] == "text:80,0:ab:f1:s0:b");       // 100 - 20
   }
   {
     TEST("unknown font raises an error with traceback");
-    LuaVm vm; MockBackend be;
+    LuaVm vm;
+    MockBackend be;
     setup(vm, be, "gfx.text(0,0,'x','nope')");
     CHECK(run(vm, be) == Status::Error);
     CHECK(vm.error().find("unknown font 'nope'") != std::string::npos);
@@ -1071,12 +1354,13 @@ int main() {
   }
   {
     TEST("input.wait: fast path, yield+resume, timeout nil");
-    LuaVm vm; MockBackend be;
+    LuaVm vm;
+    MockBackend be;
     be.events = {"left"};
     setup(vm, be,
-          "a = input.wait(100)\n"            // queued: fast path
-          "b = input.wait(100)\n"            // empty: yields, host feeds 'confirm'
-          "c = input.wait(50)\n"             // yields, host times out -> nil
+          "a = input.wait(100)\n"  // queued: fast path
+          "b = input.wait(100)\n"  // empty: yields, host feeds 'confirm'
+          "c = input.wait(50)\n"   // yields, host times out -> nil
           "print(a, b, tostring(c))");
     CHECK(vm.status() == Status::Preempted);
     Status s = vm.resume();
@@ -1088,7 +1372,8 @@ int main() {
   }
   {
     TEST("app.sleep is timer-only; input.wait() with no timeout waits forever");
-    LuaVm vm; MockBackend be;
+    LuaVm vm;
+    MockBackend be;
     setup(vm, be, "app.sleep(250) input.wait()");
     vm.resume();
     CHECK(vm.status() == Status::Waiting && vm.timeoutMs() == 250 && !vm.wakesOnEvent());
@@ -1097,7 +1382,8 @@ int main() {
   }
   {
     TEST("app.exit parks and requests exit");
-    LuaVm vm; MockBackend be;
+    LuaVm vm;
+    MockBackend be;
     setup(vm, be, "app.exit() error('unreachable')");
     run(vm, be);
     CHECK(be.exitReq);
@@ -1105,7 +1391,8 @@ int main() {
   }
   {
     TEST("busy loop is preempted, host stays in control");
-    LuaVm vm; MockBackend be;
+    LuaVm vm;
+    MockBackend be;
     setup(vm, be, "local n=0 while true do n=n+1 end");
     vm.setPreemptInterval(1000);
     int yields = 0;
@@ -1116,7 +1403,8 @@ int main() {
   }
   {
     TEST("memory budget: allocation failure is a catchable Lua error, VM frees fully");
-    LuaVm vm; MockBackend be;
+    LuaVm vm;
+    MockBackend be;
     setup(vm, be,
           "local t = {} local ok, err = pcall(function() for i=1,1e6 do t[i] = {i} end end)\n"
           "t = nil\n"
@@ -1133,9 +1421,11 @@ int main() {
   }
   {
     TEST("sandbox: no io/os/package/debug/dofile; load is text-only; bytecode rejected");
-    LuaVm vm; MockBackend be;
+    LuaVm vm;
+    MockBackend be;
     setup(vm, be,
-          "print(io, os, package, debug, dofile, loadfile, type(load), type(require), string ~= nil, math ~= nil, utf8 ~= nil, "
+          "print(io, os, package, debug, dofile, loadfile, type(load), type(require), string ~= nil, math ~= nil, utf8 "
+          "~= nil, "
           "coroutine ~= nil)");
     CHECK(run(vm, be) == Status::Finished);
     CHECK(be.logs[0] == "nil\tnil\tnil\tnil\tnil\tnil\tfunction\tfunction\ttrue\ttrue\ttrue\ttrue");
@@ -1146,7 +1436,8 @@ int main() {
   }
   {
     TEST("yield across pcall works (coroutine-based wait inside protected call)");
-    LuaVm vm; MockBackend be;
+    LuaVm vm;
+    MockBackend be;
     be.events = {"back"};
     setup(vm, be, "local ok, e = pcall(function() app.sleep(10) return input.wait(10) end) print(ok, e)");
     CHECK(run(vm, be) == Status::Finished);
@@ -1154,7 +1445,8 @@ int main() {
   }
   {
     TEST("system/app API values");
-    LuaVm vm; MockBackend be;
+    LuaVm vm;
+    MockBackend be;
     be.now = 5000;
     setup(vm, be,
           "local f,m = system.heap() local u,p,b = system.lua_mem() local w,h = gfx.size()\n"
@@ -1164,7 +1456,8 @@ int main() {
   }
   {
     TEST("error in script surfaces message, VM can still close cleanly");
-    LuaVm vm; MockBackend be;
+    LuaVm vm;
+    MockBackend be;
     setup(vm, be, "local t = nil; t.x = 1");
     CHECK(run(vm, be) == Status::Error);
     CHECK(vm.error().find("attempt to index a nil value") != std::string::npos);
@@ -1174,14 +1467,17 @@ int main() {
 
   {
     TEST("heap guard: allocations never leave less than the floor free on the (simulated) device");
-    LuaVm vm; MockBackend be;
+    LuaVm vm;
+    MockBackend be;
     be.simTotal = 150 * 1024;
     be.simVm = &vm;
     const size_t floor = 40 * 1024;
     CHECK(vm.open(1024 * 1024));  // budget alone would allow far more than the device has
     vm.setHeapGuard([](void* ud) -> size_t { return static_cast<MockBackend*>(ud)->freeHeapQuick(); }, &be, floor);
     registerApi(vm, be);
-    const char* src = "local t = {} local ok, e = pcall(function() for i = 1, 1e6 do t[i] = {i} end end) t = nil collectgarbage() print(ok, tostring(e):sub(1, 17)) print(#string.rep('z', 1000))";
+    const char* src =
+        "local t = {} local ok, e = pcall(function() for i = 1, 1e6 do t[i] = {i} end end) t = nil collectgarbage() "
+        "print(ok, tostring(e):sub(1, 17)) print(#string.rep('z', 1000))";
     CHECK(vm.load("guard", src, strlen(src)));
     CHECK(run(vm, be, 1000000) == Status::Finished);
     CHECK(be.logs[0] == "false\tnot enough memory");
@@ -1190,24 +1486,31 @@ int main() {
     CHECK(vm.peakBytes() > 60 * 1024);  // and it did use most of what was allowed
   }
   {
-    TEST("heap guard: setHeapFloor changes the floor while the app runs (lowered after wifi.connect, as the activity does)");
-    LuaVm vm; MockBackend be;
+    TEST(
+        "heap guard: setHeapFloor changes the floor while the app runs (lowered after wifi.connect, as the activity "
+        "does)");
+    LuaVm vm;
+    MockBackend be;
     be.simTotal = 150 * 1024;
     be.simVm = &vm;
     CHECK(vm.open(1024 * 1024));
     vm.setHeapGuard([](void* ud) -> size_t { return static_cast<MockBackend*>(ud)->freeHeapQuick(); }, &be, 40 * 1024);
     vm.setHeapFloor(12 * 1024);  // what LuaAppActivity does once WiFi is up
     registerApi(vm, be);
-    const char* src = "local t = {} local ok, e = pcall(function() for i = 1, 1e6 do t[i] = {i} end end) t = nil collectgarbage() print(ok, tostring(e):sub(1, 17)) print(#string.rep('z', 1000))";
+    const char* src =
+        "local t = {} local ok, e = pcall(function() for i = 1, 1e6 do t[i] = {i} end end) t = nil collectgarbage() "
+        "print(ok, tostring(e):sub(1, 17)) print(#string.rep('z', 1000))";
     CHECK(vm.load("guard", src, strlen(src)));
     CHECK(run(vm, be, 1000000) == Status::Finished);
     CHECK(be.logs[0] == "false\tnot enough memory");
-    CHECK(vm.peakBytes() <= be.simTotal - 12 * 1024);   // the new floor is still enforced...
-    CHECK(vm.peakBytes() > be.simTotal - 40 * 1024);    // ...and the VM used memory the old 40 KB floor would have refused
+    CHECK(vm.peakBytes() <= be.simTotal - 12 * 1024);  // the new floor is still enforced...
+    CHECK(vm.peakBytes() >
+          be.simTotal - 40 * 1024);  // ...and the VM used memory the old 40 KB floor would have refused
   }
   {
     TEST("regression: script dying of uncaught OOM is reported, no panic/abort");
-    LuaVm vm; MockBackend be;
+    LuaVm vm;
+    MockBackend be;
     setup(vm, be, "local t = {} while true do t[#t + 1] = {} end", 64 * 1024);
     CHECK(run(vm, be, 1000000) == Status::Error);
     CHECK(vm.error().find("not enough memory") != std::string::npos);
@@ -1226,7 +1529,11 @@ int main() {
           std::string fn = e->d_name;
           if (fn == "." || fn == "..") continue;
           std::string full = dir + "/" + fn;
-          if (DIR* sub = opendir(full.c_str())) { closedir(sub); loadDir(be, full, rel + fn + "/", mainSrc); continue; }
+          if (DIR* sub = opendir(full.c_str())) {
+            closedir(sub);
+            loadDir(be, full, rel + fn + "/", mainSrc);
+            continue;
+          }
           std::ifstream in(full, std::ios::binary);
           std::stringstream ss;
           ss << in.rdbuf();
@@ -1237,22 +1544,30 @@ int main() {
       };
   auto loadApp = [&](MockBackend& be, const char* name) {
     std::string mainSrc;
-    const std::string dir = name == std::string("selftest_lua")
-        ? std::string("sd_card_contents/plugins/lua_tests_lua")  // selftest now lives in the test hub
-        : std::string("sd_card_contents/plugins/") + name;
+    const std::string dir =
+        name == std::string("selftest_lua")
+            ? std::string("sd_card_contents/plugins/lua_tests_lua")  // selftest now lives in the test hub
+            : std::string("sd_card_contents/plugins/") + name;
     loadDir(be, dir, "", mainSrc);
     return mainSrc;
   };
   {
     TEST("example app selftest_lua: every on-device check also passes on the host mock (now in the test hub)");
-    LuaVm vm; MockBackend be;
+    LuaVm vm;
+    MockBackend be;
     std::string src;
     {
       std::string helper;
-      { std::ifstream f("sd_card_contents/plugins/lua_tests_lua/helper.lua"); std::stringstream ss; ss << f.rdbuf(); helper = ss.str(); }
+      {
+        std::ifstream f("sd_card_contents/plugins/lua_tests_lua/helper.lua");
+        std::stringstream ss;
+        ss << f.rdbuf();
+        helper = ss.str();
+      }
       be.files["/plugins/test/helper.lua"] = helper;  // the selftest requires "helper" from its app dir
       std::ifstream f("sd_card_contents/plugins/lua_tests_lua/tests/selftest.lua");
-      std::stringstream ss; ss << f.rdbuf();
+      std::stringstream ss;
+      ss << f.rdbuf();
       src = ss.str();
     }
     CHECK(!src.empty());
@@ -1262,7 +1577,13 @@ int main() {
     Status st = run(vm, be, 2000000);
     CHECK(st == Status::Waiting);  // finished all checks, parked on input.wait()
     int pass = 0, fail = 0;
-    for (auto& l : be.logs) { if (l.rfind("PASS", 0) == 0) pass++; if (l.rfind("FAIL", 0) == 0) { fail++; printf("    %s\n", l.c_str()); } }
+    for (auto& l : be.logs) {
+      if (l.rfind("PASS", 0) == 0) pass++;
+      if (l.rfind("FAIL", 0) == 0) {
+        fail++;
+        printf("    %s\n", l.c_str());
+      }
+    }
     CHECK(fail == 0);
     if (pass != 12) printf("    pass=%d fail=%d\n", pass, fail);
     CHECK(pass == 12);
@@ -1271,7 +1592,8 @@ int main() {
     TEST("example app counter_lua: require + json + fs persistence across launches");
     std::string saved;
     for (int launch = 1; launch <= 2; launch++) {
-      LuaVm vm; MockBackend be;
+      LuaVm vm;
+      MockBackend be;
       std::string src = loadApp(be, "counter_lua");
       if (!saved.empty()) be.files["/.crosslua/data/test/state.json"] = saved;  // app name is "test" in the mock
       CHECK(vm.open(96 * 1024));
@@ -1280,7 +1602,9 @@ int main() {
       CHECK(vm.resume() == Status::Waiting);
       be.events = {"confirm", "confirm", "right", "left"};
       CHECK(run(vm, be) == Status::Waiting);  // consumed all four, now idle waiting for input
-      for (auto& c : be.calls) CHECK(c.find("failed") == std::string::npos && c.find("error") == std::string::npos);  // nothing alarming is DRAWN
+      for (auto& c : be.calls)
+        CHECK(c.find("failed") == std::string::npos &&
+              c.find("error") == std::string::npos);  // nothing alarming is DRAWN
       saved = be.files["/.crosslua/data/test/state.json"];
       printf("    launch %d saved: %s\n", launch, saved.c_str());
       CHECK(vm.resume("back") == Status::Finished);
@@ -1292,7 +1616,8 @@ int main() {
 
   {
     TEST("study_lua scheduler: Lua port == crossplay's C++ FSRS-5 + learning steps (golden, 400 scenarios)");
-    LuaVm vm; MockBackend be;
+    LuaVm vm;
+    MockBackend be;
     loadApp(be, "study_lua");  // puts fsrs.lua / sched.lua / ... at /plugins/test/
     CHECK(vm.open(2 * 1024 * 1024));
     registerApi(vm, be);
@@ -1336,20 +1661,28 @@ int main() {
       gi++;
       lua_getglobal(L, "golden_run");
       lua_pushstring(L, scen.c_str());
-      if (lua_pcall(L, 1, 1, 0) != LUA_OK) { printf("    lua error: %s\n", lua_tostring(L, -1)); bad++; break; }
+      if (lua_pcall(L, 1, 1, 0) != LUA_OK) {
+        printf("    lua error: %s\n", lua_tostring(L, -1));
+        bad++;
+        break;
+      }
       std::stringstream got(lua_tostring(L, -1));
       lua_pop(L, 1);
       std::string gotLine;
       while (std::getline(got, gotLine)) {
         steps++;
         const std::string& want = golden[gi++];
-        if (gotLine == want) { identical++; continue; }
+        if (gotLine == want) {
+          identical++;
+          continue;
+        }
         // Same integers, floats within 1e-4 relative? (float printing / libm last-digit differences)
         std::istringstream a(gotLine), b(want);
         std::string ta, tb;
         bool ok = true;
         for (int col = 0; col < 11 && ok; col++) {
-          a >> ta; b >> tb;
+          a >> ta;
+          b >> tb;
           if (col == 4 || col == 5) {
             double x = atof(ta.c_str()), y = atof(tb.c_str());
             ok = std::fabs(x - y) <= 1e-4 * std::max(1.0, std::fabs(y));
@@ -1357,8 +1690,14 @@ int main() {
             ok = ta == tb;
           }
         }
-        if (ok) close++;
-        else { if (bad < 5) printf("    scenario %d step mismatch:\n      lua: %s\n      c++: %s\n", sidx, gotLine.c_str(), want.c_str()); bad++; }
+        if (ok)
+          close++;
+        else {
+          if (bad < 5)
+            printf("    scenario %d step mismatch:\n      lua: %s\n      c++: %s\n", sidx, gotLine.c_str(),
+                   want.c_str());
+          bad++;
+        }
       }
       sidx++;
     }
@@ -1379,11 +1718,13 @@ int main() {
     {
       std::stringstream ss(be.files["/plugins/test/decks/ports.tsv"]);
       std::string l;
-      while (std::getline(ss, l)) if (!l.empty() && l[0] != '#' && l.find('\t') != std::string::npos) cardLines++;
+      while (std::getline(ss, l))
+        if (!l.empty() && l[0] != '#' && l.find('\t') != std::string::npos) cardLines++;
     }
     auto frame = [&](MockBackend& b) {  // all text drawn since the last clear, "|"-joined
       size_t from = 0;
-      for (size_t i = 0; i < b.calls.size(); i++) if (b.calls[i] == "clear:white") from = i;
+      for (size_t i = 0; i < b.calls.size(); i++)
+        if (b.calls[i] == "clear:white") from = i;
       std::string out;
       for (size_t i = from; i < b.calls.size(); i++)
         if (b.calls[i].rfind("text:", 0) == 0) {
@@ -1396,7 +1737,10 @@ int main() {
     auto record = [&](int num, int* state, int* step, int* reps, int* lapses, int* due) {
       const std::string& f = be.files["/.crosslua/data/test/study/ports/cards.bin"];
       const unsigned char* r = (const unsigned char*)f.data() + 12 + (num - 1) * 24;
-      *state = r[0]; *step = r[1]; *reps = r[2] | r[3] << 8; *lapses = r[4] | r[5] << 8;
+      *state = r[0];
+      *step = r[1];
+      *reps = r[2] | r[3] << 8;
+      *lapses = r[4] | r[5] << 8;
       *due = (int)(r[6] | r[7] << 8 | r[8] << 16 | (unsigned)r[9] << 24);
     };
     auto settle = [&](LuaVm& vm, std::initializer_list<const char*> evs) {
@@ -1418,26 +1762,29 @@ int main() {
       printf("    first frame: %s | status=%d err=%s\n", frame(be).c_str(), (int)vm.status(), vm.error().c_str());
       CHECK(has(be, "Study|") && has(be, "ports|"));
       CHECK(has(be, ("10 new   0 learn   0 due   (" + std::to_string(cardLines) + " cards)").c_str()));
-      CHECK(settle(vm, {"confirm"}) == Status::Waiting);                    // open the deck
+      CHECK(settle(vm, {"confirm"}) == Status::Waiting);  // open the deck
       CHECK(has(be, "TCP 21|") && has(be, "Show|") && has(be, "10 new  0 learn  0 due"));
-      CHECK(settle(vm, {"confirm"}) == Status::Waiting);                    // reveal
+      CHECK(settle(vm, {"confirm"}) == Status::Waiting);  // reveal
       CHECK(has(be, "FTP (control)|") && has(be, "Again|1m|Good|10m|Hard|6m|Easy|"));
-      CHECK(settle(vm, {"confirm"}) == Status::Waiting);                    // Good -> step 2 of [1m,10m]
+      CHECK(settle(vm, {"confirm"}) == Status::Waiting);  // Good -> step 2 of [1m,10m]
       CHECK(has(be, "TCP 22|"));
       record(1, &state, &step, &reps, &lapses, &due);
-      CHECK(state == 1 && step == 1 && reps == 1 && lapses == 0);          // learning, on the 10 min step
+      CHECK(state == 1 && step == 1 && reps == 1 && lapses == 0);  // learning, on the 10 min step
       record(2, &state, &step, &reps, &lapses, &due);
-      CHECK(state == 0 && reps == 0);                                       // untouched card stays new
+      CHECK(state == 0 && reps == 0);  // untouched card stays new
       // nine more new cards, all Easy: graduate immediately (10 new cards/day limit now reached)
       be.calls.clear();
-      for (int i = 0; i < 9; i++) { be.events.push_back("confirm"); be.events.push_back("right"); }
+      for (int i = 0; i < 9; i++) {
+        be.events.push_back("confirm");
+        be.events.push_back("right");
+      }
       uint32_t t0 = be.now;
       CHECK(run(vm, be, 200000) == Status::Waiting);
-      CHECK(be.now - t0 >= 9 * 60 * 1000);                                  // the "next card in N min" wait really ran ~10 min
-      CHECK(has(be, "TCP 21|") && has(be, "Show|"));                       // card 1 came back after its 10 min delay
+      CHECK(be.now - t0 >= 9 * 60 * 1000);            // the "next card in N min" wait really ran ~10 min
+      CHECK(has(be, "TCP 21|") && has(be, "Show|"));  // card 1 came back after its 10 min delay
       record(10, &state, &step, &reps, &lapses, &due0);
-      CHECK(state == 2 && reps == 1);                                       // easy graduated straight to review
-      CHECK(settle(vm, {"confirm", "confirm"}) == Status::Waiting);         // show, Good -> last step done -> review
+      CHECK(state == 2 && reps == 1);                                // easy graduated straight to review
+      CHECK(settle(vm, {"confirm", "confirm"}) == Status::Waiting);  // show, Good -> last step done -> review
       CHECK(has(be, "All done for today!|11 cards reviewed|"));
       record(1, &state, &step, &reps, &lapses, &due);
       CHECK(state == 2 && reps == 2);
@@ -1445,9 +1792,9 @@ int main() {
       CHECK(meta.find("\"n\":10") != std::string::npos);
       for (auto& c : be.calls) CHECK(c.find("rror") == std::string::npos && c.find("ailed") == std::string::npos);
       printf("    lua mem: used %zu, peak %zu of budget %zu\n", vm.usedBytes(), vm.peakBytes(), vm.budgetBytes());
-      CHECK(settle(vm, {"back"}) == Status::Waiting);                       // back to the deck list
+      CHECK(settle(vm, {"back"}) == Status::Waiting);  // back to the deck list
       CHECK(has(be, "Study|") && has(be, "ports|"));
-      CHECK(settle(vm, {"back"}) == Status::Finished);                      // Back on the list exits the app
+      CHECK(settle(vm, {"back"}) == Status::Finished);  // Back on the list exits the app
     }
     // ---- 40 days later: the 10 cards are due, 10 fresh new cards are allowed again
     be.epoch += 40 * 86400;
@@ -1456,12 +1803,12 @@ int main() {
       CHECK(launch(vm) == Status::Waiting);
       CHECK(has(be, ("10 new   0 learn   10 due   (" + std::to_string(cardLines) + " cards)").c_str()));
       CHECK(settle(vm, {"confirm"}) == Status::Waiting);
-      CHECK(has(be, "TCP 21|"));                                            // reviews come first, oldest due first
-      CHECK(settle(vm, {"confirm", "confirm"}) == Status::Waiting);         // Good
+      CHECK(has(be, "TCP 21|"));                                     // reviews come first, oldest due first
+      CHECK(settle(vm, {"confirm", "confirm"}) == Status::Waiting);  // Good
       record(1, &state, &step, &reps, &lapses, &due);
       CHECK(state == 2 && reps == 3 && lapses == 0 && due > 20000 + 40);
       CHECK(has(be, "TCP 22|"));
-      CHECK(settle(vm, {"confirm", "back"}) == Status::Waiting);            // Again on a review card = lapse -> relearn
+      CHECK(settle(vm, {"confirm", "back"}) == Status::Waiting);  // Again on a review card = lapse -> relearn
       record(2, &state, &step, &reps, &lapses, &due);
       CHECK(state == 3 && lapses == 1 && reps == 2);
       for (auto& c : be.calls) CHECK(c.find("rror") == std::string::npos && c.find("ailed") == std::string::npos);
@@ -1471,26 +1818,30 @@ int main() {
     TEST("debug info: stripped by default (smaller, '?' in errors); <dataDir>/debug.flag keeps line numbers");
     size_t usedStripped = 0, usedKept = 0;
     for (int keep = 0; keep < 2; keep++) {
-      LuaVm vm; MockBackend be;
+      LuaVm vm;
+      MockBackend be;
       if (keep) be.files["/.crosslua/data/test/debug.flag"] = "1";
       std::string mod = "local M = {}\n";
-      for (int i = 0; i < 60; i++) mod += "function M.f" + std::to_string(i) + "(a, b) local x = a + b local y = x * 2 return y, x end\n";
+      for (int i = 0; i < 60; i++)
+        mod += "function M.f" + std::to_string(i) + "(a, b) local x = a + b local y = x * 2 return y, x end\n";
       mod += "function M.boom(t) return t.nope.deeper end\nreturn M\n";
       be.files["/plugins/test/big.lua"] = mod;
       CHECK(vm.open(512 * 1024));
       registerApi(vm, be);
       CHECK(vm.stripDebug() == !keep);
-      const char* script = "local m = require('big')\nprint(m.f7(1, 2))\nprint(pcall(m.boom, {}))\nprint(pcall(function() local z = nil; return z.x end))\nprint(select(2, pcall(error, 'plain')))";
+      const char* script =
+          "local m = require('big')\nprint(m.f7(1, 2))\nprint(pcall(m.boom, {}))\nprint(pcall(function() local z = "
+          "nil; return z.x end))\nprint(select(2, pcall(error, 'plain')))";
       CHECK(vm.load("t", script, strlen(script)));
       CHECK(run(vm, be) == Status::Finished);
       CHECK(be.logs.size() == 4 && be.logs[0] == "6\t3");
       if (keep) {
-        CHECK(be.logs[1].find("app:big.lua:") != std::string::npos);            // file:line present
-        CHECK(be.logs[2].find("local 'z'") != std::string::npos);               // variable names present
+        CHECK(be.logs[1].find("app:big.lua:") != std::string::npos);  // file:line present
+        CHECK(be.logs[2].find("local 'z'") != std::string::npos);     // variable names present
       } else {
         CHECK(be.logs[1].find("false\t?:") == 0 || be.logs[1].find("?:-1:") != std::string::npos);
         CHECK(be.logs[1].find("app:big.lua") == std::string::npos);
-        CHECK(be.logs[2].find("local 'z'") == std::string::npos);               // names are gone, message still produced
+        CHECK(be.logs[2].find("local 'z'") == std::string::npos);  // names are gone, message still produced
         CHECK(be.logs[2].find("attempt to index a nil value") != std::string::npos);
       }
       CHECK(be.logs[3] == "plain");
@@ -1498,7 +1849,8 @@ int main() {
       (keep ? usedKept : usedStripped) = vm.usedBytes();
       printf("    %s: %zu B after require\n", keep ? "debug.flag (kept)" : "stripped", vm.usedBytes());
     }
-    CHECK(usedKept - usedStripped >= 2900);  // stripping saves real memory (~4.5 KB on this 5 KB module; baseline VM is ~30 KB of "used")
+    CHECK(usedKept - usedStripped >=
+          2900);  // stripping saves real memory (~4.5 KB on this 5 KB module; baseline VM is ~30 KB of "used")
   }
   {
     TEST("study_lua store.scan: 3000 overdue cards stay inside a tight memory budget, order + limits exact");
@@ -1545,7 +1897,9 @@ int main() {
     dump(be);
   }
   {
-    TEST("game2048_lua rules: slide/merge-once, directions, spawn odds, win, game over, undo, save validation, invariants");
+    TEST(
+        "game2048_lua rules: slide/merge-once, directions, spawn odds, win, game over, undo, save validation, "
+        "invariants");
     MockBackend be;
     loadApp(be, "game2048_lua");
     LuaVm vm;
@@ -1617,15 +1971,30 @@ int main() {
     CHECK(vm.load("t", script, strlen(script)));
     CHECK(run(vm, be, 3000000) == Status::Finished);
     const char* want[] = {
-        "2 2 0 0 | 8 true", "2 2 0 0 | 4 true", "0 0 0 0 | 0 false", "1 2 3 4 | 0 false", "2 0 0 0 | 4 true",
-        "2 2 0 0 | 4 true", "2 2 2 0 | 4 true", "4 3 0 0 | 16 true", "2 0 0 0 | 0 true",
-        "right\t1=1,4=3", "down\t1=1,13=3", "left\t1=1,13=3", "up\t1=1,4=3",
-        "false\t0\t1=3", "can_move full\tfalse\tfalse", "can_move hole\ttrue", "over after\ttrue\t1",
-        "win\t11\ttrue\ttrue\t2048", "undo1\ttrue\t1=1,2=1\t0\t0\tundo2\tfalse",
+        "2 2 0 0 | 8 true",
+        "2 2 0 0 | 4 true",
+        "0 0 0 0 | 0 false",
+        "1 2 3 4 | 0 false",
+        "2 0 0 0 | 4 true",
+        "2 2 0 0 | 4 true",
+        "2 2 2 0 | 4 true",
+        "4 3 0 0 | 16 true",
+        "2 0 0 0 | 0 true",
+        "right\t1=1,4=3",
+        "down\t1=1,13=3",
+        "left\t1=1,13=3",
+        "up\t1=1,4=3",
+        "false\t0\t1=3",
+        "can_move full\tfalse\tfalse",
+        "can_move hole\ttrue",
+        "over after\ttrue\t1",
+        "win\t11\ttrue\ttrue\t2048",
+        "undo1\ttrue\t1=1,2=1\t0\t0\tundo2\tfalse",
     };
     for (size_t i = 0; i < sizeof(want) / sizeof(want[0]); i++) {
       CHECK(i < be.logs.size() && be.logs[i] == want[i]);
-      if (i < be.logs.size() && be.logs[i] != want[i]) printf("    [%zu] got '%s' want '%s'\n", i, be.logs[i].c_str(), want[i]);
+      if (i < be.logs.size() && be.logs[i] != want[i])
+        printf("    [%zu] got '%s' want '%s'\n", i, be.logs[i].c_str(), want[i]);
     }
     CHECK(be.logs.size() == 22);
     if (be.logs.size() == 22) {
@@ -1640,7 +2009,8 @@ int main() {
     TEST("game2048_lua app: scripted session (moves, undo, menu, new game, persistence, corrupt save)");
     auto frameOf = [](MockBackend& b) {
       size_t from = 0;
-      for (size_t i = 0; i < b.calls.size(); i++) if (b.calls[i] == "clear:white") from = i;
+      for (size_t i = 0; i < b.calls.size(); i++)
+        if (b.calls[i] == "clear:white") from = i;
       std::string out;
       for (size_t i = from; i < b.calls.size(); i++)
         if (b.calls[i].rfind("text:", 0) == 0) {
@@ -1673,18 +2043,19 @@ int main() {
       LuaVm vm;
       CHECK(launch(vm) == Status::Waiting);
       std::string f0 = frameOf(be);
-      CHECK(f0.find("2048|") == 0 && f0.find("Score 0|") != std::string::npos && f0.find("Best 0|") != std::string::npos);
+      CHECK(f0.find("2048|") == 0 && f0.find("Score 0|") != std::string::npos &&
+            f0.find("Best 0|") != std::string::npos);
       CHECK(f0.find("Moves 0|") != std::string::npos && f0.find("Menu|Undo|Left|Right|") != std::string::npos);
       for (int i = 0; i < 12; i++) CHECK(send(vm, {"left", "up", "right", "down"}) == Status::Waiting);
       int moves = field("m"), score = field("s");
       CHECK(moves > 8 && score > 0 && field("best") == score);
       CHECK(frameOf(be).find("Moves " + std::to_string(moves) + "|") != std::string::npos);
-      CHECK(send(vm, {"confirm"}) == Status::Waiting);                     // undo one move
+      CHECK(send(vm, {"confirm"}) == Status::Waiting);  // undo one move
       CHECK(field("m") == moves - 1);
-      CHECK(send(vm, {"back"}) == Status::Waiting);                        // menu
+      CHECK(send(vm, {"back"}) == Status::Waiting);  // menu
       CHECK(frameOf(be).find("Resume|New game|Exit|") != std::string::npos);
-      CHECK(send(vm, {"down", "confirm"}) == Status::Waiting);             // New game
-      CHECK(field("m") == 0 && field("s") == 0 && field("best") == score); // best score survives a new game
+      CHECK(send(vm, {"down", "confirm"}) == Status::Waiting);              // New game
+      CHECK(field("m") == 0 && field("s") == 0 && field("best") == score);  // best score survives a new game
       CHECK(frameOf(be).find("Moves 0|") != std::string::npos);
       CHECK(send(vm, {"left", "right"}) == Status::Waiting);
       int movesBefore = field("m");
@@ -1724,12 +2095,17 @@ int main() {
     LuaVm vm;
     CHECK(vm.open(128 * 1024));
     registerApi(vm, be);
-    const char* script = "print(wifi.connect())\nprint(http.get('http://h/a'))\nprint(http.request{url='http://h/a'})\nprint(wifi.status().connected, wifi.status().ssid)";
+    const char* script =
+        "print(wifi.connect())\nprint(http.get('http://h/a'))\nprint(http.request{url='http://h/"
+        "a'})\nprint(wifi.status().connected, wifi.status().ssid)";
     CHECK(vm.load("t", script, strlen(script)));
     CHECK(run(vm, be) == Status::Finished);
     CHECK(be.logs.size() == 4);
-    CHECK(be.logs[0].find("false\tnetwork not permitted") == 0 && be.logs[0].find("manifest.json") != std::string::npos);  // wifi.connect: false, reason
-    for (int i = 1; i < 3; i++) CHECK(be.logs[i].find("nil\tnetwork not permitted") == 0 && be.logs[i].find("manifest.json") != std::string::npos);
+    CHECK(be.logs[0].find("false\tnetwork not permitted") == 0 &&
+          be.logs[0].find("manifest.json") != std::string::npos);  // wifi.connect: false, reason
+    for (int i = 1; i < 3; i++)
+      CHECK(be.logs[i].find("nil\tnetwork not permitted") == 0 &&
+            be.logs[i].find("manifest.json") != std::string::npos);
     CHECK(be.logs[3] == "false\tnil");
     CHECK(be.seen.empty() && !be.wifiAsked);
   }
@@ -1742,10 +2118,11 @@ int main() {
       registerApi(vm, be);
       const char* script =
           "local ok = wifi.connect()\nprint('c1', ok)\nlocal ok2 = wifi.connect()\nprint('c2', ok2)\n"
-          "local st = wifi.status()\nprint(st.connected, st.ssid, st.ip, st.rssi)\nwifi.off()\nprint(wifi.status().connected)";
+          "local st = wifi.status()\nprint(st.connected, st.ssid, st.ip, "
+          "st.rssi)\nwifi.off()\nprint(wifi.status().connected)";
       CHECK(vm.load("t", script, strlen(script)));
       be.events = {"confirm", "back", "left"};
-      CHECK(run(vm, be) == Status::Waiting);                       // parked inside wifi.connect()
+      CHECK(run(vm, be) == Status::Waiting);                            // parked inside wifi.connect()
       CHECK(be.wifiAsked && be.events.size() == 3 && be.logs.empty());  // button presses did NOT wake it
       CHECK(vm.timeoutMs() == -1 && !vm.wakesOnEvent());
       if (outcome == 0) {
@@ -1759,7 +2136,7 @@ int main() {
         }
       } else {
         CHECK(vm.resume("wifi:fail") != Status::Error);
-        CHECK(run(vm, be, 1000, false) == Status::Waiting);          // c1 false, then the 2nd connect() parks again
+        CHECK(run(vm, be, 1000, false) == Status::Waiting);  // c1 false, then the 2nd connect() parks again
         CHECK(be.logs.size() == 1 && be.logs[0] == "c1\tfalse");
         CHECK(vm.status() == Status::Waiting);
       }
@@ -1801,29 +2178,45 @@ int main() {
     CHECK(vm.load("t", script, strlen(script)));
     CHECK(run(vm, be, 200000) == Status::Finished);
     const char* want[] = {
-        "200\ttrue\t5\thello", "{\"x\":1}", "404\tfalse\tnope", "nil\tconnection reset", "200",
-        "nil\trequest failed (no response)", "nil\tresponse larger than max_body (3 bytes): use save_to",
-        "nil\tonly http:// and https:// urls are allowed", "nil\tonly http:// and https:// urls are allowed", "nil\turl too long",
-        "nil\tmethod must be GET, POST, PUT, PATCH or DELETE", "nil\ta GET request cannot have a body", "nil\tillegal header", "nil\tillegal header",
+        "200\ttrue\t5\thello",
+        "{\"x\":1}",
+        "404\tfalse\tnope",
+        "nil\tconnection reset",
+        "200",
+        "nil\trequest failed (no response)",
+        "nil\tresponse larger than max_body (3 bytes): use save_to",
+        "nil\tonly http:// and https:// urls are allowed",
+        "nil\tonly http:// and https:// urls are allowed",
+        "nil\turl too long",
+        "nil\tmethod must be GET, POST, PUT, PATCH or DELETE",
+        "nil\ta GET request cannot have a body",
+        "nil\tillegal header",
+        "nil\tillegal header",
         "nil\theaders must be a table of string = string",
-        "nil\tmax_body must be 1..65536 (use save_to for bigger responses)", "nil\tmax_body must be 1..65536 (use save_to for bigger responses)",
-        "nil\t'.' and '..' are not allowed", "nil\tsave_to must be a data: path", "nil\tabsolute paths are not allowed",
-        "nil\tsave_to is only supported for GET", "200\t5\tnil\thello",
+        "nil\tmax_body must be 1..65536 (use save_to for bigger responses)",
+        "nil\tmax_body must be 1..65536 (use save_to for bigger responses)",
+        "nil\t'.' and '..' are not allowed",
+        "nil\tsave_to must be a data: path",
+        "nil\tabsolute paths are not allowed",
+        "nil\tsave_to is only supported for GET",
+        "200\t5\tnil\thello",
     };
     const size_t nWant = sizeof(want) / sizeof(want[0]);
     for (size_t i = 0; i < nWant; i++) {
       CHECK(i < be.logs.size() && be.logs[i] == want[i]);
-      if (i < be.logs.size() && be.logs[i] != want[i]) printf("    [%zu] got '%s' want '%s'\n", i, be.logs[i].c_str(), want[i]);
+      if (i < be.logs.size() && be.logs[i] != want[i])
+        printf("    [%zu] got '%s' want '%s'\n", i, be.logs[i].c_str(), want[i]);
     }
     CHECK(be.logs.size() == nWant + 2);
     if (be.logs.size() == nWant + 2) {
-      CHECK(be.logs[nWant].find("false\t") == 0);   // pcall(http.request, "notatable") raised (bad argument)
-      CHECK(be.logs[nWant + 1] == "3");              // system.heap() -> free, min, largest block
+      CHECK(be.logs[nWant].find("false\t") == 0);  // pcall(http.request, "notatable") raised (bad argument)
+      CHECK(be.logs[nWant + 1] == "3");            // system.heap() -> free, min, largest block
     }
     // Only well-formed requests ever reached the backend: a, json, 404, err, POST, missing, max_body=3, save_to
     CHECK(be.seen.size() == 8);
     if (be.seen.size() == 8) {
-      CHECK(be.seen[0].method == "GET" && be.seen[0].maxBody == 16384 && be.seen[0].savePath.empty() && be.seen[0].headers.empty());
+      CHECK(be.seen[0].method == "GET" && be.seen[0].maxBody == 16384 && be.seen[0].savePath.empty() &&
+            be.seen[0].headers.empty());
       CHECK(be.seen[1].url == "https://h/json" && be.seen[1].headers.size() == 2);
       std::map<std::string, std::string> h(be.seen[1].headers.begin(), be.seen[1].headers.end());
       CHECK(h["Accept"] == "application/json" && h["X-Test"] == "1");
@@ -1875,9 +2268,10 @@ int main() {
     CHECK(vm.load("t", script, strlen(script)));
     CHECK(run(vm, be) == Status::Finished);
     const char* want[] = {
-        "line:0,44,799,44", "line:0,5,10,5", "line:5,0,5,10", "line:0,0,479,479", "line:10,10,20,20", "pixel:3,4",
+        "line:0,44,799,44",          "line:0,5,10,5",         "line:5,0,5,10",
+        "line:0,0,479,479",          "line:10,10,20,20",      "pixel:3,4",
         "rect:790,470,10,10:fill:b", "rect:0,0,15,15:fill:b", "rect:10,10,30,20:line:b",
-        "line:790,10,799,10", "line:790,29,799,29", "line:790,10,790,29",
+        "line:790,10,799,10",        "line:790,29,799,29",    "line:790,10,790,29",
     };
     const size_t n = sizeof(want) / sizeof(want[0]);
     CHECK(be.calls.size() == n);
@@ -1896,25 +2290,33 @@ int main() {
     const char* script = "print(wifi.connect())";
     CHECK(vm.load("t", script, strlen(script)));
     CHECK(run(vm, be) == Status::Finished);
-    CHECK(be.logs.size() == 1 && be.logs[0] == "false\tnot enough free RAM for WiFi + TLS (free 80K, need 96K): this app is too big for network use");
+    CHECK(be.logs.size() == 1 &&
+          be.logs[0] ==
+              "false\tnot enough free RAM for WiFi + TLS (free 80K, need 96K): this app is too big for network use");
     CHECK(!be.wifiAsked);
   }
   {
-    TEST("net: wifi.connect{tls=false} needs 80K free instead of 96K (plain TCP apps); the default and tls=true still need 96K");
+    TEST(
+        "net: wifi.connect{tls=false} needs 80K free instead of 96K (plain TCP apps); the default and tls=true still "
+        "need 96K");
     {
       MockBackend be;
       be.freeHeapVal = 90 * 1024;
       LuaVm vm;
       CHECK(vm.open(128 * 1024));
       registerApi(vm, be);
-      const char* script = "print(wifi.connect())\nprint(wifi.connect{tls = true})\nprint(wifi.connect{})\nprint(pcall(wifi.connect, 5))\nprint(pcall(wifi.connect, {tls = 'no'}))";
+      const char* script =
+          "print(wifi.connect())\nprint(wifi.connect{tls = true})\nprint(wifi.connect{})\nprint(pcall(wifi.connect, "
+          "5))\nprint(pcall(wifi.connect, {tls = 'no'}))";
       CHECK(vm.load("t", script, strlen(script)));
       CHECK(run(vm, be) == Status::Finished);
       CHECK(be.logs.size() == 5);
       if (be.logs.size() == 5) {
-        const char* refused = "false\tnot enough free RAM for WiFi + TLS (free 90K, need 96K): this app is too big for network use";
+        const char* refused =
+            "false\tnot enough free RAM for WiFi + TLS (free 90K, need 96K): this app is too big for network use";
         CHECK(be.logs[0] == refused && be.logs[1] == refused);
-        CHECK(be.logs[2] == "false\tnot enough free RAM for WiFi + TLS (free 90K, need 96K): this app is too big for network use");
+        CHECK(be.logs[2] ==
+              "false\tnot enough free RAM for WiFi + TLS (free 90K, need 96K): this app is too big for network use");
         CHECK(be.logs[3].rfind("false", 0) == 0 && be.logs[3].find("table expected") != std::string::npos);
         CHECK(be.logs[4].rfind("false", 0) == 0);
         CHECK(be.logs[4].find("tls must be a boolean") != std::string::npos);
@@ -1941,7 +2343,9 @@ int main() {
       const char* script = "print(wifi.connect{tls = false})";
       CHECK(vm.load("t", script, strlen(script)));
       CHECK(run(vm, be) == Status::Finished);
-      CHECK(be.logs.size() == 1 && be.logs[0] == "false\tnot enough free RAM for WiFi (free 70K, need 80K): this app is too big for network use");
+      CHECK(be.logs.size() == 1 &&
+            be.logs[0] ==
+                "false\tnot enough free RAM for WiFi (free 70K, need 80K): this app is too big for network use");
       CHECK(!be.wifiAsked);
     }
     {
@@ -1988,24 +2392,41 @@ int main() {
       CHECK(run(vm, be, 100000) == Status::Finished);
       if (!allowed) {
         CHECK(be.logs.size() >= 10);
-        for (auto& l : be.logs) CHECK(l.find("hunter2") == std::string::npos && l.find("other app data") == std::string::npos && l.find("secret") == std::string::npos);
-        if (!be.logs.empty()) CHECK(be.logs[0] == "nil");     // fs.list("sd:") -> nil, err ... first print shows only the list
-        for (auto& l : be.logs) CHECK(l.find("library access not permitted") != std::string::npos || l == "nil" || l == "false" || l.find("read-only") != std::string::npos);
+        for (auto& l : be.logs)
+          CHECK(l.find("hunter2") == std::string::npos && l.find("other app data") == std::string::npos &&
+                l.find("secret") == std::string::npos);
+        if (!be.logs.empty())
+          CHECK(be.logs[0] == "nil");  // fs.list("sd:") -> nil, err ... first print shows only the list
+        for (auto& l : be.logs)
+          CHECK(l.find("library access not permitted") != std::string::npos || l == "nil" || l == "false" ||
+                l.find("read-only") != std::string::npos);
       } else {
         const char* want[] = {
-            "Books/,top.txt", "a.epub,b.txt", "hello", "PK", "5",
-            "nil\thidden files and folders are not accessible", "nil\thidden files and folders are not accessible",
-            "nil\thidden files and folders are not accessible", "nil\thidden files and folders are not accessible",
-            "false",   // fs.exists() on a hidden path: plain false, indistinguishable from "missing"
-            "nil\tread-only location (write to 'data:...')", "nil\tread-only location (write to 'data:...')", "nil\tread-only location (write to 'data:...')",
-            "nil\tread-only location (write to 'data:...')", "nil\tread-only location (write to 'data:...')",
-            "nil\t'.' and '..' are not allowed", "nil\tabsolute paths are not allowed",
-            "nil\t'.' and '..' are not allowed", "nil\tempty path component",
+            "Books/,top.txt",
+            "a.epub,b.txt",
+            "hello",
+            "PK",
+            "5",
+            "nil\thidden files and folders are not accessible",
+            "nil\thidden files and folders are not accessible",
+            "nil\thidden files and folders are not accessible",
+            "nil\thidden files and folders are not accessible",
+            "false",  // fs.exists() on a hidden path: plain false, indistinguishable from "missing"
+            "nil\tread-only location (write to 'data:...')",
+            "nil\tread-only location (write to 'data:...')",
+            "nil\tread-only location (write to 'data:...')",
+            "nil\tread-only location (write to 'data:...')",
+            "nil\tread-only location (write to 'data:...')",
+            "nil\t'.' and '..' are not allowed",
+            "nil\tabsolute paths are not allowed",
+            "nil\t'.' and '..' are not allowed",
+            "nil\tempty path component",
         };
         const size_t n = sizeof(want) / sizeof(want[0]);
         for (size_t i = 0; i < n; i++) {
           CHECK(i < be.logs.size() && be.logs[i] == want[i]);
-          if (i < be.logs.size() && be.logs[i] != want[i]) printf("    [%zu] got '%s' want '%s'\n", i, be.logs[i].c_str(), want[i]);
+          if (i < be.logs.size() && be.logs[i] != want[i])
+            printf("    [%zu] got '%s' want '%s'\n", i, be.logs[i].c_str(), want[i]);
         }
       }
     }
@@ -2015,8 +2436,10 @@ int main() {
   {
     TEST("zip: list/read limits, errors, scopes, and an oversized entry cannot leak or crash (ASAN/LSAN)");
     MockBackend be;
-    be.zips["/Books/a.epub"] = {{"mimetype", "application/epub+zip"}, {"META-INF/container.xml", "<container/>"},
-                                {"content.opf", std::string(5000, 'o')}, {"big.bin", std::string(70000, 'b')},
+    be.zips["/Books/a.epub"] = {{"mimetype", "application/epub+zip"},
+                                {"META-INF/container.xml", "<container/>"},
+                                {"content.opf", std::string(5000, 'o')},
+                                {"big.bin", std::string(70000, 'b')},
                                 {"mid.bin", std::string(30000, 'm')}};
     be.zips["/.crosslua/data/test/d.zip"] = {{"x.txt", "from data"}};
     be.files["/Books/plain.txt"] = "not a zip";
@@ -2070,12 +2493,21 @@ int main() {
     const char* s2 = "print(zip.read('sd:Books/a.epub', 'mimetype'))\nprint(zip.read('data:d.zip', 'x.txt'))";
     CHECK(vm2.load("t", s2, strlen(s2)));
     CHECK(run(vm2, be) == Status::Finished);
-    CHECK(be.logs.size() == 2 && be.logs[0].find("nil\tlibrary access not permitted") == 0 && be.logs[1] == "from data");
+    CHECK(be.logs.size() == 2 && be.logs[0].find("nil\tlibrary access not permitted") == 0 &&
+          be.logs[1] == "from data");
   }
   {
     TEST("app.open_book: sd:/data: files only, permission, parks the app and hands the path to the host");
-    const char* cases[] = {"sd:Books/a.epub", "sd:Books/missing.epub", "app:main.lua", "sd:.crosspoint/x.epub", "data:dl/b.epub", "main.lua", "http://x/y.epub"};
-    const char* wantLog[] = {"", "false\tno such file", "false\topen_book needs an sd: or data: path", "false\thidden files and folders are not accessible", "", "false\topen_book needs an sd: or data: path", "false\topen_book needs an sd: or data: path"};
+    const char* cases[] = {"sd:Books/a.epub",       "sd:Books/missing.epub", "app:main.lua",
+                           "sd:.crosspoint/x.epub", "data:dl/b.epub",        "main.lua",
+                           "http://x/y.epub"};
+    const char* wantLog[] = {"",
+                             "false\tno such file",
+                             "false\topen_book needs an sd: or data: path",
+                             "false\thidden files and folders are not accessible",
+                             "",
+                             "false\topen_book needs an sd: or data: path",
+                             "false\topen_book needs an sd: or data: path"};
     const char* wantOpen[] = {"/Books/a.epub", "", "", "", "/.crosslua/data/test/dl/b.epub", "", ""};
     for (int i = 0; i < 7; i++) {
       MockBackend be;
@@ -2089,12 +2521,13 @@ int main() {
       Status st = run(vm, be);
       CHECK(be.openedBook == wantOpen[i]);
       if (wantOpen[i][0]) {
-        CHECK(st == Status::Waiting && vm.timeoutMs() == -1 && !vm.wakesOnEvent() && be.logs.empty());  // parked, 'after' never runs
+        CHECK(st == Status::Waiting && vm.timeoutMs() == -1 && !vm.wakesOnEvent() &&
+              be.logs.empty());  // parked, 'after' never runs
       } else {
         CHECK(st == Status::Finished && be.logs.size() == 2 && be.logs[0] == wantLog[i] && be.logs[1] == "after");
       }
     }
-    MockBackend be;   // permission: sd: path without "library"
+    MockBackend be;  // permission: sd: path without "library"
     be.library = false;
     be.files["/Books/a.epub"] = "PK";
     LuaVm vm;
@@ -2146,13 +2579,15 @@ int main() {
     CHECK(run(vm, be, 200000) == Status::Finished);
     const char* want[] = {
         "2\t3\tNetA\t-40\t\tfalse",  // empty SSID prints as empty field
-        "nil\tmax must be 1..50", "nil\tmax must be 1..50",
-        "true",                        // time.now() == nil before sync
-        "true", "true",
-        "false\tsync failed",          // (mock syncOk still true; timeout bounds are checked Lua-side)
+        "nil\tmax must be 1..50",
+        "nil\tmax must be 1..50",
+        "true",  // time.now() == nil before sync
+        "true",
+        "true",
+        "false\tsync failed",  // (mock syncOk still true; timeout bounds are checked Lua-side)
         "nil\ttimeout must be 1..60 seconds",
-        "true",                        // time.set(1769000000)
-        "true",                        // time.now() reflects the set
+        "true",  // time.set(1769000000)
+        "true",  // time.now() reflects the set
         "nil\tepoch out of the plausible range (2020..2096)",
     };
     (void)want;  // expectations asserted incrementally below to keep the diff readable
@@ -2181,7 +2616,10 @@ int main() {
       CHECK(be.flOn && be.flBr == 35 && be.flWarm == 80);
     }
     CHECK(!be.files.count("/Books/y.epub") && !be.files.count("/.crosslua/data/test/y.txt"));
-    if (getenv("DUMP_LOGS")) { for (size_t i = 0; i < be.logs.size(); i++) printf("   [%zu] %s\n", i, be.logs[i].c_str()); printf("   qr=%s\n", be.qrSeen.c_str()); }
+    if (getenv("DUMP_LOGS")) {
+      for (size_t i = 0; i < be.logs.size(); i++) printf("   [%zu] %s\n", i, be.logs[i].c_str());
+      printf("   qr=%s\n", be.qrSeen.c_str());
+    }
     CHECK(be.qrSeen.find("hello|100|100|200") != std::string::npos);
     CHECK(be.roundedSeen == 2);
     CHECK(be.files["/.crosslua/data/test/c.txt"] == "one");
@@ -2214,7 +2652,8 @@ int main() {
     )LUA";
     CHECK(vm.load("t", script, strlen(script)));
     CHECK(run(vm, be, 200000) == Status::Finished);
-    if (getenv("DUMP_LOGS")) for (size_t i = 0; i < be.logs.size(); i++) printf("   [z%zu] %s\n", i, be.logs[i].c_str());
+    if (getenv("DUMP_LOGS"))
+      for (size_t i = 0; i < be.logs.size(); i++) printf("   [z%zu] %s\n", i, be.logs[i].c_str());
     CHECK(be.logs.size() == 8);
     if (be.logs.size() == 8) {
       CHECK(be.logs[0] == "900\tThe quick brown fox");
@@ -2284,7 +2723,9 @@ int main() {
     )LUA";
     CHECK(vm.load("t", script, strlen(script)));
     CHECK(run(vm, be, 400000) == Status::Finished);
-    if (getenv("DUMP_LOGS")) { for (size_t i = 0; i < be.logs.size(); i++) printf("   [%zu] %s\n", i, be.logs[i].c_str()); }
+    if (getenv("DUMP_LOGS")) {
+      for (size_t i = 0; i < be.logs.size(); i++) printf("   [%zu] %s\n", i, be.logs[i].c_str());
+    }
     CHECK(be.logs.size() == 19);
     if (be.logs.size() == 19) {
       CHECK(be.logs[0] == "3");
@@ -2298,7 +2739,8 @@ int main() {
       CHECK(be.logs[8] == "nil\tprecompiled chunks are not allowed");
       CHECK(be.logs[9].find("nil\tattempt to load a text chunk") == 0);
       CHECK(be.logs[10].find("nil\tload: text chunks only") == 0);
-      CHECK(be.logs[11].find("nil\tload: text chunks only") == 0 && be.logs[12].find("nil\tload: text chunks only") == 0);
+      CHECK(be.logs[11].find("nil\tload: text chunks only") == 0 &&
+            be.logs[12].find("nil\tload: text chunks only") == 0);
       CHECK(be.logs[13] == "nil\tchunk too large (max 64 KB)");
       CHECK(be.logs[14] == "ok");
       CHECK(be.logs[15] == "nil");
@@ -2325,7 +2767,10 @@ int main() {
     )LUA";
     CHECK(vm.load("t", script, strlen(script)));
     Status st = run(vm, be, 600000);
-    if (getenv("DUMP_LOGS")) { printf("   st=%d err=%s\n", (int)st, vm.error().c_str()); for (auto& l : be.logs) printf("   <%s>\n", l.c_str()); }
+    if (getenv("DUMP_LOGS")) {
+      printf("   st=%d err=%s\n", (int)st, vm.error().c_str());
+      for (auto& l : be.logs) printf("   <%s>\n", l.c_str());
+    }
     CHECK(st == Status::Finished);  // input.wait yielded inside the loaded function and the host resumed it past it
     CHECK(be.logs.size() == 3 && be.logs[0] == "true\tstring" && be.logs[1] == "function" && be.logs[2] == "after");
   }
@@ -2360,24 +2805,26 @@ int main() {
     CHECK(be.logs[4] == "Q || A\n\nmore info || false");
     CHECK(be.logs[5].find("arrow -> dash-A") == std::string::npos ? true : true);  // exact text below
     CHECK(be.logs[5] == "x || arrow -> dash-A\xE2\x82\xAC || false");
-    
+
     dump(be);
   }
 
   // ======================= Phase 2: fs =======================
   {
     TEST("fs: data: roundtrip, append, size, exists, list(sorted, dirs/), remove, mkdir");
-    LuaVm vm; MockBackend be;
+    LuaVm vm;
+    MockBackend be;
     setup(vm, be,
           "assert(fs.write('data:save.txt', 'hello'))\n"
           "assert(fs.append('data:save.txt', ' world'))\n"
-          "assert(fs.write('data:sub/deep/x.json', '{}'))\n"          // parents auto-created
+          "assert(fs.write('data:sub/deep/x.json', '{}'))\n"  // parents auto-created
           "assert(fs.mkdir('data:emptydir'))\n"
-          "print(fs.read('data:save.txt'), fs.size('data:save.txt'), fs.exists('data:save.txt'), fs.exists('data:nope'))\n"
+          "print(fs.read('data:save.txt'), fs.size('data:save.txt'), fs.exists('data:save.txt'), "
+          "fs.exists('data:nope'))\n"
           "local l = fs.list('data:') print(table.concat(l, ','))\n"
           "print(fs.remove('data:save.txt'), fs.exists('data:save.txt'))\n"
-          "print(fs.remove('data:sub'))\n"                              // non-empty dir
-          "print(fs.remove('data:'))\n"                                // the data root itself
+          "print(fs.remove('data:sub'))\n"  // non-empty dir
+          "print(fs.remove('data:'))\n"     // the data root itself
           "print(fs.read('data:missing'))");
     CHECK(run(vm, be) == Status::Finished);
     CHECK(be.logs.size() == 6);
@@ -2391,25 +2838,27 @@ int main() {
   }
   {
     TEST("fs.read ranges, fs.write_at in-place records");
-    LuaVm vm; MockBackend be;
+    LuaVm vm;
+    MockBackend be;
     std::string big(300 * 1024, 'a');
     for (size_t i = 0; i < big.size(); i++) big[i] = (char)('a' + (i % 26));
     be.files["/plugins/test/big.txt"] = big;
     setup(vm, be,
-          "print(fs.read('big.txt', 0, 5), fs.read('big.txt', 26, 3), fs.read('big.txt', 307195, 100))\n"      // clipped at EOF
-          "print(#fs.read('big.txt', 1000, 100000), fs.read('big.txt', 307200, 10) == '')\n"                  // at EOF = empty
-          "print(fs.read('big.txt', 307201, 1))\n"                                                           // beyond EOF
+          "print(fs.read('big.txt', 0, 5), fs.read('big.txt', 26, 3), fs.read('big.txt', 307195, 100))\n"  // clipped at
+                                                                                                           // EOF
+          "print(#fs.read('big.txt', 1000, 100000), fs.read('big.txt', 307200, 10) == '')\n"  // at EOF = empty
+          "print(fs.read('big.txt', 307201, 1))\n"                                            // beyond EOF
           "print(fs.read('big.txt', -1, 4))\n"
-          "print(fs.read('big.txt', 0, 200000))\n"                                                           // range too large
-          "print(fs.read('big.txt'))\n"                                                                      // whole file too large -> hint
+          "print(fs.read('big.txt', 0, 200000))\n"  // range too large
+          "print(fs.read('big.txt'))\n"             // whole file too large -> hint
           "assert(fs.write('data:rec.bin', string.rep('.', 24)))\n"
           "assert(fs.write_at('data:rec.bin', 8, 'XYZ'))\n"
-          "assert(fs.write_at('data:rec.bin', 24, 'END'))\n"                                                 // extend at exact end is ok
+          "assert(fs.write_at('data:rec.bin', 24, 'END'))\n"  // extend at exact end is ok
           "print(fs.read('data:rec.bin'), fs.size('data:rec.bin'))\n"
-          "print(fs.write_at('data:rec.bin', 99, 'x'))\n"                                                    // gap -> refused
-          "print(fs.write_at('data:nope.bin', 0, 'x'))\n"                                                   // must exist
-          "print(fs.write_at('app:big.txt', 0, 'x'))\n"                                                     // read-only scope
-          "print(fs.write_at('data:rec.bin', 0, string.rep('z', 20000)))",                                  // > 16 KB
+          "print(fs.write_at('data:rec.bin', 99, 'x'))\n"                   // gap -> refused
+          "print(fs.write_at('data:nope.bin', 0, 'x'))\n"                   // must exist
+          "print(fs.write_at('app:big.txt', 0, 'x'))\n"                     // read-only scope
+          "print(fs.write_at('data:rec.bin', 0, string.rep('z', 20000)))",  // > 16 KB
           2048 * 1024);
     CHECK(run(vm, be, 100000) == Status::Finished);
     CHECK(be.logs.size() == 11);
@@ -2418,7 +2867,8 @@ int main() {
     CHECK(be.logs[2] == "nil\toffset beyond end of file");
     CHECK(be.logs[3] == "nil\tnegative offset/length");
     CHECK(be.logs[4] == "nil\tlength too large");
-    CHECK(be.logs[5].find("nil\tfile too large") == 0 && be.logs[5].find("fs.read(path, offset, len)") != std::string::npos);
+    CHECK(be.logs[5].find("nil\tfile too large") == 0 &&
+          be.logs[5].find("fs.read(path, offset, len)") != std::string::npos);
     CHECK(be.logs[6] == "........XYZ.............END\t27");
     CHECK(be.logs[7] == "nil\toffset beyond end of file");
     CHECK(be.logs[8].find("nil\tno such file") == 0);
@@ -2427,7 +2877,8 @@ int main() {
   }
   {
     TEST("time.now / time.date: trusted clock, no clock, explicit epoch");
-    LuaVm vm; MockBackend be;
+    LuaVm vm;
+    MockBackend be;
     be.epoch = 1782086400 + 3 * 3600 + 25 * 60 + 9;  // 2026-06-22 03:25:09 UTC (a Monday)
     setup(vm, be,
           "local d = time.date()\n"
@@ -2436,14 +2887,17 @@ int main() {
           "print(e and e.year, time.date(1))");
     CHECK(run(vm, be) == Status::Finished);
     CHECK(be.logs[0] == "1782098709\t2026\t6\t22\t3\t25\t9\t2\t173");
-    LuaVm vm2; MockBackend be2; be2.epoch = 0;
+    LuaVm vm2;
+    MockBackend be2;
+    be2.epoch = 0;
     setup(vm2, be2, "print(time.now(), time.date(), time.date(5000))");
     CHECK(run(vm2, be2) == Status::Finished);
     CHECK(be2.logs[0] == "nil\tnil\ttable: 0" || be2.logs[0].find("nil\tnil\t") == 0);
   }
   {
     TEST("fs: sandbox - traversal, absolute, odd paths, read-only scopes");
-    LuaVm vm; MockBackend be;
+    LuaVm vm;
+    MockBackend be;
     be.files["/plugins/test/asset.txt"] = "A";
     be.files["/.crosslua/lib/l.txt"] = "L";
     be.files["/secret.txt"] = "S";
@@ -2451,10 +2905,11 @@ int main() {
           "local bad = {'../secret.txt', 'data:../../secret.txt', '/secret.txt', 'data:/secret.txt', 'a/../b', "
           "'a//b', './x', 'a\\\\b', 'x:y', 'lib:../x', string.rep('a', 300)}\n"
           "local rej = 0\n"
-          "for _, p in ipairs(bad) do local r, e = fs.read(p) if r == nil and e ~= 'no such file' then rej = rej + 1 else print('LEAK', p, r, e) end end\n"
+          "for _, p in ipairs(bad) do local r, e = fs.read(p) if r == nil and e ~= 'no such file' then rej = rej + 1 "
+          "else print('LEAK', p, r, e) end end\n"
           "print('rejected', rej, #bad)\n"
           "print(fs.read('asset.txt'), fs.read('app:asset.txt'), fs.read('lib:l.txt'))\n"
-          "print(fs.write('asset.txt', 'x'))\n"                  // bare = app: read-only
+          "print(fs.write('asset.txt', 'x'))\n"  // bare = app: read-only
           "print(fs.write('app:asset.txt', 'x'))\n"
           "print(fs.write('lib:l.txt', 'x'))\n"
           "print(fs.remove('app:asset.txt'))\n"
@@ -2472,7 +2927,8 @@ int main() {
   }
   {
     TEST("fs: limits and failure paths");
-    LuaVm vm; MockBackend be;
+    LuaVm vm;
+    MockBackend be;
     be.files["/plugins/test/big.bin"] = std::string(200 * 1024, 'x');
     be.dirs.insert("/plugins/test/d");
     setup(vm, be,
@@ -2481,7 +2937,8 @@ int main() {
           "print(fs.read('d'))\n"
           "print(fs.list('big.bin'))\n"
           "print(fs.list('nope'))\n"
-          "print(fs.size('d'))", 2048 * 1024);
+          "print(fs.size('d'))",
+          2048 * 1024);
     CHECK(run(vm, be, 100000) == Status::Finished);
     CHECK(be.logs[0].find("nil\tfile too large") == 0);
     CHECK(be.logs[1] == "nil\tdata too large");
@@ -2489,16 +2946,21 @@ int main() {
     CHECK(be.logs[3] == "nil\tnot a directory");
     CHECK(be.logs[4].find("nil\t") == 0);
     CHECK(be.logs[5] == "nil\tis a directory");
-    LuaVm vm2; MockBackend be2; be2.failWrites = true;
+    LuaVm vm2;
+    MockBackend be2;
+    be2.failWrites = true;
     setup(vm2, be2, "print(fs.write('data:a', 'x'))");
     CHECK(run(vm2, be2) == Status::Finished);
     CHECK(be2.logs[0] == "nil\twrite error");
   }
   {
     TEST("fs: reading under a tight budget fails cleanly (no crash), VM frees");
-    LuaVm vm; MockBackend be;
+    LuaVm vm;
+    MockBackend be;
     be.files["/plugins/test/f.bin"] = std::string(60 * 1024, 'z');
-    setup(vm, be, "local ok, e = pcall(fs.read, 'f.bin') print(ok, tostring(e):sub(1, 17)) print(#string.rep('a', 100))", 32 * 1024);
+    setup(vm, be,
+          "local ok, e = pcall(fs.read, 'f.bin') print(ok, tostring(e):sub(1, 17)) print(#string.rep('a', 100))",
+          32 * 1024);
     CHECK(run(vm, be) == Status::Finished);
     CHECK(be.logs[0] == "false\tnot enough memory");
     CHECK(be.logs[1] == "100");
@@ -2509,7 +2971,8 @@ int main() {
   // ======================= Phase 2: require =======================
   {
     TEST("require: app module, caching, dotted names, init.lua, lib fallback, app shadows lib");
-    LuaVm vm; MockBackend be;
+    LuaVm vm;
+    MockBackend be;
     be.files["/plugins/test/counter.lua"] = "LOADS = (LOADS or 0) + 1 return {n = LOADS, name = ...}";
     be.files["/plugins/test/util/strings.lua"] = "return {up = string.upper}";
     be.files["/plugins/test/pkg/init.lua"] = "return 'pkg-init'";
@@ -2558,24 +3021,33 @@ int main() {
       show(gfx.image("sd:Books/photo.jpg", W - 80, H - 100, 500, 500))  -- box clipped to 80x100: 100x50 shrinks to 80x40
     )LUA";
     for (int allowed = 1; allowed >= 0; allowed--) {
-      be.library = allowed; be.logs.clear(); be.imageCalls.clear();
+      be.library = allowed;
+      be.logs.clear();
+      be.imageCalls.clear();
       LuaVm vm;
       CHECK(vm.open(256 * 1024));
       registerApi(vm, be);
       CHECK(vm.load("t", script, strlen(script)));
       CHECK(run(vm, be, 100000) == Status::Finished);
-      if (getenv("DUMP_LOGS")) { printf("   [allowed=%d]\n", allowed); for (size_t i = 0; i < be.logs.size(); i++) printf("   [%zu] %s\n", i, be.logs[i].c_str()); for (auto& c : be.imageCalls) printf("   call %s x=%d y=%d %dx%d\n", c.path.c_str(), c.x, c.y, c.w, c.h); }
+      if (getenv("DUMP_LOGS")) {
+        printf("   [allowed=%d]\n", allowed);
+        for (size_t i = 0; i < be.logs.size(); i++) printf("   [%zu] %s\n", i, be.logs[i].c_str());
+        for (auto& c : be.imageCalls) printf("   call %s x=%d y=%d %dx%d\n", c.path.c_str(), c.x, c.y, c.w, c.h);
+      }
       CHECK(be.logs.size() == 15);
       if (be.logs.size() != 15) continue;
-      CHECK(be.logs[2] == "40\t40" && be.logs[3] == "20\t10" && be.logs[4] == "20\t10");   // data:/app: need no permission
+      CHECK(be.logs[2] == "40\t40" && be.logs[3] == "20\t10" &&
+            be.logs[4] == "20\t10");  // data:/app: need no permission
       if (allowed) {
-        CHECK(be.logs[0] == "240\t480");                    // 1000x2000 into 480x800 -> scale .4
-        CHECK(be.logs[1] == "100\t50");                     // small image untouched
+        CHECK(be.logs[0] == "240\t480");  // 1000x2000 into 480x800 -> scale .4
+        CHECK(be.logs[1] == "100\t50");   // small image untouched
         CHECK(be.imageCalls.size() == 6);
         if (be.imageCalls.size() == 6) {
-          CHECK(be.imageCalls[1].x == 10 + (300 - 100) / 2 && be.imageCalls[1].y == 20 + (300 - 50) / 2);  // centred in its box
+          CHECK(be.imageCalls[1].x == 10 + (300 - 100) / 2 &&
+                be.imageCalls[1].y == 20 + (300 - 50) / 2);  // centred in its box
           CHECK(be.imageCalls[0].path == "/Books/cover.PNG");
-          CHECK(be.imageCalls[5].path == "/Books/photo.jpg" && be.imageCalls[5].w == 80 && be.imageCalls[5].h == 40 && be.imageCalls[5].y == 380 + (100 - 40) / 2);
+          CHECK(be.imageCalls[5].path == "/Books/photo.jpg" && be.imageCalls[5].w == 80 && be.imageCalls[5].h == 40 &&
+                be.imageCalls[5].y == 380 + (100 - 40) / 2);
         }
         CHECK(be.logs[5] == "nil\tunsupported image type (png, jpg, bmp)");
         CHECK(be.logs[6] == "nil\timage file is empty or over 6 MB");
@@ -2586,28 +3058,50 @@ int main() {
         CHECK(be.logs[13] == "nil\tbox must be at least 8x8");
         CHECK(be.logs[14] == "80\t40");
       } else {
-        CHECK(be.logs[0].find("nil\tlibrary access not permitted") == 0 && be.logs[1].find("nil\tlibrary access not permitted") == 0);
-        CHECK(be.imageCalls.size() == 3);                   // only the data:/app: draws happened
+        CHECK(be.logs[0].find("nil\tlibrary access not permitted") == 0 &&
+              be.logs[1].find("nil\tlibrary access not permitted") == 0);
+        CHECK(be.imageCalls.size() == 3);  // only the data:/app: draws happened
         CHECK(be.logs[9].find("nil\tlibrary access not permitted") == 0);
       }
     }
     // a decoder failure is a plain nil,err and never aborts the app
-    be.library = true; be.imageErr = "decode failed (corrupt image or not enough RAM)"; be.logs.clear();
+    be.library = true;
+    be.imageErr = "decode failed (corrupt image or not enough RAM)";
+    be.logs.clear();
     LuaVm vm;
     CHECK(vm.open(64 * 1024));
     registerApi(vm, be);
     const char* s2 = "print(gfx.image('sd:Books/photo.jpg', 0, 0)); print('alive')";
     CHECK(vm.load("t", s2, strlen(s2)));
     CHECK(run(vm, be) == Status::Finished);
-    CHECK(be.logs.size() == 2 && be.logs[0] == "nil\tdecode failed (corrupt image or not enough RAM)" && be.logs[1] == "alive");
+    CHECK(be.logs.size() == 2 && be.logs[0] == "nil\tdecode failed (corrupt image or not enough RAM)" &&
+          be.logs[1] == "alive");
   }
   {
     TEST("app.restart: plain .lua names in the app folder only, parks the app, hands the entry to the host");
-    const char* names[] = {"run.lua", "", "../x.lua", "sub/run.lua", "x.txt", ".hidden.lua", "a..b.lua", "run.LUA", "missing.lua",
-                           "with space.lua", "run.lua\n", "a//b.lua", "x.lua/", "/abs.lua", "sub/.hidden.lua", "tests/net.lua", "nnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnn.lua"};
-    const char* wantErr[] = {"", "", "entry must", "", "entry must", "entry must", "entry must", "entry must", "no such entry script",
-                             "entry must", "entry must", "entry must", "entry must", "entry must", "entry must", "", "entry must"};
-    const char* wantRestart[] = {"run.lua", "main.lua", "", "sub/run.lua", "", "", "", "", "", "", "", "", "", "", "", "tests/net.lua", ""};
+    const char* names[] = {"run.lua",
+                           "",
+                           "../x.lua",
+                           "sub/run.lua",
+                           "x.txt",
+                           ".hidden.lua",
+                           "a..b.lua",
+                           "run.LUA",
+                           "missing.lua",
+                           "with space.lua",
+                           "run.lua\n",
+                           "a//b.lua",
+                           "x.lua/",
+                           "/abs.lua",
+                           "sub/.hidden.lua",
+                           "tests/net.lua",
+                           "nnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnn.lua"};
+    const char* wantErr[] = {
+        "",           "",           "entry must",           "",           "entry must", "entry must",
+        "entry must", "entry must", "no such entry script", "entry must", "entry must", "entry must",
+        "entry must", "entry must", "entry must",           "",           "entry must"};
+    const char* wantRestart[] = {"run.lua", "main.lua", "", "sub/run.lua",   "", "", "", "", "", "", "", "",
+                                 "",        "",         "", "tests/net.lua", ""};
     const int N = sizeof(wantErr) / sizeof(wantErr[0]);
     for (int i = 0; i < N; i++) {
       MockBackend be;
@@ -2620,17 +3114,21 @@ int main() {
       CHECK(vm.open(128 * 1024));
       registerApi(vm, be);
       std::string script;
-      if (i == 1) script = "print(app.restart())\nprint('after')";            // no argument = main.lua
-      else script = std::string("print(app.restart('") + names[i] + "'))\nprint('after')";
+      if (i == 1)
+        script = "print(app.restart())\nprint('after')";  // no argument = main.lua
+      else
+        script = std::string("print(app.restart('") + names[i] + "'))\nprint('after')";
       if (i == 10) script = "print(app.restart('run.lua\\n'))\nprint('after')";  // a newline inside the name
       CHECK(vm.load("t", script.data(), script.size()));
       Status st = run(vm, be);
       CHECK(be.restartedTo == wantRestart[i]);
       if (wantRestart[i][0]) {
-        CHECK(st == Status::Waiting && vm.timeoutMs() == -1 && !vm.wakesOnEvent() && be.logs.empty());  // parked: 'after' never runs
+        CHECK(st == Status::Waiting && vm.timeoutMs() == -1 && !vm.wakesOnEvent() &&
+              be.logs.empty());  // parked: 'after' never runs
       } else {
         CHECK(st == Status::Finished && be.logs.size() == 2 && be.logs[1] == "after");
-        CHECK(be.logs.size() == 2 && be.logs[0].find("false\t") == 0 && be.logs[0].find(wantErr[i]) != std::string::npos);
+        CHECK(be.logs.size() == 2 && be.logs[0].find("false\t") == 0 &&
+              be.logs[0].find(wantErr[i]) != std::string::npos);
         if (be.logs.size() != 2 || be.logs[0].find(wantErr[i]) == std::string::npos)
           printf("    [%d] '%s' -> '%s'\n", i, names[i], be.logs.empty() ? "" : be.logs[0].c_str());
       }
@@ -2646,23 +3144,32 @@ int main() {
   }
   {
     TEST("storage grants: parseGrantPath / grantIsDangerous");
-    struct P { const char* in; const char* want; };  // want == nullptr -> rejected
-    const P cases[] = {{"Books", "Books"}, {"Books/AO3/", "Books/AO3"}, {"/", ""}, {"a/b/c", "a/b/c"}, {"My Books", "My Books"},
-                       {"", nullptr}, {"..", nullptr}, {"../x", nullptr}, {"a/../b", nullptr}, {"a/./b", nullptr},
-                       {".hidden", nullptr}, {"a/.b", nullptr}, {"/abs", nullptr}, {"a//b", nullptr}, {"a:b", nullptr},
-                       {"a\\b", nullptr}, {"a\tb", nullptr}, {"//", nullptr}, {".", nullptr}, {"sd:Books", nullptr}};
+    struct P {
+      const char* in;
+      const char* want;
+    };  // want == nullptr -> rejected
+    const P cases[] = {{"Books", "Books"}, {"Books/AO3/", "Books/AO3"}, {"/", ""},
+                       {"a/b/c", "a/b/c"}, {"My Books", "My Books"},    {"", nullptr},
+                       {"..", nullptr},    {"../x", nullptr},           {"a/../b", nullptr},
+                       {"a/./b", nullptr}, {".hidden", nullptr},        {"a/.b", nullptr},
+                       {"/abs", nullptr},  {"a//b", nullptr},           {"a:b", nullptr},
+                       {"a\\b", nullptr},  {"a\tb", nullptr},           {"//", nullptr},
+                       {".", nullptr},     {"sd:Books", nullptr}};
     for (const P& c : cases) {
       char out[120];
       const bool ok = crosslua::parseGrantPath(c.in, out, sizeof(out));
       CHECK(ok == (c.want != nullptr));
       if (c.want) CHECK(ok && !strcmp(out, c.want));
-      if (ok != (c.want != nullptr) || (ok && c.want && strcmp(out, c.want))) printf("    parseGrantPath('%s') -> %d '%s'\n", c.in, ok, ok ? out : "");
+      if (ok != (c.want != nullptr) || (ok && c.want && strcmp(out, c.want)))
+        printf("    parseGrantPath('%s') -> %d '%s'\n", c.in, ok, ok ? out : "");
     }
     char out[120];
     CHECK(!crosslua::parseGrantPath(std::string(101, 'a').c_str(), out, sizeof(out)));
     CHECK(!crosslua::parseGrantPath("Books", out, 3));  // does not fit
-    CHECK(crosslua::grantIsDangerous("") && crosslua::grantIsDangerous("plugins") && crosslua::grantIsDangerous("Plugins/x"));
-    CHECK(!crosslua::grantIsDangerous("pluginsX") && !crosslua::grantIsDangerous("Books") && !crosslua::grantIsDangerous("Books/plugins"));
+    CHECK(crosslua::grantIsDangerous("") && crosslua::grantIsDangerous("plugins") &&
+          crosslua::grantIsDangerous("Plugins/x"));
+    CHECK(!crosslua::grantIsDangerous("pluginsX") && !crosslua::grantIsDangerous("Books") &&
+          !crosslua::grantIsDangerous("Books/plugins"));
   }
   {
     TEST("storage grants: read/write scope rules, prefix boundary, hidden paths, firmware images, library interplay");
@@ -2673,12 +3180,14 @@ int main() {
       const char* script;
       std::vector<std::string> want;
     };
-    const std::string OUTSIDE = "nil\tlibrary access not permitted: this path is outside the folders granted to this app";
+    const std::string OUTSIDE =
+        "nil\tlibrary access not permitted: this path is outside the folders granted to this app";
     const std::string RO = "nil\tread-only location (the app has no write grant for this folder)";
     const std::string BIN = "nil\tread-only location (firmware images (*.bin) can never be written)";
     const std::string HIDDEN = "nil\thidden files and folders are not accessible";
     const Case cases[] = {
-        {"read Books, write Books/AO3 + Downloads, no library", false,
+        {"read Books, write Books/AO3 + Downloads, no library",
+         false,
          {{"Books", false}, {"Books/AO3", true}, {"Downloads", true}},
          R"LUA(
            local function show(...) print(...) end
@@ -2696,8 +3205,10 @@ int main() {
            show(fs.exists("sd:BooksX/z.txt"))
            show(fs.write("sd:Books/AO3/x.BIN", "x"))
          )LUA",
-         {"PK-a", OUTSIDE, OUTSIDE, OUTSIDE, HIDDEN, RO, "true", BIN, "true", "x", "true", RO, "true", RO, OUTSIDE, "false", BIN}},
-        {"library (read everything) + the same grants: writes still only where granted", true,
+         {"PK-a", OUTSIDE, OUTSIDE, OUTSIDE, HIDDEN, RO, "true", BIN, "true", "x", "true", RO, "true", RO, OUTSIDE,
+          "false", BIN}},
+        {"library (read everything) + the same grants: writes still only where granted",
+         true,
          {{"Books", false}, {"Books/AO3", true}, {"Downloads", true}},
          R"LUA(
            local function show(...) print(...) end
@@ -2705,17 +3216,23 @@ int main() {
            show(fs.read("sd:.crosspoint/wifi.json"))
          )LUA",
          {"t", RO, "true", HIDDEN}},
-        {"whole-card write grant: everything but hidden paths and *.bin", false, {{"", true}},
+        {"whole-card write grant: everything but hidden paths and *.bin",
+         false,
+         {{"", true}},
          R"LUA(
            local function show(...) print(...) end
            show(fs.write("sd:top.txt", "y")); show(fs.write("sd:plugins/x/main.lua", "y"))
            show(fs.write("sd:.crosspoint/a", "y")); show(fs.write("sd:fw.bin", "y")); show(fs.read("sd:BooksX/z.txt"))
          )LUA",
          {"true", "true", HIDDEN, BIN, "z"}},
-        {"no grants and no library: nothing outside the sandbox", false, {},
+        {"no grants and no library: nothing outside the sandbox",
+         false,
+         {},
          R"LUA(print(fs.read("sd:Books/a.epub")))LUA",
          {"nil\tlibrary access not permitted: add \"library\" to \"permissions\" in manifest.json"}},
-        {"library only (no grants): read-only, original message", true, {},
+        {"library only (no grants): read-only, original message",
+         true,
+         {},
          R"LUA(print(fs.write("sd:top.txt", "y")))LUA",
          {"nil\tread-only location (write to 'data:...')"}},
     };
@@ -2738,7 +3255,8 @@ int main() {
       CHECK(be.logs.size() == c.want.size());
       for (size_t i = 0; i < c.want.size() && i < be.logs.size(); i++) {
         CHECK(be.logs[i] == c.want[i]);
-        if (be.logs[i] != c.want[i]) printf("    [%s] #%zu got '%s' want '%s'\n", c.name, i + 1, be.logs[i].c_str(), c.want[i].c_str());
+        if (be.logs[i] != c.want[i])
+          printf("    [%s] #%zu got '%s' want '%s'\n", c.name, i + 1, be.logs[i].c_str(), c.want[i].c_str());
       }
       for (auto& l : be.logs) CHECK(l.find("hunter2") == std::string::npos && l.find("other app") == std::string::npos);
     }
@@ -2752,8 +3270,10 @@ int main() {
     LuaVm vm;
     CHECK(vm.open(256 * 1024));
     registerApi(vm, be);
-    const char* s2 = "fs.write('sd:Books/AO3/new.epub', 'N'); fs.write('sd:Downloads/n.txt', 'D'); fs.write('sd:Books/evil.txt', 'E'); "
-                     "fs.write('sd:top.txt', 'T'); fs.remove('sd:Books/a.epub'); fs.remove('sd:Books/AO3/old.epub')";
+    const char* s2 =
+        "fs.write('sd:Books/AO3/new.epub', 'N'); fs.write('sd:Downloads/n.txt', 'D'); fs.write('sd:Books/evil.txt', "
+        "'E'); "
+        "fs.write('sd:top.txt', 'T'); fs.remove('sd:Books/a.epub'); fs.remove('sd:Books/AO3/old.epub')";
     CHECK(vm.load("t", s2, strlen(s2)));
     CHECK(run(vm, be) == Status::Finished);
     CHECK(be.files["/Books/AO3/new.epub"] == "N" && be.files["/Downloads/n.txt"] == "D");
@@ -2785,7 +3305,8 @@ int main() {
       CHECK(be.logs[0] == "200\t5" && be.logs[1] == W && be.logs[2] == W);
       CHECK(be.logs[3].find("nil\tlibrary access not permitted: this path is outside") == 0 && be.logs[4] == "200");
     }
-    CHECK(be.files["/Books/AO3/dl.epub"] == "hello" && !be.files.count("/Books/dl.epub") && !be.files.count("/Books/AO3/fw.bin") && !be.files.count("/top.txt"));
+    CHECK(be.files["/Books/AO3/dl.epub"] == "hello" && !be.files.count("/Books/dl.epub") &&
+          !be.files.count("/Books/AO3/fw.bin") && !be.files.count("/top.txt"));
   }
   {
     TEST("gfx.image: .bmp (any case) is accepted and fitted like png/jpg; other types still refused");
@@ -2806,11 +3327,15 @@ int main() {
     )LUA";
     CHECK(vm.load("t", script, strlen(script)));
     CHECK(run(vm, be, 100000) == Status::Finished);
-    CHECK(be.logs.size() == 3 && be.logs[0] == "30\t15" && be.logs[1] == "10\t10" && be.logs[2] == "nil\tunsupported image type (png, jpg, bmp)");
-    CHECK(be.imageCalls.size() == 2 && be.imageCalls[0].path == "/Books/pic.bmp" && be.imageCalls[1].x == 5 + (50 - 10) / 2);
+    CHECK(be.logs.size() == 3 && be.logs[0] == "30\t15" && be.logs[1] == "10\t10" &&
+          be.logs[2] == "nil\tunsupported image type (png, jpg, bmp)");
+    CHECK(be.imageCalls.size() == 2 && be.imageCalls[0].path == "/Books/pic.bmp" &&
+          be.imageCalls[1].x == 5 + (50 - 10) / 2);
   }
   {
-    TEST("crypto: mbedtls hashes/HMAC/PBKDF2/AES-CBC vs hashlib+openssl vectors, RFC 4231/6238/7914/4648, limits, errors");
+    TEST(
+        "crypto: mbedtls hashes/HMAC/PBKDF2/AES-CBC vs hashlib+openssl vectors, RFC 4231/6238/7914/4648, limits, "
+        "errors");
     MockBackend be;
     LuaVm vm;
     CHECK(vm.open(512 * 1024));
@@ -2914,11 +3439,13 @@ int main() {
         "nil\thash already finished (digest() was called)",
         "nil\tunknown algorithm (sha1, sha256)",
         "aca9e593cc629cbaa94cd5a07dc029424aad93e5129e5d11f8dcd2f139c16cc0",
-        "55ac046e56e3089fec1691c22544b605f94185216dde0465e68b9d57c20dacbc49ca9cccf179b645991664b39d77ef317c71b845b1e30bd509112041d3a19783",
+        "55ac046e56e3089fec1691c22544b605f94185216dde0465e68b9d57c20dacbc49ca9cccf179b645991664b39d77ef317c71b845b1e30b"
+        "d509112041d3a19783",
         "ae4d0c95af6b46d32d0adff928f06dd02a303f8ef3c251dfd6e2d85a95474c43",
         "c5e478d59288c841aa530db6845c4c8d962893a001ce4e11a4963873aa98134a",
         "eeebc7819be4c9aaf68e56623a98047198c8dae5220986b4ed483510e57f8718",
-        "f33af7b585171cd70c33fd304a46fe216a8a4c0e6101cbea5cdb9bd8f361da6f0c4b6897ec2cd60be49b19eefa285ebcc471f58d3561fd378568093c78e7079f",
+        "f33af7b585171cd70c33fd304a46fe216a8a4c0e6101cbea5cdb9bd8f361da6f0c4b6897ec2cd60be49b19eefa285ebcc471f58d3561fd"
+        "378568093c78e7079f",
         "nil\titerations must be an integer 1..20000",
         "nil\titerations must be an integer 1..20000",
         "nil\titerations must be an integer 1..20000",
@@ -3008,23 +3535,29 @@ int main() {
       CHECK(be.logs.size() == 8);
       if (be.logs.size() == 8) {
         CHECK(be.logs[0] == "true\tfalse\ttrue\tfalse\tfalse\ttrue\tfalse\ttrue\t800\t480");
-                CHECK(be.logs[1] == (usb ? "true" : "false"));
+        CHECK(be.logs[1] == (usb ? "true" : "false"));
         CHECK(be.logs[2] == "nil");  // no touch event yet
         CHECK(be.logs[3] == "false\tno vibration motor on this device (or vibration is off in settings)");
-        CHECK(be.logs[4] == "nil\tms must be an integer 10..1000" && be.logs[5] == "nil\tms must be an integer 10..1000");
-        CHECK(be.logs[6] == "nil\tstrength must be an integer 0..255" && be.logs[7] == "nil\tms must be an integer 10..1000");
+        CHECK(be.logs[4] == "nil\tms must be an integer 10..1000" &&
+              be.logs[5] == "nil\tms must be an integer 10..1000");
+        CHECK(be.logs[6] == "nil\tstrength must be an integer 0..255" &&
+              be.logs[7] == "nil\tms must be an integer 10..1000");
       }
-      CHECK(be.hapticCalls.empty());  // nothing reached the motor: absent hardware and every bad argument stopped earlier
+      CHECK(
+          be.hapticCalls.empty());  // nothing reached the motor: absent hardware and every bad argument stopped earlier
     }
     MockBackend be;  // a board WITH a motor
     be.hapticPresent = true;
     LuaVm vm;
     CHECK(vm.open(128 * 1024));
     registerApi(vm, be);
-    const char* script = "print(device.haptic(50))\nprint(device.haptic(30, 128))\nprint(device.haptic(10, 0))\nprint(device.haptic(1000))\nprint(device.haptic(5))";
+    const char* script =
+        "print(device.haptic(50))\nprint(device.haptic(30, 128))\nprint(device.haptic(10, "
+        "0))\nprint(device.haptic(1000))\nprint(device.haptic(5))";
     CHECK(vm.load("t", script, strlen(script)));
     CHECK(run(vm, be, 100000) == Status::Finished);
-    CHECK(be.logs.size() == 5 && be.logs[0] == "true" && be.logs[3] == "true" && be.logs[4] == "nil\tms must be an integer 10..1000");
+    CHECK(be.logs.size() == 5 && be.logs[0] == "true" && be.logs[3] == "true" &&
+          be.logs[4] == "nil\tms must be an integer 10..1000");
     CHECK(be.hapticCalls.size() == 4);
     if (be.hapticCalls.size() == 4) {
       CHECK(be.hapticCalls[0] == std::make_pair(50, 255) && be.hapticCalls[1] == std::make_pair(30, 128));
@@ -3091,7 +3624,7 @@ int main() {
         print(pcall(input.text))
       )LUA";
       CHECK(vm.load("t", script, strlen(script)));
-      CHECK(run(vm, be, 100000, false) == Status::Waiting);   // the first call is valid and parks
+      CHECK(run(vm, be, 100000, false) == Status::Waiting);  // the first call is valid and parks
       CHECK(be.textAsked && be.textMax == 128 && be.textMode == 0 && be.textInitial.empty());  // defaults
       be.textAsked = false;
       CHECK(vm.resume("text:cancel") != Status::Error);
@@ -3101,7 +3634,8 @@ int main() {
         CHECK(be.logs[0] == "nil\tcancelled");
         CHECK(be.logs[1] == "nil\ttitle too long (max 60 characters)");
         CHECK(be.logs[2] == "nil\tinitial text too long (max 256 bytes)");
-        CHECK(be.logs[3] == "nil\tmax_len must be an integer 1..256" && be.logs[4] == "nil\tmax_len must be an integer 1..256");
+        CHECK(be.logs[3] == "nil\tmax_len must be an integer 1..256" &&
+              be.logs[4] == "nil\tmax_len must be an integer 1..256");
         CHECK(be.logs[5] == "nil\tmode must be text, password or url");
         CHECK(be.logs[6] == "nil\tinitial text is longer than max_len");
         CHECK(be.logs[7].rfind("false\t", 0) == 0);  // missing title raises
@@ -3151,16 +3685,22 @@ int main() {
       CHECK(be.logs.size() == 21);
       if (be.logs.size() == 21) {
         if (hw == 0) {
-          const char* NO[] = {"false\tfalse\tfalse\tfalse\tfalse\tfalse\tfalse\tfalse", "nil\tno motion sensor on this device",
-                              "nil\tno temperature/humidity sensor on this device", "false\tno buzzer on this device",
-                              "false\tno buzzer on this device", "false\tno buzzer on this device"};
+          const char* NO[] = {"false\tfalse\tfalse\tfalse\tfalse\tfalse\tfalse\tfalse",
+                              "nil\tno motion sensor on this device",
+                              "nil\tno temperature/humidity sensor on this device",
+                              "false\tno buzzer on this device",
+                              "false\tno buzzer on this device",
+                              "false\tno buzzer on this device"};
           for (int i = 0; i < 6; i++) CHECK(be.logs[i] == NO[i]);
           // argument errors are reported before the hardware is asked
-          CHECK(be.logs[6] == "nil\tfreq must be an integer 20..20000" && be.logs[7] == "nil\tfreq must be an integer 20..20000");
-          CHECK(be.logs[8] == "nil\tms must be an integer 0..10000" && be.logs[9] == "nil\tms must be an integer 0..10000");
+          CHECK(be.logs[6] == "nil\tfreq must be an integer 20..20000" &&
+                be.logs[7] == "nil\tfreq must be an integer 20..20000");
+          CHECK(be.logs[8] == "nil\tms must be an integer 0..10000" &&
+                be.logs[9] == "nil\tms must be an integer 0..10000");
           CHECK(be.logs[10] == "nil\tfreq must be an integer 20..20000");
           CHECK(be.logs[11] == "0");
-          for (int i = 12; i < 21; i++) CHECK(be.logs[i].rfind("false\tno LEDs on this device", 0) == 0 || be.logs[i].rfind("nil\t", 0) == 0);
+          for (int i = 12; i < 21; i++)
+            CHECK(be.logs[i].rfind("false\tno LEDs on this device", 0) == 0 || be.logs[i].rfind("nil\t", 0) == 0);
           CHECK(be.logs[12] == "false\tno LEDs on this device");
           CHECK(be.ledCalls.empty() && be.toneCalls.empty());
         } else {
@@ -3168,16 +3708,20 @@ int main() {
           CHECK(be.logs[1] == "0.50 -0.25 1.00 10.0 -20.0 30.0 true");
           CHECK(be.logs[2] == "21.5\t40.25");
           CHECK(be.logs[3] == "true" && be.logs[4] == "true" && be.logs[5] == "true");
-          CHECK(be.logs[6] == "nil\tfreq must be an integer 20..20000" && be.logs[10] == "nil\tfreq must be an integer 20..20000");
+          CHECK(be.logs[6] == "nil\tfreq must be an integer 20..20000" &&
+                be.logs[10] == "nil\tfreq must be an integer 20..20000");
           CHECK(be.logs[11] == "3");
           CHECK(be.logs[12] == "true");
-          CHECK(be.logs[13] == "nil\tindex must be an integer 1..3" && be.logs[14] == "nil\tindex must be an integer 1..3");
-          CHECK(be.logs[15] == "nil\tr, g, b must be integers 0..255" && be.logs[16] == "nil\tr, g, b must be integers 0..255");
+          CHECK(be.logs[13] == "nil\tindex must be an integer 1..3" &&
+                be.logs[14] == "nil\tindex must be an integer 1..3");
+          CHECK(be.logs[15] == "nil\tr, g, b must be integers 0..255" &&
+                be.logs[16] == "nil\tr, g, b must be integers 0..255");
           CHECK(be.logs[17] == "true" && be.logs[18] == "true");
           CHECK(be.logs[19] == "nil\tbrightness must be an integer 0..255" && be.logs[20] == "true");
           const std::vector<std::string> wantTone = {"440,0", "1000,250", "stop"};
           CHECK(be.toneCalls == wantTone);
-          const std::vector<std::string> wantLed = {"set 0 255 0 0", "all 1 2 3", "brightness 128", "off"};  // index is 0-based on the backend
+          const std::vector<std::string> wantLed = {"set 0 255 0 0", "all 1 2 3", "brightness 128",
+                                                    "off"};  // index is 0-based on the backend
           CHECK(be.ledCalls == wantLed);
         }
       }
@@ -3190,10 +3734,13 @@ int main() {
       LuaVm vm;
       CHECK(vm.open(128 * 1024));
       registerApi(vm, be);
-      const char* script = "local m = device.motion()\nprint(string.format('%.2f %.2f %.2f %.1f %.1f %.1f %s', m.ax, m.ay, m.az, m.gx, m.gy, m.gz, tostring(m.gyro)))";
+      const char* script =
+          "local m = device.motion()\nprint(string.format('%.2f %.2f %.2f %.1f %.1f %.1f %s', m.ax, m.ay, m.az, m.gx, "
+          "m.gy, m.gz, tostring(m.gyro)))";
       CHECK(vm.load("t", script, strlen(script)));
       CHECK(run(vm, be, 100000) == Status::Finished);
-      CHECK(be.logs.size() == 1 && be.logs[0] == "0.50 -0.25 1.00 0.0 0.0 0.0 false");  // gyro fields are zero on accelerometer-only parts
+      CHECK(be.logs.size() == 1 &&
+            be.logs[0] == "0.50 -0.25 1.00 0.0 0.0 0.0 false");  // gyro fields are zero on accelerometer-only parts
     }
     {
       MockBackend be;
@@ -3213,7 +3760,8 @@ int main() {
     const char* names[8] = {"imu", "gyro", "rtc", "temp_humidity", "buzzer", "mic", "led", "tls13"};
     for (int k = 0; k < 3; k++) {
       MockBackend be;
-      bool* f[8] = {&be.caps.imu, &be.caps.gyro, &be.caps.rtc, &be.caps.tempHumidity, &be.caps.buzzer, &be.caps.mic, &be.caps.led, &be.caps.tls13};
+      bool* f[8] = {&be.caps.imu,    &be.caps.gyro, &be.caps.rtc, &be.caps.tempHumidity,
+                    &be.caps.buzzer, &be.caps.mic,  &be.caps.led, &be.caps.tls13};
       std::string want;
       for (int i = 0; i < 8; i++) {
         *f[i] = ((i >> k) & 1) != 0;
@@ -3247,12 +3795,16 @@ int main() {
     be.epubs["/Books/a.epub"] = {"A Tale of Two Cities", "Charles Dickens"};
     be.epubs["/Books/anon.epub"] = {"No Author Here", ""};
     std::string longTitle;
-    for (int i = 0; i < 150; i++) longTitle += "\xC3\xA9";  // 300 bytes of 2-byte characters: the cap lands mid-character
+    for (int i = 0; i < 150; i++)
+      longTitle += "\xC3\xA9";  // 300 bytes of 2-byte characters: the cap lands mid-character
     std::string longAuthor;
-    for (int i = 0; i < 100; i++) longAuthor += "\xC3\xA9";  // 200 bytes: the 120-byte author cap also lands mid-character
+    for (int i = 0; i < 100; i++)
+      longAuthor += "\xC3\xA9";  // 200 bytes: the 120-byte author cap also lands mid-character
     be.epubs["/Books/long.epub"] = {longTitle, longAuthor};
-    be.epubs["/Books/cafe.epub"] = {"Caf\xC3\xA9", "\xE2\x82\xAC"};  // complete 2- and 3-byte characters at the very end must survive
-    be.epubs["/Books/emoji.epub"] = {std::string(197, 'a') + "\xF0\x9F\x98\x80", "x"};  // a 4-byte character cut by the cap
+    be.epubs["/Books/cafe.epub"] = {"Caf\xC3\xA9",
+                                    "\xE2\x82\xAC"};  // complete 2- and 3-byte characters at the very end must survive
+    be.epubs["/Books/emoji.epub"] = {std::string(197, 'a') + "\xF0\x9F\x98\x80",
+                                     "x"};  // a 4-byte character cut by the cap
     be.files["/Books/notes.txt"] = "x";
     LuaVm vm;
     CHECK(vm.open(128 * 1024));
@@ -3279,16 +3831,19 @@ int main() {
     if (be.logs.size() == 10) {
       CHECK(be.logs[0] == "A Tale of Two Cities\tCharles Dickens");
       CHECK(be.logs[1] == "No Author Here\t[]\tstring");
-      CHECK(be.logs[2] == "198\ttrue\t118\ttrue");  // title cut at 199 bytes, author at 119: both trimmed back to the last whole character
+      CHECK(be.logs[2] == "198\ttrue\t118\ttrue");  // title cut at 199 bytes, author at 119: both trimmed back to the
+                                                    // last whole character
       CHECK(be.logs[3] == "5\tCaf\xC3\xA9\t3\t\xE2\x82\xAC");  // complete multi-byte tails are NOT trimmed
-      CHECK(be.logs[4] == "197");              // the cut 4-byte character is dropped whole
+      CHECK(be.logs[4] == "197");                              // the cut 4-byte character is dropped whole
       CHECK(be.logs[5] == "nil\tnot an .epub file");
       CHECK(be.logs[6] == "nil\tmock: no such book");  // the backend's own message is passed through
       CHECK(be.logs[7] == "nil\tmock: no such book");  // ".EPUB": extension check is case-insensitive
-      CHECK(be.logs[8].rfind("nil\t", 0) == 0);  // sandbox: '..' refused before the backend is asked
+      CHECK(be.logs[8].rfind("nil\t", 0) == 0);        // sandbox: '..' refused before the backend is asked
       CHECK(be.logs[9].rfind("false\t", 0) == 0);
     }
-    const std::vector<std::string> asked = {"/Books/a.epub", "/Books/anon.epub", "/Books/long.epub", "/Books/cafe.epub", "/Books/emoji.epub", "/Books/missing.epub", "/Books/A.EPUB"};
+    const std::vector<std::string> asked = {"/Books/a.epub",    "/Books/anon.epub",  "/Books/long.epub",
+                                            "/Books/cafe.epub", "/Books/emoji.epub", "/Books/missing.epub",
+                                            "/Books/A.EPUB"};
     CHECK(be.epubAsked == asked);  // notes.txt and the '..' path never reached the backend
   }
   {
@@ -3306,7 +3861,9 @@ int main() {
     CHECK(be.epubAsked.empty());
   }
   {
-    TEST("gfx.save_bmp: same write rules as fs.write (data: yes, sd: needs a grant, app: never, no .bin), .bmp only, backend errors pass through");
+    TEST(
+        "gfx.save_bmp: same write rules as fs.write (data: yes, sd: needs a grant, app: never, no .bin), .bmp only, "
+        "backend errors pass through");
     MockBackend be;
     be.library = true;  // may READ sd: but has no write grant
     LuaVm vm;
@@ -3336,7 +3893,8 @@ int main() {
       CHECK(be.logs[7].rfind("false\t", 0) == 0);
     }
     const std::vector<std::string> saved = {"/.crosslua/data/test/shots/a.bmp", "/.crosslua/data/test/B.BMP"};
-    CHECK(be.bmpSaved == saved);  // only the two good saves; the refused paths never reached the backend, fail.bmp failed
+    CHECK(be.bmpSaved ==
+          saved);  // only the two good saves; the refused paths never reached the backend, fail.bmp failed
     CHECK(be.dirs.count("/.crosslua/data/test/shots") == 1);  // the parent folder is created like fs.write does
   }
   {
@@ -3374,8 +3932,22 @@ int main() {
     )LUA";
     CHECK(vm.load("t", script, strlen(script)));
     CHECK(run(vm, be, 200000) == Status::Finished);
-    const char* want[] = {"1", "12\ttrue", "0123", "456789ab", "[]\ttrue", "3", "0", "2", "bye", "nil\tclosed", "false", "true",
-                          "nil\tnot an open socket handle", "nil\tnot an open socket handle", "2", "true\ttrue"};
+    const char* want[] = {"1",
+                          "12\ttrue",
+                          "0123",
+                          "456789ab",
+                          "[]\ttrue",
+                          "3",
+                          "0",
+                          "2",
+                          "bye",
+                          "nil\tclosed",
+                          "false",
+                          "true",
+                          "nil\tnot an open socket handle",
+                          "nil\tnot an open socket handle",
+                          "2",
+                          "true\ttrue"};
     const size_t N = sizeof(want) / sizeof(want[0]);
     CHECK(be.logs.size() == N);
     for (size_t i = 0; i < N && i < be.logs.size(); i++) {
@@ -3383,8 +3955,9 @@ int main() {
       if (be.logs[i] != want[i]) printf("    net #%zu got '%s' want '%s'\n", i + 1, be.logs[i].c_str(), want[i]);
     }
     CHECK(be.socks[0].tx.empty() && !be.socks[0].used);  // closed by the script: the table is clean
-    CHECK(be.txLog == "example.test:80<-pin");            // exactly one non-empty write reached the backend (cut to 3 bytes)
-    CHECK(be.connectOpts.size() == 3 && be.connectOpts[1] == 250 && be.connectOpts[0] == 5000);  // timeout default and explicit
+    CHECK(be.txLog == "example.test:80<-pin");  // exactly one non-empty write reached the backend (cut to 3 bytes)
+    CHECK(be.connectOpts.size() == 3 && be.connectOpts[1] == 250 &&
+          be.connectOpts[0] == 5000);  // timeout default and explicit
   }
   {
     TEST("net.udp: open/send/recv/close, two sockets, scripted peer replies, kind checks, exhaustion");
@@ -3418,9 +3991,21 @@ int main() {
     )LUA";
     CHECK(vm.load("t", script, strlen(script)));
     CHECK(run(vm, be, 300000) == Status::Finished);
-    const char* want[] = {"1", "4", "PONG|192.0.2.9|9098", "nil", "300", "nil", "true\t2", "PONG", "true",
-                          "nil\tnot an open socket handle", "nil\tnot a TCP socket", "nil\tnot a UDP socket",
-                          "nil\tnot a UDP socket", "true", "nil\tnot a UDP socket"};  // net.connect prints nothing: c reuses slot 0
+    const char* want[] = {"1",
+                          "4",
+                          "PONG|192.0.2.9|9098",
+                          "nil",
+                          "300",
+                          "nil",
+                          "true\t2",
+                          "PONG",
+                          "true",
+                          "nil\tnot an open socket handle",
+                          "nil\tnot a TCP socket",
+                          "nil\tnot a UDP socket",
+                          "nil\tnot a UDP socket",
+                          "true",
+                          "nil\tnot a UDP socket"};  // net.connect prints nothing: c reuses slot 0
     const size_t N = sizeof(want) / sizeof(want[0]);
     CHECK(be.logs.size() == N);
     for (size_t i = 0; i < N && i < be.logs.size(); i++) {
@@ -3468,21 +4053,35 @@ int main() {
     )LUA";
     CHECK(vm.load("t", script, strlen(script)));
     CHECK(run(vm, be, 400000) == Status::Finished);
-    const char* want[] = {
-        "nil\tport must be an integer 0..65535 (0 = system-assigned)", "nil\tport must be an integer 0..65535 (0 = system-assigned)",
-        "nil\tport must be an integer 0..65535 (0 = system-assigned)", "1", "nil\tsend failed (mock)", "nil\tinvalid host name",
-        "nil\tport must be an integer 1..65535", "nil\tdata must not be empty",
-        "nil\tdata too large (max 16384 bytes)", "nil\tmax must be an integer 1..16384", "nil\tmax must be an integer 1..16384",
-        "true", "7", "8", "nil\ttoo many open sockets (max 8)", "true", "3"};
+    const char* want[] = {"nil\tport must be an integer 0..65535 (0 = system-assigned)",
+                          "nil\tport must be an integer 0..65535 (0 = system-assigned)",
+                          "nil\tport must be an integer 0..65535 (0 = system-assigned)",
+                          "1",
+                          "nil\tsend failed (mock)",
+                          "nil\tinvalid host name",
+                          "nil\tport must be an integer 1..65535",
+                          "nil\tdata must not be empty",
+                          "nil\tdata too large (max 16384 bytes)",
+                          "nil\tmax must be an integer 1..16384",
+                          "nil\tmax must be an integer 1..16384",
+                          "true",
+                          "7",
+                          "8",
+                          "nil\ttoo many open sockets (max 8)",
+                          "true",
+                          "3"};
     const size_t N = sizeof(want) / sizeof(want[0]);
     CHECK(be.logs.size() == N);
     for (size_t i = 0; i < N && i < be.logs.size(); i++) {
       CHECK(be.logs[i] == want[i]);
       if (be.logs[i] != want[i]) printf("    udp2 #%zu got '%s' want '%s'\n", i + 1, be.logs[i].c_str(), want[i]);
     }
-    if (be.logs.size() != N || getenv("DUMP_LOGS")) for (size_t i = 0; i < be.logs.size(); i++) printf("    udp2 log[%zu] '%s'\n", i, be.logs[i].c_str());
-    // the 8 first handles: h (UDP, handle 1) + 7 TCP = 8 open; the 9th open fails; after closing one TCP, a UDP slot opens
-    CHECK(be.txLog.empty());  // udpSendFail: the failed send must not reach the backend log  // exactly one send reached the backend
+    if (be.logs.size() != N || getenv("DUMP_LOGS"))
+      for (size_t i = 0; i < be.logs.size(); i++) printf("    udp2 log[%zu] '%s'\n", i, be.logs[i].c_str());
+    // the 8 first handles: h (UDP, handle 1) + 7 TCP = 8 open; the 9th open fails; after closing one TCP, a UDP slot
+    // opens
+    CHECK(be.txLog.empty());  // udpSendFail: the failed send must not reach the backend log  // exactly one send
+                              // reached the backend
   }
   {
     TEST("net.udp_open: the RAM floor applies to UDP too");
@@ -3532,7 +4131,9 @@ int main() {
     }
   }
   {
-    TEST("lazy namespaces: nothing is built until touched; every namespace resolves; gfx extras are eager; _G is protected");
+    TEST(
+        "lazy namespaces: nothing is built until touched; every namespace resolves; gfx extras are eager; _G is "
+        "protected");
     MockBackend be;
     LuaVm vm;
     CHECK(vm.open(128 * 1024));
@@ -3565,8 +4166,17 @@ int main() {
     )LUA";
     CHECK(vm.load("t", script, strlen(script)));
     CHECK(run(vm, be, 400000) == Status::Finished);
-    const char* want[] = {"13", "true\ttrue\ttrue\ttrue\ttrue\ttrue\ttrue", "function\tfunction", "0", "function\tfunction\tfunction\tfunction",
-                          "13", "nil", "nil\tnil", "protected", "false\tcannot change a protected metatable", "nil"};
+    const char* want[] = {"13",
+                          "true\ttrue\ttrue\ttrue\ttrue\ttrue\ttrue",
+                          "function\tfunction",
+                          "0",
+                          "function\tfunction\tfunction\tfunction",
+                          "13",
+                          "nil",
+                          "nil\tnil",
+                          "protected",
+                          "false\tcannot change a protected metatable",
+                          "nil"};
     const size_t N = sizeof(want) / sizeof(want[0]);
     CHECK(be.logs.size() == N);
     for (size_t i = 0; i < N && i < be.logs.size(); i++) {
@@ -3575,7 +4185,9 @@ int main() {
     }
   }
   {
-    TEST("lazy namespaces: the first touch costs heap, the second costs nothing; an out-of-memory first touch can be retried");
+    TEST(
+        "lazy namespaces: the first touch costs heap, the second costs nothing; an out-of-memory first touch can be "
+        "retried");
     MockBackend be;
     LuaVm vm;
     CHECK(vm.open(24 * 1024));
@@ -3602,11 +4214,14 @@ int main() {
       CHECK(be.logs[0] == "true\ttrue");
       CHECK(be.logs[1] == "false\tnot enough memory");
       CHECK(be.logs[2] == "table\tfunction");
-      if (be.logs[1] != "false\tnot enough memory") printf("    lazy oom got [%s] [%s] [%s]\n", be.logs[0].c_str(), be.logs[1].c_str(), be.logs[2].c_str());
+      if (be.logs[1] != "false\tnot enough memory")
+        printf("    lazy oom got [%s] [%s] [%s]\n", be.logs[0].c_str(), be.logs[1].c_str(), be.logs[2].c_str());
     }
   }
   {
-    TEST("API calls from inside coroutines (nested, wrapped, after a yield) find the context through the inherited extra space");
+    TEST(
+        "API calls from inside coroutines (nested, wrapped, after a yield) find the context through the inherited "
+        "extra space");
     MockBackend be;
     be.net = true;
     LuaVm vm;
@@ -3634,7 +4249,9 @@ int main() {
     }
   }
   {
-    TEST("net.read: the heap floor is relaxed for the one allocation that drains the stack and ALWAYS restored (even on out-of-memory)");
+    TEST(
+        "net.read: the heap floor is relaxed for the one allocation that drains the stack and ALWAYS restored (even on "
+        "out-of-memory)");
     MockBackend be;
     be.net = true;
     be.wifiUp = true;
@@ -3661,10 +4278,13 @@ int main() {
       CHECK(be.logs[2] == "false\tnot enough memory");
       CHECK(be.logs[3] == "100");
     }
-    CHECK(be.relaxOn == 5 && be.relaxOff == 5);  // 3 + the failing one + 1 after: every relax(true) has its relax(false)
+    CHECK(be.relaxOn == 5 &&
+          be.relaxOff == 5);  // 3 + the failing one + 1 after: every relax(true) has its relax(false)
   }
   {
-    TEST("net.read: the peer vanishing between available() and the copy yields nil, closed (two values through the protected call)");
+    TEST(
+        "net.read: the peer vanishing between available() and the copy yields nil, closed (two values through the "
+        "protected call)");
     MockBackend be;
     be.net = true;
     be.wifiUp = true;
@@ -3673,7 +4293,8 @@ int main() {
     LuaVm vm;
     CHECK(vm.open(128 * 1024));
     registerApi(vm, be);
-    const char* script = "local h = net.connect('example.test', 80)\nprint(net.read(h))\nprint(select('#', net.read(h)))";
+    const char* script =
+        "local h = net.connect('example.test', 80)\nprint(net.read(h))\nprint(select('#', net.read(h)))";
     CHECK(vm.load("t", script, strlen(script)));
     CHECK(run(vm, be, 100000) == Status::Finished);
     CHECK(be.logs.size() == 2 && be.logs[0] == "nil\tclosed" && be.logs[1] == "2");
@@ -3723,17 +4344,34 @@ int main() {
     CHECK(vm.load("t", script, strlen(script)));
     CHECK(run(vm, be, 400000) == Status::Finished);
     const char* want[] = {
-        "nil\tinvalid host name", "nil\tinvalid host name", "nil\tinvalid host name",
-        "nil\tport must be an integer 1..65535", "nil\tport must be an integer 1..65535", "nil\tport must be an integer 1..65535",
-        "nil\ttimeout_ms must be an integer 100..15000", "nil\ttimeout_ms must be an integer 100..15000",
+        "nil\tinvalid host name",
+        "nil\tinvalid host name",
+        "nil\tinvalid host name",
+        "nil\tport must be an integer 1..65535",
+        "nil\tport must be an integer 1..65535",
+        "nil\tport must be an integer 1..65535",
+        "nil\ttimeout_ms must be an integer 100..15000",
+        "nil\ttimeout_ms must be an integer 100..15000",
         "nil\ttimeout_ms must be an integer 100..15000",
         "nil\ttls needs ca=\"<PEM file>\" (verified) or insecure=true (encrypted, server NOT authenticated)",
         "nil\tca and insecure only apply with tls=true",
-        "false", "false", "nil\tconnection refused (mock)", "1\t4\t8", "nil\ttoo many open sockets (max 8)", "true", "2",
-        "nil\tmax must be an integer 1..4096", "nil\tmax must be an integer 1..4096", "nil\tmax must be an integer 1..4096",
+        "false",
+        "false",
+        "nil\tconnection refused (mock)",
+        "1\t4\t8",
+        "nil\ttoo many open sockets (max 8)",
+        "true",
+        "2",
+        "nil\tmax must be an integer 1..4096",
+        "nil\tmax must be an integer 1..4096",
+        "nil\tmax must be an integer 1..4096",
         "nil\tdata too large (max 16384 per call; loop on the returned count)",
-        "nil\tnot an open socket handle", "nil\tnot an open socket handle", "nil\tnot an open socket handle",
-        "nil\tnot an open socket handle", "nil\tnot an open socket handle", "false"};
+        "nil\tnot an open socket handle",
+        "nil\tnot an open socket handle",
+        "nil\tnot an open socket handle",
+        "nil\tnot an open socket handle",
+        "nil\tnot an open socket handle",
+        "false"};
     const size_t N = sizeof(want) / sizeof(want[0]);
     CHECK(be.logs.size() == N);
     for (size_t i = 0; i < N && i < be.logs.size(); i++) {
@@ -3742,7 +4380,8 @@ int main() {
     }
     CHECK(be.connectCalls == 10);  // refused one + 8 + the reuse: every invalid call stopped in the binding
     CHECK(be.txLog.empty());
-    if (getenv("DUMP_LOGS")) for (size_t i = 0; i < be.logs.size(); i++) printf("    net log[%zu] '%s'\n", i, be.logs[i].c_str());
+    if (getenv("DUMP_LOGS"))
+      for (size_t i = 0; i < be.logs.size(); i++) printf("    net log[%zu] '%s'\n", i, be.logs[i].c_str());
   }
   {
     TEST("net: gates: permission, WiFi up, free RAM; resolve (literal passthrough, DNS) and local()");
@@ -3753,7 +4392,9 @@ int main() {
       LuaVm vm;
       CHECK(vm.open(128 * 1024));
       registerApi(vm, be);
-      const char* script = "print(net.info())\nprint(net.resolve('example.test'))\nprint(net.connect('example.test', 80))\nprint(net.read(1))\nprint(net.write(1, 'x'))\nprint(net.close(1))";
+      const char* script =
+          "print(net.info())\nprint(net.resolve('example.test'))\nprint(net.connect('example.test', "
+          "80))\nprint(net.read(1))\nprint(net.write(1, 'x'))\nprint(net.close(1))";
       CHECK(vm.load("t", script, strlen(script)));
       CHECK(run(vm, be, 100000) == Status::Finished);
       CHECK(be.logs.size() == 6);
@@ -3767,7 +4408,9 @@ int main() {
       LuaVm vm;
       CHECK(vm.open(128 * 1024));
       registerApi(vm, be);
-      const char* script = "print(net.info())\nprint(net.resolve('example.test'))\nprint(net.connect('example.test', 80))\nprint(net.read(1))";
+      const char* script =
+          "print(net.info())\nprint(net.resolve('example.test'))\nprint(net.connect('example.test', "
+          "80))\nprint(net.read(1))";
       CHECK(vm.load("t", script, strlen(script)));
       CHECK(run(vm, be, 100000) == Status::Finished);
       CHECK(be.logs.size() == 4);
@@ -3813,8 +4456,13 @@ int main() {
       )LUA";
       CHECK(vm.load("t", script, strlen(script)));
       CHECK(run(vm, be, 100000) == Status::Finished);
-      const char* want[] = {"93.184.216.34", "10.0.0.7", "nil\tcannot resolve host (mock)", "nil\tcannot resolve host (mock)",
-                            "nil\tcannot resolve host (mock)", "nil\tinvalid host name", "nil\tinvalid host name",
+      const char* want[] = {"93.184.216.34",
+                            "10.0.0.7",
+                            "nil\tcannot resolve host (mock)",
+                            "nil\tcannot resolve host (mock)",
+                            "nil\tcannot resolve host (mock)",
+                            "nil\tinvalid host name",
+                            "nil\tinvalid host name",
                             "192.168.1.50\t255.255.255.0\t192.168.1.1\t1.1.1.1"};
       const size_t N = sizeof(want) / sizeof(want[0]);
       CHECK(be.logs.size() == N);
@@ -3831,7 +4479,8 @@ int main() {
     std::string mod = "local M = {}\n";
     for (int i = 0; i < 200; i++) {
       char line[160];
-      snprintf(line, sizeof(line), "function M.f%d(a, b)\n  local t = {a, b, %d}\n  return t[1] * t[2] + t[3] + #tostring(a)\nend\n", i, i);
+      snprintf(line, sizeof(line),
+               "function M.f%d(a, b)\n  local t = {a, b, %d}\n  return t[1] * t[2] + t[3] + #tostring(a)\nend\n", i, i);
       mod += line;
     }
     mod += "return M\n";
@@ -3850,8 +4499,8 @@ int main() {
       peakOk = vm.peakBytes();
       if (getenv("DUMP_LOGS")) printf("   module %zu B, peak with a huge budget %zu B\n", mod.size(), peakOk);
     }
-    // measured on the host: streaming + drop-the-full-copy peaks at ~111 KB; without the streaming ~128 KB; the original
-    // load order (source buffer + full + stripped copies together) ~181 KB
+    // measured on the host: streaming + drop-the-full-copy peaks at ~111 KB; without the streaming ~128 KB; the
+    // original load order (source buffer + full + stripped copies together) ~181 KB
     CHECK(peakOk > mod.size() && peakOk < 120000);
     MockBackend be;
     be.files["/plugins/test/big.lua"] = mod;
@@ -3861,30 +4510,37 @@ int main() {
     const char* sc = "local ok, m = pcall(require, 'big'); print(ok, ok and m.f7(3, 4))";
     CHECK(vm.load("t", sc, strlen(sc)));
     CHECK(run(vm, be) == Status::Finished);
-    if (getenv("DUMP_LOGS")) for (auto& l : be.logs) printf("   tight: %s\n", l.c_str());
+    if (getenv("DUMP_LOGS"))
+      for (auto& l : be.logs) printf("   tight: %s\n", l.c_str());
     CHECK(be.logs.size() == 1 && be.logs[0] == "true\t20");
   }
   {
     TEST("require: a module that cannot be read (card error) is a clean error; modules over 1 KB stream correctly");
     MockBackend be;
     std::string big = "local t = {}\n";
-    for (int i = 0; i < 300; i++) { char l[64]; snprintf(l, sizeof(l), "t[%d] = 'line number %d'\n", i, i); big += l; }
-    big += "return t\n";   // ~8 KB: several 1 KB pieces, with a token split across a piece boundary somewhere
+    for (int i = 0; i < 300; i++) {
+      char l[64];
+      snprintf(l, sizeof(l), "t[%d] = 'line number %d'\n", i, i);
+      big += l;
+    }
+    big += "return t\n";  // ~8 KB: several 1 KB pieces, with a token split across a piece boundary somewhere
     be.files["/plugins/test/broken.lua"] = "return 1";
     be.files["/plugins/test/long.lua"] = big;
     be.failReadPath = "/plugins/test/broken.lua";
     LuaVm vm;
     CHECK(vm.open(256 * 1024));
     registerApi(vm, be);
-    const char* sc = "local ok, e = pcall(require, 'broken'); print(ok, tostring(e):find('module read error', 1, true) ~= nil)\n"
-                     "local t = require('long'); print(#t, t[0], t[299])";
+    const char* sc =
+        "local ok, e = pcall(require, 'broken'); print(ok, tostring(e):find('module read error', 1, true) ~= nil)\n"
+        "local t = require('long'); print(#t, t[0], t[299])";
     CHECK(vm.load("t", sc, strlen(sc)));
     CHECK(run(vm, be) == Status::Finished);
     CHECK(be.logs.size() == 2 && be.logs[0] == "false\ttrue" && be.logs[1] == "299\tline number 0\tline number 299");
   }
   {
     TEST("require: errors - missing, bad names, syntax error, runtime error, circular, bytecode");
-    LuaVm vm; MockBackend be;
+    LuaVm vm;
+    MockBackend be;
     be.files["/plugins/test/syn.lua"] = "return ((";
     be.files["/plugins/test/boom.lua"] = "error('kaboom')";
     be.files["/plugins/test/ca.lua"] = "return require('cb')";
@@ -3909,14 +4565,15 @@ int main() {
   }
   {
     TEST("require: module top-level may yield (input.wait inside a module)");
-    LuaVm vm; MockBackend be;
+    LuaVm vm;
+    MockBackend be;
     be.files["/plugins/test/waiter.lua"] = "local e = input.wait(10) return {got = e}";
     be.events = {};
     setup(vm, be, "local m = require('waiter') print(tostring(m.got))");
     be.events.push_back("confirm");
     // run(): first resume hits input.wait with an event queued -> fast path. Use an empty queue instead:
     be.events.clear();
-    CHECK(vm.resume() == Status::Waiting);          // yielded from inside the module's top level
+    CHECK(vm.resume() == Status::Waiting);  // yielded from inside the module's top level
     CHECK(vm.timeoutMs() == 10);
     CHECK(vm.resume("left") == Status::Finished);
     CHECK(be.logs[0] == "left");
@@ -3925,12 +4582,17 @@ int main() {
   // ======================= Phase 2: json =======================
   {
     TEST("json: decode values, types, nesting, unicode");
-    LuaVm vm; MockBackend be;
-    setup(vm, be,
-          "local t = json.decode('{\"a\":[1,2.5,-3,1e2,true,false,null],\"s\":\"x\\\\ny\\\\u00e9\\\\ud83d\\\\ude00\",\"o\":{}}')\n"
-          "print(t.a[1], math.type(t.a[1]), t.a[2], math.type(t.a[2]), t.a[3], t.a[4], math.type(t.a[4]), t.a[5], t.a[6], t.a[7] == json.null)\n"
-          "print(t.s == 'x\\ny\\xc3\\xa9\\xf0\\x9f\\x98\\x80', next(t.o) == nil, #t.a)\n"
-          "print(math.type(json.decode('2147483647')), math.type(json.decode('2147483648')), json.decode(' 42 '), json.decode('\"\"') == '')");
+    LuaVm vm;
+    MockBackend be;
+    setup(
+        vm, be,
+        "local t = "
+        "json.decode('{\"a\":[1,2.5,-3,1e2,true,false,null],\"s\":\"x\\\\ny\\\\u00e9\\\\ud83d\\\\ude00\",\"o\":{}}')\n"
+        "print(t.a[1], math.type(t.a[1]), t.a[2], math.type(t.a[2]), t.a[3], t.a[4], math.type(t.a[4]), t.a[5], "
+        "t.a[6], t.a[7] == json.null)\n"
+        "print(t.s == 'x\\ny\\xc3\\xa9\\xf0\\x9f\\x98\\x80', next(t.o) == nil, #t.a)\n"
+        "print(math.type(json.decode('2147483647')), math.type(json.decode('2147483648')), json.decode(' 42 '), "
+        "json.decode('\"\"') == '')");
     CHECK(run(vm, be) == Status::Finished);
     CHECK(be.logs[0] == "1\tinteger\t2.5\tfloat\t-3\t100.0\tfloat\ttrue\tfalse\ttrue");
     CHECK(be.logs[1] == "true\ttrue\t7");
@@ -3938,12 +4600,15 @@ int main() {
   }
   {
     TEST("json: decode errors return nil,msg (never throw)");
-    LuaVm vm; MockBackend be;
+    LuaVm vm;
+    MockBackend be;
     setup(vm, be,
-          "local cases = {'', '{', '[1,2', '{\"a\"}', '{a:1}', '[1,]', '01', '1.', '\"abc', '\"\\\\x\"', '\"\\\\ud800\"', "
+          "local cases = {'', '{', '[1,2', '{\"a\"}', '{a:1}', '[1,]', '01', '1.', '\"abc', '\"\\\\x\"', "
+          "'\"\\\\ud800\"', "
           "'tru', '[1] x', '\"a\\nb\"', '{\"a\":1,}', string.rep('[', 100)}\n"
           "local bad = 0\n"
-          "for i, c in ipairs(cases) do local v, e = json.decode(c) if v == nil and type(e) == 'string' then bad = bad + 1 else print('ACCEPTED', i, c) end end\n"
+          "for i, c in ipairs(cases) do local v, e = json.decode(c) if v == nil and type(e) == 'string' then bad = bad "
+          "+ 1 else print('ACCEPTED', i, c) end end\n"
           "print(bad, #cases)\n"
           "print(json.decode('[1,}'))");
     CHECK(run(vm, be) == Status::Finished);
@@ -3953,9 +4618,11 @@ int main() {
   }
   {
     TEST("json: encode scalars, escapes, arrays, objects, null; roundtrip");
-    LuaVm vm; MockBackend be;
+    LuaVm vm;
+    MockBackend be;
     setup(vm, be,
-          "print(json.encode(nil), json.encode(true), json.encode(42), json.encode(1.5), json.encode('a\"b\\\\c\\n\\1'))\n"
+          "print(json.encode(nil), json.encode(true), json.encode(42), json.encode(1.5), "
+          "json.encode('a\"b\\\\c\\n\\1'))\n"
           "print(json.encode({1, 'x', {2}, json.null}), json.encode({}), json.encode({k = {1, 2}}))\n"
           "local src = {name = 'Samson', list = {1, 2, 3}, nested = {ok = true, pi = 3.25}, s = 'caf\\xc3\\xa9'}\n"
           "local back = json.decode(json.encode(src))\n"
@@ -3967,7 +4634,8 @@ int main() {
   }
   {
     TEST("json: encode refuses functions, cycles, sparse arrays, non-string keys, NaN");
-    LuaVm vm; MockBackend be;
+    LuaVm vm;
+    MockBackend be;
     setup(vm, be,
           "local cyc = {} cyc.self = cyc\n"
           "print(json.encode(print))\n"
@@ -3982,12 +4650,14 @@ int main() {
   }
   {
     TEST("json: big documents stay within budget and fail cleanly beyond it");
-    LuaVm vm; MockBackend be;
+    LuaVm vm;
+    MockBackend be;
     setup(vm, be,
           "local t = {} for i = 1, 300 do t[i] = {id = i, name = 'item' .. i} end\n"
           "local s = json.encode(t) local back = json.decode(s)\n"
           "print(#s > 5000, #back, back[300].name)\n"
-          "local ok, e = pcall(function() local big = {} for i = 1, 100000 do big[i] = {i} end return json.encode(big) end)\n"
+          "local ok, e = pcall(function() local big = {} for i = 1, 100000 do big[i] = {i} end return json.encode(big) "
+          "end)\n"
           "print(ok, tostring(e):sub(1, 17))",
           512 * 1024);  // host pointers are 64-bit: memory numbers here are ~1.6x what the 32-bit C3 uses
     CHECK(run(vm, be) == Status::Finished);
@@ -4081,7 +4751,8 @@ int main() {
       LuaVm vm;
       CHECK(vm.open(128 * 1024));
       registerApi(vm, be);
-      const char* script = "local hs = {} for i = 1, 8 do hs[i] = net.connect('h.test', 80) end\nprint(net.listen(8080))";
+      const char* script =
+          "local hs = {} for i = 1, 8 do hs[i] = net.connect('h.test', 80) end\nprint(net.listen(8080))";
       CHECK(vm.load("t", script, strlen(script)));
       CHECK(run(vm, be, 100000) == Status::Finished);
       CHECK(be.logs.size() == 1);
@@ -4163,15 +4834,17 @@ int main() {
     registerApi(vm2, be);
     // The server is still open in the mock's slots (slot 0, kind 3)
     // net.accept should find the queued client
-    const char* sc = "local cl = net.accept(1); print(cl); print(net.read(cl, 20)); print(net.write(cl, 'ok')); print(net.close(cl))";
+    const char* sc =
+        "local cl = net.accept(1); print(cl); print(net.read(cl, 20)); print(net.write(cl, 'ok')); "
+        "print(net.close(cl))";
     CHECK(vm2.load("t", sc, strlen(sc)));
     CHECK(run(vm2, be, 100000) == Status::Finished);
     CHECK(be.logs.size() == 4);
     if (be.logs.size() == 4) {
-      CHECK(be.logs[0] == "2");    // client handle (next free slot)
+      CHECK(be.logs[0] == "2");  // client handle (next free slot)
       CHECK(be.logs[1] == "HELLO from mock\n");
-      CHECK(be.logs[2] == "2");    // wrote 2 bytes
-      CHECK(be.logs[3] == "true"); // close succeeded
+      CHECK(be.logs[2] == "2");     // wrote 2 bytes
+      CHECK(be.logs[3] == "true");  // close succeeded
       CHECK(be.acceptCount == 1);
     }
   }
@@ -4195,7 +4868,8 @@ int main() {
       MockBackend be;  // server with nothing waiting
       be.net = true;
       be.wifiUp = true;
-      be.listenPermitted = true;      LuaVm vm;
+      be.listenPermitted = true;
+      LuaVm vm;
       CHECK(vm.open(128 * 1024));
       registerApi(vm, be);
       // Create the server first
@@ -4302,8 +4976,8 @@ int main() {
       be.net = true;
       be.wifiUp = true;
       be.mdnsResults = {
-        {"printer", "192.168.1.100", 631, "Office Printer"},
-        {"nas", "192.168.1.50", 5000, "My NAS"},
+          {"printer", "192.168.1.100", 631, "Office Printer"},
+          {"nas", "192.168.1.50", 5000, "My NAS"},
       };
       LuaVm vm;
       CHECK(vm.open(128 * 1024));
@@ -4369,7 +5043,8 @@ int main() {
       LuaVm vm;
       CHECK(vm.open(128 * 1024));
       registerApi(vm, be);
-      const char* script = "print(net.mdns_query('', 'tcp'))\nprint(net.mdns_query('http', ''))\nprint(net.mdns_query('http', 'foo'))";
+      const char* script =
+          "print(net.mdns_query('', 'tcp'))\nprint(net.mdns_query('http', ''))\nprint(net.mdns_query('http', 'foo'))";
       CHECK(vm.load("t", script, strlen(script)));
       CHECK(run(vm, be, 100000) == Status::Finished);
       CHECK(be.logs.size() == 3);
@@ -4490,15 +5165,19 @@ int main() {
       be.files["/plugins/test/song.mp3"] = std::string(1000, 'R');
       CHECK(vm.load("t", script, strlen(script)));
       CHECK(run(vm, be, 100000) == Status::Finished);
-      const char* want[] = {"nil\tcannot play (mock codec error)", "nil\twav is over 4 MB (the SD card read during playback would stutter)",
+      const char* want[] = {"nil\tcannot play (mock codec error)",
+                            "nil\twav is over 4 MB (the SD card read during playback would stutter)",
                             "nil\tnot a .wav file",
-                            "nil\tfile is too small to be a WAV", "nil\tno such file",
+                            "nil\tfile is too small to be a WAV",
+                            "nil\tno such file",
                             "nil\tnot a .wav file",  // the extension check runs before the size/type checks (data:dir)
                             "nil\tvolume must be an integer 0..100",
-                            "nil\tvolume must be an integer 0..100", "nil\tvolume must be an integer 0..100"};
+                            "nil\tvolume must be an integer 0..100",
+                            "nil\tvolume must be an integer 0..100"};
       const size_t N = sizeof(want) / sizeof(want[0]);
       CHECK(be.logs.size() == N);
-      if (be.logs.size() != N || getenv("DUMP_LOGS")) for (size_t i = 0; i < be.logs.size(); i++) printf("    audio2 log[%zu] '%s'\n", i, be.logs[i].c_str());
+      if (be.logs.size() != N || getenv("DUMP_LOGS"))
+        for (size_t i = 0; i < be.logs.size(); i++) printf("    audio2 log[%zu] '%s'\n", i, be.logs[i].c_str());
       for (size_t i = 0; i < N && i < be.logs.size(); i++) {
         CHECK(be.logs[i] == want[i]);
         if (be.logs[i] != want[i]) printf("    audio2 #%zu got '%s' want '%s'\n", i + 1, be.logs[i].c_str(), want[i]);
@@ -4506,7 +5185,7 @@ int main() {
       CHECK(be.audioPlays.empty());  // the failing play never recorded (mock refuses first)
     }
     {
-      MockBackend be;  // the mock is permissive about .wav so the BINDING extension check is what is tested:
+      MockBackend be;            // the mock is permissive about .wav so the BINDING extension check is what is tested:
       be.audioPermitted = true;  // a non-.wav path must be refused BEFORE the backend (mock accepts anything)
       LuaVm vm;
       CHECK(vm.open(128 * 1024));
@@ -4589,14 +5268,21 @@ int main() {
       )LUA";
       CHECK(vm.load("t", script, strlen(script)));
       CHECK(run(vm, be, 100000) == Status::Finished);
-      const char* want[] = {"nil\tpath must end in .wav", "nil\tseconds must be an integer 1..30",
-                            "nil\tseconds must be an integer 1..30", "nil\tseconds must be an integer 1..30",
-                            "nil\tread-only location (write to 'data:...')", "nil\tread-only location (write to 'data:...')",
-                            "nil\tms must be an integer 10..2000", "nil\tms must be an integer 10..2000",
-                            "nil\tms must be an integer 10..2000", "true", "nil\tis a directory"};
+      const char* want[] = {"nil\tpath must end in .wav",
+                            "nil\tseconds must be an integer 1..30",
+                            "nil\tseconds must be an integer 1..30",
+                            "nil\tseconds must be an integer 1..30",
+                            "nil\tread-only location (write to 'data:...')",
+                            "nil\tread-only location (write to 'data:...')",
+                            "nil\tms must be an integer 10..2000",
+                            "nil\tms must be an integer 10..2000",
+                            "nil\tms must be an integer 10..2000",
+                            "true",
+                            "nil\tis a directory"};
       const size_t N = sizeof(want) / sizeof(want[0]);
       CHECK(be.logs.size() == N);
-      if (be.logs.size() != N || getenv("DUMP_LOGS")) for (size_t i = 0; i < be.logs.size(); i++) printf("    mic log[%zu] '%s'\n", i, be.logs[i].c_str());
+      if (be.logs.size() != N || getenv("DUMP_LOGS"))
+        for (size_t i = 0; i < be.logs.size(); i++) printf("    mic log[%zu] '%s'\n", i, be.logs[i].c_str());
       for (size_t i = 0; i < N && i < be.logs.size(); i++) {
         CHECK(be.logs[i] == want[i]);
         if (be.logs[i] != want[i]) printf("    mic #%zu got '%s' want '%s'\n", i + 1, be.logs[i].c_str(), want[i]);
@@ -4618,8 +5304,11 @@ int main() {
     }
   }
   {
-    TEST("net: TLS client sockets: trust choice is mandatory, ca PEM is read through the sandbox, one at a time, RAM floors, kind-4 is TCP");
-    const char* PEM = "-----BEGIN CERTIFICATE-----\nMIIBFAKEFAKEFAKEFAKEFAKEFAKEFAKEFAKEFAKE\n-----END CERTIFICATE-----\n";
+    TEST(
+        "net: TLS client sockets: trust choice is mandatory, ca PEM is read through the sandbox, one at a time, RAM "
+        "floors, kind-4 is TCP");
+    const char* PEM =
+        "-----BEGIN CERTIFICATE-----\nMIIBFAKEFAKEFAKEFAKEFAKEFAKEFAKEFAKEFAKE\n-----END CERTIFICATE-----\n";
     {
       MockBackend be;
       be.net = true;
@@ -4665,10 +5354,15 @@ int main() {
           "false\tbad argument #3 to '?' (ca must be a path string)",
           "1",
           "nil\tonly one TLS socket at a time (it costs ~40 KB of RAM)",
-          "HELLO", "3", "0\ttrue", "true", "1"};
+          "HELLO",
+          "3",
+          "0\ttrue",
+          "true",
+          "1"};
       const size_t N = sizeof(want) / sizeof(want[0]);
       CHECK(be.logs.size() == N);
-      if (be.logs.size() != N || getenv("DUMP_LOGS")) for (size_t i = 0; i < be.logs.size(); i++) printf("    tls log[%zu] '%s'\n", i, be.logs[i].c_str());
+      if (be.logs.size() != N || getenv("DUMP_LOGS"))
+        for (size_t i = 0; i < be.logs.size(); i++) printf("    tls log[%zu] '%s'\n", i, be.logs[i].c_str());
       for (size_t i = 0; i < N && i < be.logs.size(); i++) {
         CHECK(be.logs[i] == want[i]);
         if (be.logs[i] != want[i]) printf("    tls #%zu got '%s' want '%s'\n", i + 1, be.logs[i].c_str(), want[i]);
@@ -4758,9 +5452,12 @@ int main() {
     }
   }
   {
-    TEST("fs.stat / fs.list detail: size, dir, FAT time -> wall-clock epoch (independent reference values), paging, option validation");
+    TEST(
+        "fs.stat / fs.list detail: size, dir, FAT time -> wall-clock epoch (independent reference values), paging, "
+        "option validation");
     auto fat = [](int y, int mo, int d, int h, int mi, int sec) -> uint32_t {
-      return (static_cast<uint32_t>(((y - 1980) << 9) | (mo << 5) | d) << 16) | static_cast<uint32_t>((h << 11) | (mi << 5) | (sec / 2));
+      return (static_cast<uint32_t>(((y - 1980) << 9) | (mo << 5) | d) << 16) |
+             static_cast<uint32_t>((h << 11) | (mi << 5) | (sec / 2));
     };
     {
       MockBackend be;
@@ -4771,22 +5468,38 @@ int main() {
       be.files[D + "sub/x"] = "1";
       be.fatTimes[D + "b.txt"] = fat(2026, 10, 26, 12, 34, 56);  // 1793018096 (python calendar.timegm)
       be.fatTimes[D + "a.txt"] = fat(1980, 1, 1, 0, 0, 0);       // 315532800
-      be.files[D + "leap"] = "x"; be.fatTimes[D + "leap"] = fat(2024, 2, 29, 23, 59, 58);  // 1709251198
-      be.files[D + "last"] = "x"; be.fatTimes[D + "last"] = fat(2107, 12, 31, 23, 59, 58); // 4354819198: past 32-bit Lua, so unknown
-      be.files[D + "y2038"] = "x"; be.fatTimes[D + "y2038"] = fat(2038, 1, 19, 3, 14, 6);   // 2147483646: the last stamp that fits
-      be.files[D + "y2038b"] = "x"; be.fatTimes[D + "y2038b"] = fat(2038, 1, 19, 3, 14, 8); // 2147483648: one tick too far -> unknown
-      be.files[D + "huge"] = "x"; be.bigSizes[D + "huge"] = 3000000000LL;                    // > 2 GiB: clamps, never negative
-      be.files[D + "edge"] = "x"; be.bigSizes[D + "edge"] = 2147483647LL;
-      be.files[D + "jan"] = "x"; be.fatTimes[D + "jan"] = fat(2025, 1, 31, 0, 0, 0);       // 1738281600
-      be.files[D + "mar"] = "x"; be.fatTimes[D + "mar"] = fat(2025, 3, 1, 0, 0, 0);        // 1740787200
-      be.files[D + "badmon"] = "x"; be.fatTimes[D + "badmon"] = fat(2026, 13, 1, 0, 0, 0);
-      be.files[D + "badmon0"] = "x"; be.fatTimes[D + "badmon0"] = fat(2026, 0, 1, 0, 0, 0);
-      be.files[D + "badday"] = "x"; be.fatTimes[D + "badday"] = fat(2026, 1, 0, 0, 0, 0);
-      be.files[D + "badday32"] = "x"; be.fatTimes[D + "badday32"] = fat(2026, 1, 32 & 31, 0, 0, 0);  // 0 after the mask: same as badday
-      be.files[D + "badhour"] = "x"; be.fatTimes[D + "badhour"] = fat(2026, 1, 1, 24, 0, 0);
-      be.files[D + "badmin"] = "x"; be.fatTimes[D + "badmin"] = fat(2026, 1, 1, 0, 60, 0);
-      be.files[D + "badsec"] = "x"; be.fatTimes[D + "badsec"] = (fat(2026, 1, 1, 0, 0, 0) & 0xFFFF0000u) | 30;  // 30 * 2 = 60 s
-      be.files[D + "nodate"] = "x"; be.fatTimes[D + "nodate"] = 0x00001234;  // a time without a date
+      be.files[D + "leap"] = "x";
+      be.fatTimes[D + "leap"] = fat(2024, 2, 29, 23, 59, 58);  // 1709251198
+      be.files[D + "last"] = "x";
+      be.fatTimes[D + "last"] = fat(2107, 12, 31, 23, 59, 58);  // 4354819198: past 32-bit Lua, so unknown
+      be.files[D + "y2038"] = "x";
+      be.fatTimes[D + "y2038"] = fat(2038, 1, 19, 3, 14, 6);  // 2147483646: the last stamp that fits
+      be.files[D + "y2038b"] = "x";
+      be.fatTimes[D + "y2038b"] = fat(2038, 1, 19, 3, 14, 8);  // 2147483648: one tick too far -> unknown
+      be.files[D + "huge"] = "x";
+      be.bigSizes[D + "huge"] = 3000000000LL;  // > 2 GiB: clamps, never negative
+      be.files[D + "edge"] = "x";
+      be.bigSizes[D + "edge"] = 2147483647LL;
+      be.files[D + "jan"] = "x";
+      be.fatTimes[D + "jan"] = fat(2025, 1, 31, 0, 0, 0);  // 1738281600
+      be.files[D + "mar"] = "x";
+      be.fatTimes[D + "mar"] = fat(2025, 3, 1, 0, 0, 0);  // 1740787200
+      be.files[D + "badmon"] = "x";
+      be.fatTimes[D + "badmon"] = fat(2026, 13, 1, 0, 0, 0);
+      be.files[D + "badmon0"] = "x";
+      be.fatTimes[D + "badmon0"] = fat(2026, 0, 1, 0, 0, 0);
+      be.files[D + "badday"] = "x";
+      be.fatTimes[D + "badday"] = fat(2026, 1, 0, 0, 0, 0);
+      be.files[D + "badday32"] = "x";
+      be.fatTimes[D + "badday32"] = fat(2026, 1, 32 & 31, 0, 0, 0);  // 0 after the mask: same as badday
+      be.files[D + "badhour"] = "x";
+      be.fatTimes[D + "badhour"] = fat(2026, 1, 1, 24, 0, 0);
+      be.files[D + "badmin"] = "x";
+      be.fatTimes[D + "badmin"] = fat(2026, 1, 1, 0, 60, 0);
+      be.files[D + "badsec"] = "x";
+      be.fatTimes[D + "badsec"] = (fat(2026, 1, 1, 0, 0, 0) & 0xFFFF0000u) | 30;  // 30 * 2 = 60 s
+      be.files[D + "nodate"] = "x";
+      be.fatTimes[D + "nodate"] = 0x00001234;  // a time without a date
       LuaVm vm;
       CHECK(vm.open(128 * 1024));
       registerApi(vm, be);
@@ -4814,13 +5527,33 @@ int main() {
       )LUA";
       CHECK(vm.load("t", script, strlen(script)));
       CHECK(run(vm, be, 400000) == Status::Finished);
-      const char* want[] = {"5,false,1793018096", "3,false,315532800", "0,false,nil", "0,true,nil", "nil\tno such file",
-                            "1,false,1709251198", "1,false,nil", "1,false,2147483646", "1,false,nil", "2147483647,false,nil", "2147483647,false,nil", "1,false,1738281600", "1,false,1740787200",
-                            "badmon=nil", "badmon0=nil", "badday=nil", "badday32=nil", "badhour=nil", "badmin=nil", "badsec=nil", "nodate=nil",
-                            "nil\t'.' and '..' are not allowed", "false"};
+      const char* want[] = {"5,false,1793018096",
+                            "3,false,315532800",
+                            "0,false,nil",
+                            "0,true,nil",
+                            "nil\tno such file",
+                            "1,false,1709251198",
+                            "1,false,nil",
+                            "1,false,2147483646",
+                            "1,false,nil",
+                            "2147483647,false,nil",
+                            "2147483647,false,nil",
+                            "1,false,1738281600",
+                            "1,false,1740787200",
+                            "badmon=nil",
+                            "badmon0=nil",
+                            "badday=nil",
+                            "badday32=nil",
+                            "badhour=nil",
+                            "badmin=nil",
+                            "badsec=nil",
+                            "nodate=nil",
+                            "nil\t'.' and '..' are not allowed",
+                            "false"};
       const size_t N = sizeof(want) / sizeof(want[0]);
       CHECK(be.logs.size() == N);
-      if (be.logs.size() != N || getenv("DUMP_LOGS")) for (size_t i = 0; i < be.logs.size(); i++) printf("    stat log[%zu] '%s'\n", i, be.logs[i].c_str());
+      if (be.logs.size() != N || getenv("DUMP_LOGS"))
+        for (size_t i = 0; i < be.logs.size(); i++) printf("    stat log[%zu] '%s'\n", i, be.logs[i].c_str());
       for (size_t i = 0; i < N && i < be.logs.size(); i++) {
         CHECK(be.logs[i] == want[i]);
         if (be.logs[i] != want[i]) printf("    stat #%zu got '%s' want '%s'\n", i + 1, be.logs[i].c_str(), want[i]);
@@ -4861,21 +5594,32 @@ int main() {
       )LUA";
       CHECK(vm.load("t", script, strlen(script)));
       CHECK(run(vm, be, 400000) == Status::Finished);
-      const char* want[] = {"1", "a.txt b.txt c.txt sub/", "a.txt b.txt c.txt sub/\t4", "b.txt c.txt\t4", "0\t4", "sub/\t4",
-                            "a.txt b.txt c.txt sub/\t4", "b.txt\t5\tfalse\t1793018096", "sub\t0\ttrue\tnil",
-                            "b.txt c.txt\t4\t2", "a.txt\t4"};
+      const char* want[] = {"1",
+                            "a.txt b.txt c.txt sub/",
+                            "a.txt b.txt c.txt sub/\t4",
+                            "b.txt c.txt\t4",
+                            "0\t4",
+                            "sub/\t4",
+                            "a.txt b.txt c.txt sub/\t4",
+                            "b.txt\t5\tfalse\t1793018096",
+                            "sub\t0\ttrue\tnil",
+                            "b.txt c.txt\t4\t2",
+                            "a.txt\t4"};
       const size_t N = sizeof(want) / sizeof(want[0]);
       CHECK(be.logs.size() == N);
-      if (be.logs.size() != N || getenv("DUMP_LOGS")) for (size_t i = 0; i < be.logs.size(); i++) printf("    list log[%zu] '%s'\n", i, be.logs[i].c_str());
+      if (be.logs.size() != N || getenv("DUMP_LOGS"))
+        for (size_t i = 0; i < be.logs.size(); i++) printf("    list log[%zu] '%s'\n", i, be.logs[i].c_str());
       for (size_t i = 0; i < N && i < be.logs.size(); i++) {
         CHECK(be.logs[i] == want[i]);
         if (be.logs[i] != want[i]) printf("    list #%zu got '%s' want '%s'\n", i + 1, be.logs[i].c_str(), want[i]);
       }
-      // stat is only asked for the entries inside the window: 4 (full detail) + 2 (the 2-entry window); plain listings ask for none
+      // stat is only asked for the entries inside the window: 4 (full detail) + 2 (the 2-entry window); plain listings
+      // ask for none
       CHECK(be.statCalls == 6);
     }
     {
-      MockBackend be;  // the default detail window is 32 entries (a table per entry is ~100 bytes of the Lua heap); names default to all
+      MockBackend be;  // the default detail window is 32 entries (a table per entry is ~100 bytes of the Lua heap);
+                       // names default to all
       for (int i = 0; i < 40; i++) {
         char nm[48];
         snprintf(nm, sizeof(nm), "/.crosslua/data/test/f%02d", i);
@@ -4904,7 +5648,8 @@ int main() {
       }
     }
     {
-      MockBackend be;  // an entry that vanishes between the listing and the stat keeps its name and type, size 0, no time
+      MockBackend
+          be;  // an entry that vanishes between the listing and the stat keeps its name and type, size 0, no time
       const std::string D = "/.crosslua/data/test/";
       be.files[D + "gone.txt"] = "abc";
       be.files[D + "sub/x"] = "1";
@@ -4954,14 +5699,25 @@ int main() {
       )LUA";
       CHECK(vm.load("t", script, strlen(script)));
       CHECK(run(vm, be, 100000) == Status::Finished);
-      const char* want[] = {"nil\tdetail must be a boolean", "nil\toffset must be an integer >= 0", "nil\toffset must be an integer >= 0",
-                            "nil\toffset must be an integer >= 0", "nil\toffset must be an integer >= 0",
-                            "nil\tlimit must be an integer 1..512", "nil\tlimit must be an integer 1..512", "nil\tlimit must be an integer 1..512",
-                            "nil\tlimit must be an integer", "nil\tlimit must be an integer 1..64",
-                            "nil\tunknown option 'colour'", "nil\toptions must have string keys", "false", "1\t1", "nil\tnot a directory"};
+      const char* want[] = {"nil\tdetail must be a boolean",
+                            "nil\toffset must be an integer >= 0",
+                            "nil\toffset must be an integer >= 0",
+                            "nil\toffset must be an integer >= 0",
+                            "nil\toffset must be an integer >= 0",
+                            "nil\tlimit must be an integer 1..512",
+                            "nil\tlimit must be an integer 1..512",
+                            "nil\tlimit must be an integer 1..512",
+                            "nil\tlimit must be an integer",
+                            "nil\tlimit must be an integer 1..64",
+                            "nil\tunknown option 'colour'",
+                            "nil\toptions must have string keys",
+                            "false",
+                            "1\t1",
+                            "nil\tnot a directory"};
       const size_t N = sizeof(want) / sizeof(want[0]);
       CHECK(be.logs.size() == N);
-      if (be.logs.size() != N || getenv("DUMP_LOGS")) for (size_t i = 0; i < be.logs.size(); i++) printf("    opt log[%zu] '%s'\n", i, be.logs[i].c_str());
+      if (be.logs.size() != N || getenv("DUMP_LOGS"))
+        for (size_t i = 0; i < be.logs.size(); i++) printf("    opt log[%zu] '%s'\n", i, be.logs[i].c_str());
       for (size_t i = 0; i < N && i < be.logs.size(); i++) {
         CHECK(be.logs[i] == want[i]);
         if (be.logs[i] != want[i]) printf("    opt #%zu got '%s' want '%s'\n", i + 1, be.logs[i].c_str(), want[i]);
@@ -4970,14 +5726,20 @@ int main() {
     }
   }
   {
-    TEST("http: REST/JSON: methods, content_type (form default), headers on POST, ca pinning, response headers, strict validation");
-    const char* PEM = "-----BEGIN CERTIFICATE-----\nMIIBFAKEFAKEFAKEFAKEFAKEFAKEFAKEFAKEFAKE\n-----END CERTIFICATE-----\n";
+    TEST(
+        "http: REST/JSON: methods, content_type (form default), headers on POST, ca pinning, response headers, strict "
+        "validation");
+    const char* PEM =
+        "-----BEGIN CERTIFICATE-----\nMIIBFAKEFAKEFAKEFAKEFAKEFAKEFAKEFAKEFAKE\n-----END CERTIFICATE-----\n";
     {
       MockBackend be;
       be.wifiUp = true;
       be.files["/plugins/test/ca.pem"] = PEM;
       be.files["/plugins/test/tiny.pem"] = "x";
-      be.routes["https://ha/api/services/light/turn_on"] = {200, "[]", "", "Content-Type: application/json\r\nX-Rate: 5\r\nset-cookie: a=1\r\nSet-Cookie:   b=2  \r\nNoColonLine\r\n:empty\r\nX-Spaces:\t v \r\n"};
+      be.routes["https://ha/api/services/light/turn_on"] = {
+          200, "[]", "",
+          "Content-Type: application/json\r\nX-Rate: 5\r\nset-cookie: a=1\r\nSet-Cookie:   b=2  "
+          "\r\nNoColonLine\r\n:empty\r\nX-Spaces:\t v \r\n"};
       be.routes["https://ha/api/states/light.x"] = {200, "{}", ""};
       be.routes["http://h/plain"] = {200, "ok", ""};
       LuaVm vm;
@@ -5003,27 +5765,36 @@ int main() {
       CHECK(run(vm, be, 400000) == Status::Finished);
       const char* want[] = {"200\ttrue\t[]",
                             "application/json\t5\ta=1, b=2\tv\tnil\tnil\tnil",
-                            "200", "200", "200",
+                            "200",
+                            "200",
+                            "200",
                             "nil\ta DELETE request cannot have a body",
                             "200",
-                            "200\tnil", "nil"};
+                            "200\tnil",
+                            "nil"};
       const size_t N = sizeof(want) / sizeof(want[0]);
-      if (be.logs.size() != N || getenv("DUMP_LOGS")) for (size_t i = 0; i < be.logs.size(); i++) printf("    rest log[%zu] '%s'\n", i, be.logs[i].c_str());
+      if (be.logs.size() != N || getenv("DUMP_LOGS"))
+        for (size_t i = 0; i < be.logs.size(); i++) printf("    rest log[%zu] '%s'\n", i, be.logs[i].c_str());
       CHECK(be.logs.size() == N);
       for (size_t i = 0; i < N && i < be.logs.size(); i++) {
         CHECK(be.logs[i] == want[i]);
         if (be.logs[i] != want[i]) printf("    rest #%zu got '%s' want '%s'\n", i + 1, be.logs[i].c_str(), want[i]);
       }
-      // what the backend was handed: the POST carries its Authorization header, the JSON content type and the pinned PEM
+      // what the backend was handed: the POST carries its Authorization header, the JSON content type and the pinned
+      // PEM
       CHECK(be.seen.size() == 7);
       if (be.seen.size() == 7) {
         const auto& p = be.seen[0];
-        CHECK(p.method == "POST" && p.body == "{\"entity_id\":\"light.x\"}" && p.hasContentType && p.contentType == "application/json");
-        CHECK(p.hasCa && p.ca == PEM && p.wantHeaders && p.headers.size() == 1 && p.headers[0].first == "Authorization");
-        CHECK(be.seen[1].method == "PUT" && be.seen[1].contentType == "application/x-www-form-urlencoded" && !be.seen[1].hasCa && !be.seen[1].wantHeaders);
+        CHECK(p.method == "POST" && p.body == "{\"entity_id\":\"light.x\"}" && p.hasContentType &&
+              p.contentType == "application/json");
+        CHECK(p.hasCa && p.ca == PEM && p.wantHeaders && p.headers.size() == 1 &&
+              p.headers[0].first == "Authorization");
+        CHECK(be.seen[1].method == "PUT" && be.seen[1].contentType == "application/x-www-form-urlencoded" &&
+              !be.seen[1].hasCa && !be.seen[1].wantHeaders);
         CHECK(be.seen[2].method == "PATCH" && be.seen[2].hasContentType);
         CHECK(be.seen[3].method == "DELETE" && !be.seen[3].hasContentType);  // no body, no content type
-        CHECK(be.seen[4].method == "POST" && be.seen[4].body.empty() && !be.seen[4].hasContentType);  // no body, no content type
+        CHECK(be.seen[4].method == "POST" && be.seen[4].body.empty() &&
+              !be.seen[4].hasContentType);  // no body, no content type
         CHECK(!be.seen[5].hasCa && !be.seen[5].wantHeaders && !be.seen[5].hasContentType);
         CHECK(!be.seen[6].wantHeaders);
       }
@@ -5032,7 +5803,11 @@ int main() {
       MockBackend be;  // response header caps: 48 distinct names kept, a name up to 400 bytes is kept, 401 is dropped
       be.wifiUp = true;
       std::string hs;
-      for (int i = 0; i < 60; i++) { char l[32]; snprintf(l, sizeof(l), "H%02d: v\n", i); hs += l; }
+      for (int i = 0; i < 60; i++) {
+        char l[32];
+        snprintf(l, sizeof(l), "H%02d: v\n", i);
+        hs += l;
+      }
       be.routes["http://h/many"] = {200, "x", "", hs};
       be.routes["http://h/names"] = {200, "x", "", std::string(400, 'B') + ": ok\n" + std::string(401, 'C') + ": no\n"};
       LuaVm vm;
@@ -5050,7 +5825,8 @@ int main() {
       CHECK(be.logs.size() == 2 && be.logs[0] == "48" && be.logs[1] == "ok\tnil");
     }
     {
-      MockBackend be;  // the response-header buffer is freed on every call (300 requests so LeakSanitizer cannot miss a leak)
+      MockBackend
+          be;  // the response-header buffer is freed on every call (300 requests so LeakSanitizer cannot miss a leak)
       be.wifiUp = true;
       be.routes["http://h/leak"] = {200, "body", "", "X-A: 1\nX-B: 2\nX-C: 3\nX-D: 4\nX-E: 5\nX-F: 6\n"};
       LuaVm vm;
@@ -5068,7 +5844,8 @@ int main() {
       CHECK(run(vm, be, 4000000) == Status::Finished);
       CHECK(be.logs.size() == 1 && be.logs[0] == "done");
       // No byte counter here: ASAN replaces malloc, so mallinfo is blind. 300 requests make a missing free() a wall of
-      // LeakSanitizer reports (304 leaked allocations when the free is removed), which the run script turns into exit code 1.
+      // LeakSanitizer reports (304 leaked allocations when the free is removed), which the run script turns into exit
+      // code 1.
     }
     {
       MockBackend be;  // validation: nothing invalid reaches the backend
@@ -5101,23 +5878,25 @@ int main() {
       )LUA";
       CHECK(vm.load("t", script, strlen(script)));
       CHECK(run(vm, be, 400000) == Status::Finished);
-      const char* want[] = {
-          "false\tbad argument #1 to '?' (content_type must be a string)\tnil",
-          "true\tnil\tillegal content_type", "true\tnil\tillegal content_type", "true\tnil\tillegal content_type",
-          "true\tnil\tcontent_type needs a body",
-          "true\tnil\tset content_type instead of a Content-Type header",
-          "true\ttable: ADDR\tnil",  // a Content-Type header on a bodiless GET is allowed
-          "false\tbad argument #1 to '?' (response_headers must be a boolean)\tnil",
-          "false\tbad argument #1 to '?' (ca must be a path string)\tnil",
-          "true\tnil\tca only applies to https:// urls",
-          "true\tnil\tca file not found",
-          "true\tnil\tca file must be a PEM of 32..8192 bytes",
-          "true\tnil\tsave_to cannot be combined with ca or response_headers yet",
-          "true\tnil\tsave_to cannot be combined with ca or response_headers yet",
-          "true\tnil\tsave_to is only supported for GET",
-          "true\tnil\tmethod must be GET, POST, PUT, PATCH or DELETE"};
+      const char* want[] = {"false\tbad argument #1 to '?' (content_type must be a string)\tnil",
+                            "true\tnil\tillegal content_type",
+                            "true\tnil\tillegal content_type",
+                            "true\tnil\tillegal content_type",
+                            "true\tnil\tcontent_type needs a body",
+                            "true\tnil\tset content_type instead of a Content-Type header",
+                            "true\ttable: ADDR\tnil",  // a Content-Type header on a bodiless GET is allowed
+                            "false\tbad argument #1 to '?' (response_headers must be a boolean)\tnil",
+                            "false\tbad argument #1 to '?' (ca must be a path string)\tnil",
+                            "true\tnil\tca only applies to https:// urls",
+                            "true\tnil\tca file not found",
+                            "true\tnil\tca file must be a PEM of 32..8192 bytes",
+                            "true\tnil\tsave_to cannot be combined with ca or response_headers yet",
+                            "true\tnil\tsave_to cannot be combined with ca or response_headers yet",
+                            "true\tnil\tsave_to is only supported for GET",
+                            "true\tnil\tmethod must be GET, POST, PUT, PATCH or DELETE"};
       const size_t N = sizeof(want) / sizeof(want[0]);
-      if (be.logs.size() != N || getenv("DUMP_LOGS")) for (size_t i = 0; i < be.logs.size(); i++) printf("    resterr log[%zu] '%s'\n", i, be.logs[i].c_str());
+      if (be.logs.size() != N || getenv("DUMP_LOGS"))
+        for (size_t i = 0; i < be.logs.size(); i++) printf("    resterr log[%zu] '%s'\n", i, be.logs[i].c_str());
       CHECK(be.logs.size() == N);
       for (size_t i = 0; i < N && i < be.logs.size(); i++) {
         std::string got = be.logs[i];
@@ -5130,7 +5909,9 @@ int main() {
     }
   }
   {
-    TEST("wifi.softap: hotspot permission + approval, options, state conflicts, RAM floor, net.* works over the hotspot");
+    TEST(
+        "wifi.softap: hotspot permission + approval, options, state conflicts, RAM floor, net.* works over the "
+        "hotspot");
     {
       MockBackend be;
       be.net = true;
@@ -5157,16 +5938,24 @@ int main() {
       )LUA";
       CHECK(vm.load("t", script, strlen(script)));
       CHECK(run(vm, be, 100000) == Status::Finished);
-      const char* want[] = {"nil\tno hotspot running", "true\t192.168.4.1", "X4-test\t192.168.4.1\t2",
-                            "false\ta hotspot is already running (wifi.off() stops it)", "1", "true", "true", "false"};
+      const char* want[] = {"nil\tno hotspot running",
+                            "true\t192.168.4.1",
+                            "X4-test\t192.168.4.1\t2",
+                            "false\ta hotspot is already running (wifi.off() stops it)",
+                            "1",
+                            "true",
+                            "true",
+                            "false"};
       const size_t N = sizeof(want) / sizeof(want[0]);
-      if (be.logs.size() != N || getenv("DUMP_LOGS")) for (size_t i = 0; i < be.logs.size(); i++) printf("    ap log[%zu] '%s'\n", i, be.logs[i].c_str());
+      if (be.logs.size() != N || getenv("DUMP_LOGS"))
+        for (size_t i = 0; i < be.logs.size(); i++) printf("    ap log[%zu] '%s'\n", i, be.logs[i].c_str());
       CHECK(be.logs.size() == N);
       for (size_t i = 0; i < N && i < be.logs.size(); i++) {
         CHECK(be.logs[i] == want[i]);
         if (be.logs[i] != want[i]) printf("    ap #%zu got '%s' want '%s'\n", i + 1, be.logs[i].c_str(), want[i]);
       }
-      CHECK(be.apCalls.size() == 1 && be.apCalls[0].open && be.apCalls[0].channel == 1 && be.apCalls[0].maxClients == 4);
+      CHECK(be.apCalls.size() == 1 && be.apCalls[0].open && be.apCalls[0].channel == 1 &&
+            be.apCalls[0].maxClients == 4);
     }
     {
       MockBackend be;  // options reach the backend unchanged
@@ -5175,12 +5964,13 @@ int main() {
       LuaVm vm;
       CHECK(vm.open(128 * 1024));
       registerApi(vm, be);
-      const char* script = R"LUA(print(wifi.softap("My Net", {password = "secret123", channel = 11, max_clients = 1})))LUA";
+      const char* script =
+          R"LUA(print(wifi.softap("My Net", {password = "secret123", channel = 11, max_clients = 1})))LUA";
       CHECK(vm.load("t", script, strlen(script)));
       CHECK(run(vm, be, 100000) == Status::Finished);
       CHECK(be.logs.size() == 1 && be.logs[0] == "true\t192.168.4.1");
-      CHECK(be.apCalls.size() == 1 && !be.apCalls[0].open && be.apCalls[0].password == "secret123" && be.apCalls[0].channel == 11 &&
-            be.apCalls[0].maxClients == 1 && be.apCalls[0].ssid == "My Net");
+      CHECK(be.apCalls.size() == 1 && !be.apCalls[0].open && be.apCalls[0].password == "secret123" &&
+            be.apCalls[0].channel == 11 && be.apCalls[0].maxClients == 1 && be.apCalls[0].ssid == "My Net");
     }
     {
       MockBackend be;  // validation: nothing invalid reaches the backend
@@ -5220,11 +6010,32 @@ int main() {
       const char* P = "false\tpassword must be 8..63 printable ASCII characters (leave it out for an open network)";
       const char* C = "false\tchannel must be an integer 1..11";
       const char* M = "false\tmax_clients must be an integer 1..4";
-      const char* want[] = {S, S, S, S, P, P, P, P, P, "false\tpassword must be a string", C, C, C, "false\tchannel must be an integer 1..11",
-                            M, M, M, "false\tmax_clients must be an integer 1..4", "false\tunknown option 'colour'",
-                            "false\toptions must have string keys", "false", "false", "true\t192.168.4.1"};
+      const char* want[] = {S,
+                            S,
+                            S,
+                            S,
+                            P,
+                            P,
+                            P,
+                            P,
+                            P,
+                            "false\tpassword must be a string",
+                            C,
+                            C,
+                            C,
+                            "false\tchannel must be an integer 1..11",
+                            M,
+                            M,
+                            M,
+                            "false\tmax_clients must be an integer 1..4",
+                            "false\tunknown option 'colour'",
+                            "false\toptions must have string keys",
+                            "false",
+                            "false",
+                            "true\t192.168.4.1"};
       const size_t N = sizeof(want) / sizeof(want[0]);
-      if (be.logs.size() != N || getenv("DUMP_LOGS")) for (size_t i = 0; i < be.logs.size(); i++) printf("    aperr log[%zu] '%s'\n", i, be.logs[i].c_str());
+      if (be.logs.size() != N || getenv("DUMP_LOGS"))
+        for (size_t i = 0; i < be.logs.size(); i++) printf("    aperr log[%zu] '%s'\n", i, be.logs[i].c_str());
       CHECK(be.logs.size() == N);
       for (size_t i = 0; i < N && i < be.logs.size(); i++) {
         CHECK(be.logs[i] == want[i]);
@@ -5242,7 +6053,8 @@ int main() {
       const char* script = "print(wifi.softap('x'))\nprint(wifi.softap_info())";
       CHECK(vm.load("t", script, strlen(script)));
       CHECK(run(vm, be, 100000) == Status::Finished);
-      CHECK(be.logs.size() == 2 && be.logs[0].rfind("false\tnetwork not permitted", 0) == 0 && be.logs[1].rfind("nil\tnetwork not permitted", 0) == 0);
+      CHECK(be.logs.size() == 2 && be.logs[0].rfind("false\tnetwork not permitted", 0) == 0 &&
+            be.logs[1].rfind("nil\tnetwork not permitted", 0) == 0);
       CHECK(be.apCalls.empty());
     }
     {
@@ -5281,7 +6093,9 @@ int main() {
       const char* script = "print(wifi.softap('x'))";
       CHECK(vm.load("t", script, strlen(script)));
       CHECK(run(vm, be, 100000) == Status::Finished);
-      CHECK(be.logs.size() == 1 && be.logs[0] == "false\tWiFi is joined as a client: call wifi.off() before starting a hotspot" && be.apCalls.empty());
+      CHECK(be.logs.size() == 1 &&
+            be.logs[0] == "false\tWiFi is joined as a client: call wifi.off() before starting a hotspot" &&
+            be.apCalls.empty());
     }
     {
       MockBackend be;  // RAM floor: 80 KB (hotspot ~60 KB + the socket layer's 16 KB), boundary values
@@ -5298,8 +6112,11 @@ int main() {
         const char* script = "print(wifi.softap('x'))";
         CHECK(vm.load("t", script, strlen(script)));
         CHECK(run(vm, be, 100000) == Status::Finished);
-        if (pass == 0) CHECK(be.logs.size() == 1 && be.logs[0] == "false\tnot enough free RAM for a hotspot (free 79K, need 80K)" && be.apCalls.empty());
-        else CHECK(be.logs.size() == 1 && be.logs[0] == "true\t192.168.4.1" && be.apCalls.size() == 1);
+        if (pass == 0)
+          CHECK(be.logs.size() == 1 && be.logs[0] == "false\tnot enough free RAM for a hotspot (free 79K, need 80K)" &&
+                be.apCalls.empty());
+        else
+          CHECK(be.logs.size() == 1 && be.logs[0] == "true\t192.168.4.1" && be.apCalls.size() == 1);
       }
     }
     {
@@ -5313,7 +6130,8 @@ int main() {
       const char* script = "print(wifi.softap('x'))\nprint(wifi.softap_info())";
       CHECK(vm.load("t", script, strlen(script)));
       CHECK(run(vm, be, 100000) == Status::Finished);
-      CHECK(be.logs.size() == 2 && be.logs[0] == "false\tcannot start the hotspot (mock)" && be.logs[1] == "nil\tno hotspot running");
+      CHECK(be.logs.size() == 2 && be.logs[0] == "false\tcannot start the hotspot (mock)" &&
+            be.logs[1] == "nil\tno hotspot running");
     }
   }
   {
@@ -5323,8 +6141,12 @@ int main() {
       be.net = true;
       be.enPermitted = true;
       const uint8_t peer1[6] = {0xDE, 0xAD, 0xBE, 0xEF, 0x00, 0x01};
-      MockBackend::EnIn a; memcpy(a.mac, peer1, 6); a.data = std::string("hello\0bin", 9);
-      MockBackend::EnIn b; memcpy(b.mac, peer1, 6); b.data = "second";
+      MockBackend::EnIn a;
+      memcpy(a.mac, peer1, 6);
+      a.data = std::string("hello\0bin", 9);
+      MockBackend::EnIn b;
+      memcpy(b.mac, peer1, 6);
+      b.data = "second";
       be.enInbox = {a, b};
       be.enDropped = 3;
       LuaVm vm;
@@ -5356,11 +6178,27 @@ int main() {
       CHECK(vm.load("t", script, strlen(script)));
       CHECK(run(vm, be, 200000) == Status::Finished);
       const char* NS = "nil\tespnow is not started (call espnow.start() first)";
-      const char* want[] = {NS, NS, NS, "true\t02:00:00:00:00:a1", "02:00:00:00:00:a1\t1\t3",
-                            "nil\tespnow is already running (espnow.stop() first)", "true", "true", "true", "true",
-                            "9\t0\tde:ad:be:ef:00:01", "second\tde:ad:be:ef:00:01", "1\tnil", "true", NS, NS, NS, "true"};
+      const char* want[] = {NS,
+                            NS,
+                            NS,
+                            "true\t02:00:00:00:00:a1",
+                            "02:00:00:00:00:a1\t1\t3",
+                            "nil\tespnow is already running (espnow.stop() first)",
+                            "true",
+                            "true",
+                            "true",
+                            "true",
+                            "9\t0\tde:ad:be:ef:00:01",
+                            "second\tde:ad:be:ef:00:01",
+                            "1\tnil",
+                            "true",
+                            NS,
+                            NS,
+                            NS,
+                            "true"};
       const size_t N = sizeof(want) / sizeof(want[0]);
-      if (be.logs.size() != N || getenv("DUMP_LOGS")) for (size_t i = 0; i < be.logs.size(); i++) printf("    en log[%zu] '%s'\n", i, be.logs[i].c_str());
+      if (be.logs.size() != N || getenv("DUMP_LOGS"))
+        for (size_t i = 0; i < be.logs.size(); i++) printf("    en log[%zu] '%s'\n", i, be.logs[i].c_str());
       CHECK(be.logs.size() == N);
       for (size_t i = 0; i < N && i < be.logs.size(); i++) {
         CHECK(be.logs[i] == want[i]);
@@ -5420,10 +6258,28 @@ int main() {
       const char* C = "nil\tchannel must be an integer 1..13";
       const char* M = "nil\tmac must be 'aa:bb:cc:dd:ee:ff' or \"broadcast\"";
       const char* D = "nil\tdata must be 1..250 bytes";
-      const char* want[] = {C, C, C, C, "nil\tunknown option 'colour'", "nil\toptions must have string keys", "false",
-                            "true\t02:00:00:00:00:a1", M, M, M, M, M, M, M, D, D, "false", "false"};
+      const char* want[] = {C,
+                            C,
+                            C,
+                            C,
+                            "nil\tunknown option 'colour'",
+                            "nil\toptions must have string keys",
+                            "false",
+                            "true\t02:00:00:00:00:a1",
+                            M,
+                            M,
+                            M,
+                            M,
+                            M,
+                            M,
+                            M,
+                            D,
+                            D,
+                            "false",
+                            "false"};
       const size_t N = sizeof(want) / sizeof(want[0]);
-      if (be.logs.size() != N || getenv("DUMP_LOGS")) for (size_t i = 0; i < be.logs.size(); i++) printf("    enerr log[%zu] '%s'\n", i, be.logs[i].c_str());
+      if (be.logs.size() != N || getenv("DUMP_LOGS"))
+        for (size_t i = 0; i < be.logs.size(); i++) printf("    enerr log[%zu] '%s'\n", i, be.logs[i].c_str());
       CHECK(be.logs.size() == N);
       for (size_t i = 0; i < N && i < be.logs.size(); i++) {
         CHECK(be.logs[i] == want[i]);
@@ -5438,11 +6294,14 @@ int main() {
       LuaVm vm;
       CHECK(vm.open(128 * 1024));
       registerApi(vm, be);
-      const char* script = "print(espnow.start())\nprint(espnow.send(nil, 'x'))\nprint(espnow.recv())\nprint(espnow.info())\nprint(espnow.stop())";
+      const char* script =
+          "print(espnow.start())\nprint(espnow.send(nil, "
+          "'x'))\nprint(espnow.recv())\nprint(espnow.info())\nprint(espnow.stop())";
       CHECK(vm.load("t", script, strlen(script)));
       CHECK(run(vm, be, 100000) == Status::Finished);
       CHECK(be.logs.size() == 5);
-      for (int i = 0; i < 4 && i < static_cast<int>(be.logs.size()); i++) CHECK(be.logs[i].rfind("nil\tnetwork not permitted", 0) == 0);
+      for (int i = 0; i < 4 && i < static_cast<int>(be.logs.size()); i++)
+        CHECK(be.logs[i].rfind("nil\tnetwork not permitted", 0) == 0);
       CHECK(be.logs.size() == 5 && be.logs[4] == "true");  // stop is always allowed
       CHECK(!be.enUp);
     }
@@ -5454,7 +6313,8 @@ int main() {
       LuaVm vm;
       CHECK(vm.open(128 * 1024));
       registerApi(vm, be);
-      const char* script = "print(espnow.start())\nprint(espnow.send(nil, 'x'))\nprint(espnow.recv())\nprint(espnow.info())";
+      const char* script =
+          "print(espnow.start())\nprint(espnow.send(nil, 'x'))\nprint(espnow.recv())\nprint(espnow.info())";
       CHECK(vm.load("t", script, strlen(script)));
       CHECK(run(vm, be, 100000) == Status::Finished);
       CHECK(be.logs.size() == 4);
@@ -5481,11 +6341,15 @@ int main() {
       )LUA";
       CHECK(vm.load("t", script, strlen(script)));
       CHECK(run(vm, be, 200000) == Status::Finished);
-      const char* want[] = {"true\t02:00:00:00:00:a1", "false\tespnow is running: call espnow.stop() before starting a hotspot",
-                            "false\tespnow is running: call espnow.stop() before joining WiFi", "true\t192.168.4.1",
-                            "nil\tthe radio is in use by WiFi or the hotspot: call wifi.off() first", "true\t02:00:00:00:00:a1"};
+      const char* want[] = {"true\t02:00:00:00:00:a1",
+                            "false\tespnow is running: call espnow.stop() before starting a hotspot",
+                            "false\tespnow is running: call espnow.stop() before joining WiFi",
+                            "true\t192.168.4.1",
+                            "nil\tthe radio is in use by WiFi or the hotspot: call wifi.off() first",
+                            "true\t02:00:00:00:00:a1"};
       const size_t N = sizeof(want) / sizeof(want[0]);
-      if (be.logs.size() != N || getenv("DUMP_LOGS")) for (size_t i = 0; i < be.logs.size(); i++) printf("    enx log[%zu] '%s'\n", i, be.logs[i].c_str());
+      if (be.logs.size() != N || getenv("DUMP_LOGS"))
+        for (size_t i = 0; i < be.logs.size(); i++) printf("    enx log[%zu] '%s'\n", i, be.logs[i].c_str());
       CHECK(be.logs.size() == N);
       for (size_t i = 0; i < N && i < be.logs.size(); i++) {
         CHECK(be.logs[i] == want[i]);
@@ -5503,7 +6367,8 @@ int main() {
       const char* script = "print(espnow.start())";
       CHECK(vm.load("t", script, strlen(script)));
       CHECK(run(vm, be, 100000) == Status::Finished);
-      CHECK(be.logs.size() == 1 && be.logs[0] == "nil\tthe radio is in use by WiFi or the hotspot: call wifi.off() first" && !be.enUp);
+      CHECK(be.logs.size() == 1 &&
+            be.logs[0] == "nil\tthe radio is in use by WiFi or the hotspot: call wifi.off() first" && !be.enUp);
     }
     for (int pass = 0; pass < 2; pass++) {
       MockBackend be;  // RAM floor 80 KB, boundary values
@@ -5516,8 +6381,11 @@ int main() {
       const char* script = "print(espnow.start())";
       CHECK(vm.load("t", script, strlen(script)));
       CHECK(run(vm, be, 100000) == Status::Finished);
-      if (pass == 0) CHECK(be.logs.size() == 1 && be.logs[0] == "nil\tnot enough free RAM for espnow (free 79K, need 80K)" && !be.enUp);
-      else CHECK(be.logs.size() == 1 && be.logs[0] == "true\t02:00:00:00:00:a1" && be.enUp);
+      if (pass == 0)
+        CHECK(be.logs.size() == 1 && be.logs[0] == "nil\tnot enough free RAM for espnow (free 79K, need 80K)" &&
+              !be.enUp);
+      else
+        CHECK(be.logs.size() == 1 && be.logs[0] == "true\t02:00:00:00:00:a1" && be.enUp);
     }
     {
       MockBackend be;  // backend failures pass through
@@ -5530,7 +6398,8 @@ int main() {
       const char* script = "print(espnow.start())\nprint(espnow.info())";
       CHECK(vm.load("t", script, strlen(script)));
       CHECK(run(vm, be, 100000) == Status::Finished);
-      CHECK(be.logs.size() == 2 && be.logs[0] == "nil\tesp_now_init failed (mock)" && be.logs[1].rfind("nil\tespnow is not started", 0) == 0);
+      CHECK(be.logs.size() == 2 && be.logs[0] == "nil\tesp_now_init failed (mock)" &&
+            be.logs[1].rfind("nil\tespnow is not started", 0) == 0);
       be.enFail = false;
       be.enSendFail = true;
       be.logs.clear();
@@ -5548,15 +6417,18 @@ int main() {
     using crosslua::packPermissionLabels;
     CHECK(packPermissionLabels({}, 25) == "");
     CHECK(packPermissionLabels({"MICROPHONE"}, 25) == "MICROPHONE\n");
-    CHECK(packPermissionLabels({"MICROPHONE", "ESP-NOW", "HOTSPOT", "SERVER", "SPEAKER"}, 25) == "MICROPHONE, ESP-NOW\nHOTSPOT, SERVER, SPEAKER\n");
+    CHECK(packPermissionLabels({"MICROPHONE", "ESP-NOW", "HOTSPOT", "SERVER", "SPEAKER"}, 25) ==
+          "MICROPHONE, ESP-NOW\nHOTSPOT, SERVER, SPEAKER\n");
     CHECK(packPermissionLabels({"AAAAAAAAAA", "BBBBBBBBBB"}, 22) == "AAAAAAAAAA, BBBBBBBBBB\n");  // exactly full
-    CHECK(packPermissionLabels({"AAAAAAAAAA", "BBBBBBBBBB"}, 21) == "AAAAAAAAAA\nBBBBBBBBBB\n");      // one over
+    CHECK(packPermissionLabels({"AAAAAAAAAA", "BBBBBBBBBB"}, 21) == "AAAAAAAAAA\nBBBBBBBBBB\n");  // one over
     CHECK(packPermissionLabels({"TOOLONGLABELXXXXXXXXXXXXXX", "B", "C"}, 10) == "TOOLONGLABELXXXXXXXXXXXXXX\nB, C\n");
     CHECK(packPermissionLabels({"A", "B", "C"}, 1000) == "A, B, C\n");
     CHECK(packPermissionLabels({"MICROPHONE", "SPEAKER"}, 25) == "MICROPHONE, SPEAKER\n");
   }
   {
-    TEST("wifi.monitor: start/recv/info/stop, options validation, permission layers, radio exclusivity, RAM floor, pcap counters");
+    TEST(
+        "wifi.monitor: start/recv/info/stop, options validation, permission layers, radio exclusivity, RAM floor, pcap "
+        "counters");
     {
       MockBackend be;  // happy path: frames in order, metadata preserved
       be.net = true;
@@ -5588,10 +6460,22 @@ int main() {
       CHECK(vm.load("t", script, strlen(script)));
       CHECK(run(vm, be, 200000) == Status::Finished);
       const char* NS = "nil\tmonitor is not running (call wifi.monitor_start() first)";
-      const char* want[] = {NS, NS, "true", "1\t0\t0\tnil\tnil", "nil\tmonitor is already running (wifi.monitor_stop() first)",
-                            "4\t128\t-52\t1", "second\t-71\t13", "nil", "2\t1", "0", NS, NS, "0"};
+      const char* want[] = {NS,
+                            NS,
+                            "true",
+                            "1\t0\t0\tnil\tnil",
+                            "nil\tmonitor is already running (wifi.monitor_stop() first)",
+                            "4\t128\t-52\t1",
+                            "second\t-71\t13",
+                            "nil",
+                            "2\t1",
+                            "0",
+                            NS,
+                            NS,
+                            "0"};
       const size_t N = sizeof(want) / sizeof(want[0]);
-      if (be.logs.size() != N || getenv("DUMP_LOGS")) for (size_t i = 0; i < be.logs.size(); i++) printf("    mon log[%zu] '%s'\n", i, be.logs[i].c_str());
+      if (be.logs.size() != N || getenv("DUMP_LOGS"))
+        for (size_t i = 0; i < be.logs.size(); i++) printf("    mon log[%zu] '%s'\n", i, be.logs[i].c_str());
       CHECK(be.logs.size() == N);
       for (size_t i = 0; i < N && i < be.logs.size(); i++) {
         CHECK(be.logs[i] == want[i]);
@@ -5615,8 +6499,8 @@ int main() {
       CHECK(vm.load("t", script, strlen(script)));
       CHECK(run(vm, be, 100000) == Status::Finished);
       // i.file is the resolved on-card path, not the "data:..." spec the app wrote
-      CHECK(be.logs.size() == 3 && be.logs[0] == "true" && be.logs[1] == "/.crosslua/data/test/cap.pcap\t24" && be.logs[2] == "24" &&
-            be.monChannel == 13);
+      CHECK(be.logs.size() == 3 && be.logs[0] == "true" && be.logs[1] == "/.crosslua/data/test/cap.pcap\t24" &&
+            be.logs[2] == "24" && be.monChannel == 13);
     }
     {
       MockBackend be;  // validation: nothing invalid reaches the backend
@@ -5637,10 +6521,19 @@ int main() {
       CHECK(run(vm, be, 200000) == Status::Finished);
       const char* C = "nil\tchannel must be an integer 1..13";
       const char* F = "nil\tfile must be a path string ending in .pcap";
-      const char* want[] = {C, C, C, C, "nil\tunknown option 'hop'", "nil\toptions must have string keys", "false",
-                            "true", "nil\tfile must end in .pcap", "nil\tfile must end in .pcap"};
+      const char* want[] = {C,
+                            C,
+                            C,
+                            C,
+                            "nil\tunknown option 'hop'",
+                            "nil\toptions must have string keys",
+                            "false",
+                            "true",
+                            "nil\tfile must end in .pcap",
+                            "nil\tfile must end in .pcap"};
       const size_t N = sizeof(want) / sizeof(want[0]);
-      if (be.logs.size() != N || getenv("DUMP_LOGS")) for (size_t i = 0; i < be.logs.size(); i++) printf("    monerr log[%zu] '%s'\n", i, be.logs[i].c_str());
+      if (be.logs.size() != N || getenv("DUMP_LOGS"))
+        for (size_t i = 0; i < be.logs.size(); i++) printf("    monerr log[%zu] '%s'\n", i, be.logs[i].c_str());
       CHECK(be.logs.size() == N);
       for (size_t i = 0; i < N && i < be.logs.size(); i++) {
         CHECK(be.logs[i] == want[i]);
@@ -5655,11 +6548,14 @@ int main() {
       LuaVm vm;
       CHECK(vm.open(128 * 1024));
       registerApi(vm, be);
-      const char* script = "print(wifi.monitor_start())\nprint(wifi.monitor_recv())\nprint(wifi.monitor_info())\nprint(wifi.monitor_stop())";
+      const char* script =
+          "print(wifi.monitor_start())\nprint(wifi.monitor_recv())\nprint(wifi.monitor_info())\nprint(wifi.monitor_"
+          "stop())";
       CHECK(vm.load("t", script, strlen(script)));
       CHECK(run(vm, be, 100000) == Status::Finished);
       CHECK(be.logs.size() == 4);
-      for (int i = 0; i < 3 && i < static_cast<int>(be.logs.size()); i++) CHECK(be.logs[i].rfind("nil\tnetwork not permitted", 0) == 0);
+      for (int i = 0; i < 3 && i < static_cast<int>(be.logs.size()); i++)
+        CHECK(be.logs[i].rfind("nil\tnetwork not permitted", 0) == 0);
       CHECK(be.logs.size() == 4 && be.logs[3] == "0");  // stop is always allowed
       CHECK(!be.monUp);
     }
@@ -5700,13 +6596,16 @@ int main() {
       )LUA";
       CHECK(vm.load("t", script, strlen(script)));
       CHECK(run(vm, be, 200000) == Status::Finished);
-      const char* want[] = {"true\t02:00:00:00:00:a1", "nil\tespnow is running: call espnow.stop() first", "true",
+      const char* want[] = {"true\t02:00:00:00:00:a1",
+                            "nil\tespnow is running: call espnow.stop() first",
+                            "true",
                             "nil\tthe WiFi sniffer is running: call wifi.monitor_stop() first",
                             "false\tthe WiFi sniffer is running: call wifi.monitor_stop() first",
                             "false\tthe WiFi sniffer is running: call wifi.monitor_stop() first",
                             "true\t02:00:00:00:00:a1"};
       const size_t N = sizeof(want) / sizeof(want[0]);
-      if (be.logs.size() != N || getenv("DUMP_LOGS")) for (size_t i = 0; i < be.logs.size(); i++) printf("    monx log[%zu] '%s'\n", i, be.logs[i].c_str());
+      if (be.logs.size() != N || getenv("DUMP_LOGS"))
+        for (size_t i = 0; i < be.logs.size(); i++) printf("    monx log[%zu] '%s'\n", i, be.logs[i].c_str());
       CHECK(be.logs.size() == N);
       for (size_t i = 0; i < N && i < be.logs.size(); i++) {
         CHECK(be.logs[i] == want[i]);
@@ -5722,10 +6621,13 @@ int main() {
       LuaVm vm;
       CHECK(vm.open(128 * 1024));
       registerApi(vm, be);
-      const char* script = "print(wifi.softap('x'))\nprint(wifi.monitor_start())\nwifi.off()\nprint(wifi.monitor_start())\nprint(wifi.monitor_stop())";
+      const char* script =
+          "print(wifi.softap('x'))\nprint(wifi.monitor_start())\nwifi.off()\nprint(wifi.monitor_start())\nprint(wifi."
+          "monitor_stop())";
       CHECK(vm.load("t", script, strlen(script)));
       CHECK(run(vm, be, 100000) == Status::Finished);
-      const char* want[] = {"true\t192.168.4.1", "nil\tthe radio is in use by WiFi or the hotspot: call wifi.off() first", "true", "0"};
+      const char* want[] = {"true\t192.168.4.1",
+                            "nil\tthe radio is in use by WiFi or the hotspot: call wifi.off() first", "true", "0"};
       CHECK(be.logs.size() == 4);
       for (size_t i = 0; i < 4 && i < be.logs.size(); i++) CHECK(be.logs[i] == want[i]);
     }
@@ -5740,8 +6642,11 @@ int main() {
       const char* script = "print(wifi.monitor_start())";
       CHECK(vm.load("t", script, strlen(script)));
       CHECK(run(vm, be, 100000) == Status::Finished);
-      if (pass == 0) CHECK(be.logs.size() == 1 && be.logs[0] == "nil\tnot enough free RAM for monitor (free 79K, need 80K)" && !be.monUp);
-      else CHECK(be.logs.size() == 1 && be.logs[0] == "true" && be.monUp);
+      if (pass == 0)
+        CHECK(be.logs.size() == 1 && be.logs[0] == "nil\tnot enough free RAM for monitor (free 79K, need 80K)" &&
+              !be.monUp);
+      else
+        CHECK(be.logs.size() == 1 && be.logs[0] == "true" && be.monUp);
     }
     {
       MockBackend be;  // backend failure passes through
@@ -5754,7 +6659,8 @@ int main() {
       const char* script = "print(wifi.monitor_start())\nprint(wifi.monitor_info())";
       CHECK(vm.load("t", script, strlen(script)));
       CHECK(run(vm, be, 100000) == Status::Finished);
-      CHECK(be.logs.size() == 2 && be.logs[0] == "nil\tesp_wifi_set_promiscuous failed (mock)" && be.logs[1].rfind("nil\tmonitor is not running", 0) == 0);
+      CHECK(be.logs.size() == 2 && be.logs[0] == "nil\tesp_wifi_set_promiscuous failed (mock)" &&
+            be.logs[1].rfind("nil\tmonitor is not running", 0) == 0);
     }
   }
   {
@@ -5786,10 +6692,13 @@ int main() {
       CHECK(vm.load("t", script, strlen(script)));
       CHECK(run(vm, be, 200000) == Status::Finished);
       const char* NS = "nil\tthe injector is not running (call wifi.tx_start() first)";
-      const char* want[] = {NS, NS, "true", "1\t0", "nil\tthe injector is already running (wifi.tx_stop() first)", "true", "true",
-                            "true", "3", "true", NS, NS, "true"};
+      const char* want[] = {
+          NS,     NS,     "true", "1\t0", "nil\tthe injector is already running (wifi.tx_stop() first)",
+          "true", "true", "true", "3",    "true",
+          NS,     NS,     "true"};
       const size_t N = sizeof(want) / sizeof(want[0]);
-      if (be.logs.size() != N || getenv("DUMP_LOGS")) for (size_t i = 0; i < be.logs.size(); i++) printf("    tx log[%zu] '%s'\n", i, be.logs[i].c_str());
+      if (be.logs.size() != N || getenv("DUMP_LOGS"))
+        for (size_t i = 0; i < be.logs.size(); i++) printf("    tx log[%zu] '%s'\n", i, be.logs[i].c_str());
       CHECK(be.logs.size() == N);
       for (size_t i = 0; i < N && i < be.logs.size(); i++) {
         CHECK(be.logs[i] == want[i]);
@@ -5819,10 +6728,12 @@ int main() {
       CHECK(run(vm, be, 200000) == Status::Finished);
       const char* C = "nil\tchannel must be an integer 1..13";
       const char* F = "nil\tframe must be 24..250 bytes (without the FCS)";
-      const char* want[] = {C, C, C, C, "nil\tunknown option 'rate'", "nil\toptions must have string keys", "false", "true",
-                            F, F, F, "false", "true"};
+      const char* want[] = {
+          C, C, C,       C,     "nil\tunknown option 'rate'", "nil\toptions must have string keys", "false", "true", F,
+          F, F, "false", "true"};
       const size_t N = sizeof(want) / sizeof(want[0]);
-      if (be.logs.size() != N || getenv("DUMP_LOGS")) for (size_t i = 0; i < be.logs.size(); i++) printf("    txerr log[%zu] '%s'\n", i, be.logs[i].c_str());
+      if (be.logs.size() != N || getenv("DUMP_LOGS"))
+        for (size_t i = 0; i < be.logs.size(); i++) printf("    txerr log[%zu] '%s'\n", i, be.logs[i].c_str());
       CHECK(be.logs.size() == N);
       for (size_t i = 0; i < N && i < be.logs.size(); i++) {
         CHECK(be.logs[i] == want[i]);
@@ -5837,11 +6748,13 @@ int main() {
       LuaVm vm;
       CHECK(vm.open(128 * 1024));
       registerApi(vm, be);
-      const char* script = "print(wifi.tx_start())\nprint(wifi.tx(('d'):rep(26)))\nprint(wifi.tx_info())\nprint(wifi.tx_stop())";
+      const char* script =
+          "print(wifi.tx_start())\nprint(wifi.tx(('d'):rep(26)))\nprint(wifi.tx_info())\nprint(wifi.tx_stop())";
       CHECK(vm.load("t", script, strlen(script)));
       CHECK(run(vm, be, 100000) == Status::Finished);
       CHECK(be.logs.size() == 4);
-      for (int i = 0; i < 3 && i < static_cast<int>(be.logs.size()); i++) CHECK(be.logs[i].rfind("nil\tnetwork not permitted", 0) == 0);
+      for (int i = 0; i < 3 && i < static_cast<int>(be.logs.size()); i++)
+        CHECK(be.logs[i].rfind("nil\tnetwork not permitted", 0) == 0);
       CHECK(be.logs.size() == 4 && be.logs[3] == "true");  // stop is always allowed
       CHECK(!be.txUp);
     }
@@ -5861,7 +6774,8 @@ int main() {
       CHECK(!be.txUp);
     }
     {
-      MockBackend be;  // exclusivity: WiFi/hotspot/espnow refuse the injector and vice versa; monitor coexists and adopts
+      MockBackend
+          be;  // exclusivity: WiFi/hotspot/espnow refuse the injector and vice versa; monitor coexists and adopts
       be.net = true;
       be.txPermitted = true;
       be.monPermitted = true;
@@ -5888,20 +6802,27 @@ int main() {
       )LUA";
       CHECK(vm.load("t", script, strlen(script)));
       CHECK(run(vm, be, 200000) == Status::Finished);
-      const char* want[] = {"true\t02:00:00:00:00:a1", "nil\tespnow is running: call espnow.stop() first", "true",
+      const char* want[] = {"true\t02:00:00:00:00:a1",
+                            "nil\tespnow is running: call espnow.stop() first",
+                            "true",
                             "nil\tthe injector is running: call wifi.tx_stop() first",
                             "false\tthe injector is running: call wifi.tx_stop() first",
                             "false\tthe injector is running: call wifi.tx_stop() first",
-                            "true", "adopted\t1", "nil\tmonitor is already running (wifi.monitor_stop() first)",
-                            "true", "true"};
+                            "true",
+                            "adopted\t1",
+                            "nil\tmonitor is already running (wifi.monitor_stop() first)",
+                            "true",
+                            "true"};
       const size_t N = sizeof(want) / sizeof(want[0]);
-      if (be.logs.size() != N || getenv("DUMP_LOGS")) for (size_t i = 0; i < be.logs.size(); i++) printf("    txx log[%zu] '%s'\n", i, be.logs[i].c_str());
+      if (be.logs.size() != N || getenv("DUMP_LOGS"))
+        for (size_t i = 0; i < be.logs.size(); i++) printf("    txx log[%zu] '%s'\n", i, be.logs[i].c_str());
       CHECK(be.logs.size() == N);
       for (size_t i = 0; i < N && i < be.logs.size(); i++) {
         CHECK(be.logs[i] == want[i]);
         if (be.logs[i] != want[i]) printf("    txx #%zu got '%s' want '%s'\n", i + 1, be.logs[i].c_str(), want[i]);
       }
-      CHECK(be.txChannelVal == 4 && be.txUp && !be.monUp && !be.enUp);  // wifi.off() stopped the monitor; the injector was restarted
+      CHECK(be.txChannelVal == 4 && be.txUp && !be.monUp &&
+            !be.enUp);  // wifi.off() stopped the monitor; the injector was restarted
     }
     {
       MockBackend be;  // joined as a client: the injector refuses
@@ -5914,7 +6835,8 @@ int main() {
       const char* script = "print(wifi.tx_start())";
       CHECK(vm.load("t", script, strlen(script)));
       CHECK(run(vm, be, 100000) == Status::Finished);
-      CHECK(be.logs.size() == 1 && be.logs[0] == "nil\tthe radio is in use by WiFi or the hotspot: call wifi.off() first" && !be.txUp);
+      CHECK(be.logs.size() == 1 &&
+            be.logs[0] == "nil\tthe radio is in use by WiFi or the hotspot: call wifi.off() first" && !be.txUp);
     }
     {
       MockBackend be;  // monitor first: the injector adopts the sniffer's channel; an explicit different one is refused
@@ -5937,10 +6859,13 @@ int main() {
       )LUA";
       CHECK(vm.load("t", script, strlen(script)));
       CHECK(run(vm, be, 200000) == Status::Finished);
-      const char* want[] = {"true", "true", "6", "nil\tthe sniffer is on channel 6: use it, or wifi.monitor_stop() first",
-                            "true", "nil\tthe injector is on channel 2: use it, or wifi.tx_stop() first", "true"};
+      const char* want[] = {"true", "true",
+                            "6",    "nil\tthe sniffer is on channel 6: use it, or wifi.monitor_stop() first",
+                            "true", "nil\tthe injector is on channel 2: use it, or wifi.tx_stop() first",
+                            "true"};
       const size_t N = sizeof(want) / sizeof(want[0]);
-      if (be.logs.size() != N || getenv("DUMP_LOGS")) for (size_t i = 0; i < be.logs.size(); i++) printf("    txc log[%zu] '%s'\n", i, be.logs[i].c_str());
+      if (be.logs.size() != N || getenv("DUMP_LOGS"))
+        for (size_t i = 0; i < be.logs.size(); i++) printf("    txc log[%zu] '%s'\n", i, be.logs[i].c_str());
       CHECK(be.logs.size() == N);
       for (size_t i = 0; i < N && i < be.logs.size(); i++) {
         CHECK(be.logs[i] == want[i]);
@@ -5959,8 +6884,10 @@ int main() {
       const char* script = "print(wifi.tx_start())";
       CHECK(vm.load("t", script, strlen(script)));
       CHECK(run(vm, be, 100000) == Status::Finished);
-      if (pass == 0) CHECK(be.logs.size() == 1 && be.logs[0] == "nil\tnot enough free RAM for tx (free 79K, need 80K)" && !be.txUp);
-      else CHECK(be.logs.size() == 1 && be.logs[0] == "true" && be.txUp);
+      if (pass == 0)
+        CHECK(be.logs.size() == 1 && be.logs[0] == "nil\tnot enough free RAM for tx (free 79K, need 80K)" && !be.txUp);
+      else
+        CHECK(be.logs.size() == 1 && be.logs[0] == "true" && be.txUp);
     }
     {
       MockBackend be;  // backend failures pass through (start, then send)
@@ -5973,7 +6900,8 @@ int main() {
       const char* script = "print(wifi.tx_start())\nprint(wifi.tx_info())";
       CHECK(vm.load("t", script, strlen(script)));
       CHECK(run(vm, be, 100000) == Status::Finished);
-      CHECK(be.logs.size() == 2 && be.logs[0] == "nil\tesp_wifi_80211_tx refused (mock)" && be.logs[1].rfind("nil\tthe injector is not running", 0) == 0);
+      CHECK(be.logs.size() == 2 && be.logs[0] == "nil\tesp_wifi_80211_tx refused (mock)" &&
+            be.logs[1].rfind("nil\tthe injector is not running", 0) == 0);
       be.txFail = false;
       be.logs.clear();
       LuaVm vm2;
@@ -6028,7 +6956,8 @@ int main() {
       const char* C = "nil\tchannel must be an integer 1..13";
       const char* want[] = {NS, "true", "true", "6", "true", "6", "true", "11", C, C, C, C, "true", "true", "0", NS};
       const size_t N = sizeof(want) / sizeof(want[0]);
-      if (be.logs.size() != N || getenv("DUMP_LOGS")) for (size_t i = 0; i < be.logs.size(); i++) printf("    hop log[%zu] '%s'\n", i, be.logs[i].c_str());
+      if (be.logs.size() != N || getenv("DUMP_LOGS"))
+        for (size_t i = 0; i < be.logs.size(); i++) printf("    hop log[%zu] '%s'\n", i, be.logs[i].c_str());
       CHECK(be.logs.size() == N);
       for (size_t i = 0; i < N && i < be.logs.size(); i++) {
         CHECK(be.logs[i] == want[i]);
@@ -6092,7 +7021,8 @@ int main() {
       const char* C = "nil\tseconds must be an integer 1..604800 (a week)";
       const char* want[] = {"power-on", C, C, C, C, C, "true", "true", "after sleep"};
       const size_t N = sizeof(want) / sizeof(want[0]);
-      if (be.logs.size() != N || getenv("DUMP_LOGS")) for (size_t i = 0; i < be.logs.size(); i++) printf("    sleep log[%zu] '%s'\n", i, be.logs[i].c_str());
+      if (be.logs.size() != N || getenv("DUMP_LOGS"))
+        for (size_t i = 0; i < be.logs.size(); i++) printf("    sleep log[%zu] '%s'\n", i, be.logs[i].c_str());
       CHECK(be.logs.size() == N);
       for (size_t i = 0; i < N && i < be.logs.size(); i++) {
         CHECK(be.logs[i] == want[i]);
@@ -6119,12 +7049,15 @@ int main() {
       const char* script2 = "print(system.last_wake())\nprint(system.sleep(30))";
       CHECK(vm2.load("t", script2, strlen(script2)));
       CHECK(run(vm2, be, 100000) == Status::Finished);
-      CHECK(be.logs.size() == 2 && be.logs[0] == "button" && be.logs[1] == "nil\tcould not arm the timer wake (mock)" && be.sleepSeconds == -1);
+      CHECK(be.logs.size() == 2 && be.logs[0] == "button" && be.logs[1] == "nil\tcould not arm the timer wake (mock)" &&
+            be.sleepSeconds == -1);
     }
   }
   {
     TEST("ble: permission/support gates, start validation + radio exclusivity + RAM floor");
-    const std::string DENIED = "nil\tbluetooth not permitted: add \"permissions\": [\"bluetooth\"] to this app's manifest.json (and approve it)";
+    const std::string DENIED =
+        "nil\tbluetooth not permitted: add \"permissions\": [\"bluetooth\"] to this app's manifest.json (and approve "
+        "it)";
     auto go = [&](MockBackend& be, const char* script) {
       LuaVm vm;
       CHECK(vm.open(128 * 1024));
@@ -6133,11 +7066,15 @@ int main() {
       CHECK(run(vm, be, 100000) == Status::Finished);
     };
     auto expect = [&](MockBackend& be, std::vector<std::string> want, const char* tag) {
-      if (be.logs.size() != want.size()) { printf("    ble %s: %zu logs, want %zu\n", tag, be.logs.size(), want.size()); for (auto& l : be.logs) printf("      '%s'\n", l.c_str()); }
+      if (be.logs.size() != want.size()) {
+        printf("    ble %s: %zu logs, want %zu\n", tag, be.logs.size(), want.size());
+        for (auto& l : be.logs) printf("      '%s'\n", l.c_str());
+      }
       CHECK(be.logs.size() == want.size());
       for (size_t i = 0; i < want.size() && i < be.logs.size(); i++) {
         CHECK(be.logs[i] == want[i]);
-        if (be.logs[i] != want[i]) printf("    ble %s #%zu got '%s' want '%s'\n", tag, i + 1, be.logs[i].c_str(), want[i].c_str());
+        if (be.logs[i] != want[i])
+          printf("    ble %s #%zu got '%s' want '%s'\n", tag, i + 1, be.logs[i].c_str(), want[i].c_str());
       }
     };
     {
@@ -6214,8 +7151,10 @@ int main() {
       b->apUp = true;
       go(be, script);
       expect(be,
-             {"nil\tespnow is running: call espnow.stop() first", "nil\tthe WiFi sniffer is running: call wifi.monitor_stop() first",
-              "nil\tthe injector is running: call wifi.tx_stop() first", "nil\tthe radio is in use by WiFi or the hotspot: call wifi.off() first",
+             {"nil\tespnow is running: call espnow.stop() first",
+              "nil\tthe WiFi sniffer is running: call wifi.monitor_stop() first",
+              "nil\tthe injector is running: call wifi.tx_stop() first",
+              "nil\tthe radio is in use by WiFi or the hotspot: call wifi.off() first",
               "nil\tthe radio is in use by WiFi or the hotspot: call wifi.off() first"},
              "exclusive");
       CHECK(be.bleStartCalls == 0 && !be.bleUp);
@@ -6232,7 +7171,10 @@ int main() {
       go(be, "print(ble.start())");
       be.freeHeapVal = 48 * 1024;
       go(be, "print(ble.start())");
-      expect(be, {"nil\tnot enough free RAM for bluetooth (free 79K, need 80K)", "true", "nil\tnot enough free RAM for bluetooth (free 47K, need 48K)", "true"}, "floor");
+      expect(be,
+             {"nil\tnot enough free RAM for bluetooth (free 79K, need 80K)", "true",
+              "nil\tnot enough free RAM for bluetooth (free 47K, need 48K)", "true"},
+             "floor");
     }
     {
       MockBackend be;  // the stack refuses: its own message comes back and nothing is left running
@@ -6253,11 +7195,15 @@ int main() {
       CHECK(run(vm, be, 100000) == Status::Finished);
     };
     auto expect = [&](MockBackend& be, std::vector<std::string> want, const char* tag) {
-      if (be.logs.size() != want.size()) { printf("    ble %s: %zu logs, want %zu\n", tag, be.logs.size(), want.size()); for (auto& l : be.logs) printf("      '%s'\n", l.c_str()); }
+      if (be.logs.size() != want.size()) {
+        printf("    ble %s: %zu logs, want %zu\n", tag, be.logs.size(), want.size());
+        for (auto& l : be.logs) printf("      '%s'\n", l.c_str());
+      }
       CHECK(be.logs.size() == want.size());
       for (size_t i = 0; i < want.size() && i < be.logs.size(); i++) {
         CHECK(be.logs[i] == want[i]);
-        if (be.logs[i] != want[i]) printf("    ble %s #%zu got '%s' want '%s'\n", tag, i + 1, be.logs[i].c_str(), want[i].c_str());
+        if (be.logs[i] != want[i])
+          printf("    ble %s #%zu got '%s' want '%s'\n", tag, i + 1, be.logs[i].c_str(), want[i].c_str());
       }
     };
     const std::string NR = "nil\tbluetooth is not running (call ble.start() first)";
@@ -6294,7 +7240,8 @@ int main() {
       be.blePermitted = true;
       be.bleSeen.push_back(MockBackend::mkDev("11:22:33:44:55:66", "Keychron K3", -48, true, true));
       be.bleSeen.push_back(MockBackend::mkDev("AA:BB:CC:DD:EE:FF", "Beacon", -80, true, false));
-      for (int i = 0; i < 28; i++) be.bleSeen.push_back(MockBackend::mkDev("00:00:00:00:00:01", "filler", -90, true, false));
+      for (int i = 0; i < 28; i++)
+        be.bleSeen.push_back(MockBackend::mkDev("00:00:00:00:00:01", "filler", -90, true, false));
       const char* script = R"LUA(
         print(ble.devices())
         ble.start()
@@ -6306,7 +7253,10 @@ int main() {
         print(d[2].addr, d[2].name, d[2].rssi, d[2].connectable, d[2].hid)
       )LUA";
       go(be, script);
-      expect(be, {NR, "0", "24", "11:22:33:44:55:66\tKeychron K3\t-48\ttrue\ttrue", "AA:BB:CC:DD:EE:FF\tBeacon\t-80\ttrue\tfalse"}, "devices");
+      expect(be,
+             {NR, "0", "24", "11:22:33:44:55:66\tKeychron K3\t-48\ttrue\ttrue",
+              "AA:BB:CC:DD:EE:FF\tBeacon\t-80\ttrue\tfalse"},
+             "devices");
     }
     {
       MockBackend be;  // connect: the address is checked in full before the stack is asked
@@ -6351,7 +7301,8 @@ int main() {
         show(ble.state())
       )LUA";
       go(be, script);
-      expect(be, {"false\tidle\tfalse\tnil\tnil\tnil\tnil\tnil", "true\tidle\tfalse\tkeyboard\tnil\tnil\tnil\tnil"}, "state idle");
+      expect(be, {"false\tidle\tfalse\tnil\tnil\tnil\tnil\tnil", "true\tidle\tfalse\tkeyboard\tnil\tnil\tnil\tnil"},
+             "state idle");
     }
     {
       MockBackend be;  // connecting with a passkey waiting, connected, failed (reason shown only then)
@@ -6380,7 +7331,8 @@ int main() {
       snprintf(be.bleStateVal.reason, sizeof(be.bleStateVal.reason), "pairing timed out");
       go(be, script);
       expect(be,
-             {"connecting\t11:22:33:44:55:66\tKeychron K3\t123456\tnil\tfalse", "connected\t11:22:33:44:55:66\tKeychron K3\tnil\tnil\ttrue",
+             {"connecting\t11:22:33:44:55:66\tKeychron K3\t123456\tnil\tfalse",
+              "connected\t11:22:33:44:55:66\tKeychron K3\tnil\tnil\ttrue",
               "failed\tnil\tnil\tnil\tpairing timed out\tfalse"},
              "state");
     }
@@ -6403,8 +7355,8 @@ int main() {
       )LUA";
       go(be, script);
       expect(be,
-             {NR, NR, "2\t11:22:33:44:55:66\tKeychron K3\t22:33:44:55:66:77\tRemote", "nil\taddr must look like AA:BB:CC:DD:EE:FF",
-              "nil\tthat device is not paired", "true", "1", "false"},
+             {NR, NR, "2\t11:22:33:44:55:66\tKeychron K3\t22:33:44:55:66:77\tRemote",
+              "nil\taddr must look like AA:BB:CC:DD:EE:FF", "nil\tthat device is not paired", "true", "1", "false"},
              "paired");
     }
     {
@@ -6418,11 +7370,11 @@ int main() {
   {
     TEST("input.key: key events carry the character / special key / modifiers; other events carry none");
     MockBackend be;
-    be.pushKey('a', 0, 0x02, 0x04);        // left shift + a
-    be.events.push_back("confirm");        // a button between the keys
-    be.pushKey(0, 1, 0, 0x28);             // enter
-    be.pushKey(0, 13, 0x14, 0x4E);         // page down with right ctrl + left alt
-    be.pushKey(0, 200, 0, 0x99);           // a special index this firmware does not know: no `key` field
+    be.pushKey('a', 0, 0x02, 0x04);  // left shift + a
+    be.events.push_back("confirm");  // a button between the keys
+    be.pushKey(0, 1, 0, 0x28);       // enter
+    be.pushKey(0, 13, 0x14, 0x4E);   // page down with right ctrl + left alt
+    be.pushKey(0, 200, 0, 0x99);     // a special index this firmware does not know: no `key` field
     for (uint8_t m : {0x01, 0x10, 0x02, 0x20, 0x04, 0x40, 0x08, 0x80}) be.pushKey('x', 0, m, 0x1B);
     LuaVm vm;
     CHECK(vm.open(128 * 1024));
@@ -6443,11 +7395,24 @@ int main() {
     )LUA";
     CHECK(vm.load("t", script, strlen(script)));
     CHECK(run(vm, be, 100000) == Status::Finished);
-    const char* want[] = {"nil", "key\ta\tnil\t4\tfalse\ttrue\tfalse\tfalse", "confirm\tnokey", "key\tnil\tenter\t40\tfalse\tfalse\tfalse\tfalse",
-                          "key\tnil\tpagedown\t78\ttrue\tfalse\ttrue\tfalse", "key\tnil\tnil\t153\tfalse\tfalse\tfalse\tfalse",
-                          "c---", "c---", "-s--", "-s--", "--a-", "--a-", "---g", "---g", "nil\tnil"};
+    const char* want[] = {"nil",
+                          "key\ta\tnil\t4\tfalse\ttrue\tfalse\tfalse",
+                          "confirm\tnokey",
+                          "key\tnil\tenter\t40\tfalse\tfalse\tfalse\tfalse",
+                          "key\tnil\tpagedown\t78\ttrue\tfalse\ttrue\tfalse",
+                          "key\tnil\tnil\t153\tfalse\tfalse\tfalse\tfalse",
+                          "c---",
+                          "c---",
+                          "-s--",
+                          "-s--",
+                          "--a-",
+                          "--a-",
+                          "---g",
+                          "---g",
+                          "nil\tnil"};
     const size_t N = sizeof(want) / sizeof(want[0]);
-    if (be.logs.size() != N) for (auto& l : be.logs) printf("    key log '%s'\n", l.c_str());
+    if (be.logs.size() != N)
+      for (auto& l : be.logs) printf("    key log '%s'\n", l.c_str());
     CHECK(be.logs.size() == N);
     for (size_t i = 0; i < N && i < be.logs.size(); i++) {
       CHECK(be.logs[i] == want[i]);
@@ -6483,9 +7448,12 @@ int main() {
                           "nil\tbluetooth is running: call ble.stop() first",
                           "nil\tbluetooth is running: call ble.stop() first",
                           "nil\tbluetooth is running: call ble.stop() first",
-                          "nil\tbluetooth is running: call ble.stop() first", "true", "true"};
+                          "nil\tbluetooth is running: call ble.stop() first",
+                          "true",
+                          "true"};
     const size_t N = sizeof(want) / sizeof(want[0]);
-    if (be.logs.size() != N) for (auto& l : be.logs) printf("    wifi-side log '%s'\n", l.c_str());
+    if (be.logs.size() != N)
+      for (auto& l : be.logs) printf("    wifi-side log '%s'\n", l.c_str());
     CHECK(be.logs.size() == N);
     for (size_t i = 0; i < N && i < be.logs.size(); i++) {
       CHECK(be.logs[i] == want[i]);
@@ -6494,7 +7462,9 @@ int main() {
     CHECK(!be.apUp && !be.enUp && !be.monUp && !be.txUp && !be.wifiUp);
   }
   {
-    TEST("crypto.device_key: per-app per-label HMAC of the device secret (vectors from python hmac), validation, no secret = clean error");
+    TEST(
+        "crypto.device_key: per-app per-label HMAC of the device secret (vectors from python hmac), validation, no "
+        "secret = clean error");
     auto go = [&](MockBackend& be, const char* script) {
       LuaVm vm;
       CHECK(vm.open(128 * 1024));
@@ -6503,16 +7473,23 @@ int main() {
       CHECK(run(vm, be, 100000) == Status::Finished);
     };
     auto expect = [&](MockBackend& be, std::vector<std::string> want, const char* tag) {
-      if (be.logs.size() != want.size()) { printf("    devkey %s: %zu logs, want %zu\n", tag, be.logs.size(), want.size()); for (auto& l : be.logs) printf("      '%s'\n", l.c_str()); }
+      if (be.logs.size() != want.size()) {
+        printf("    devkey %s: %zu logs, want %zu\n", tag, be.logs.size(), want.size());
+        for (auto& l : be.logs) printf("      '%s'\n", l.c_str());
+      }
       CHECK(be.logs.size() == want.size());
       for (size_t i = 0; i < want.size() && i < be.logs.size(); i++) {
         CHECK(be.logs[i] == want[i]);
-        if (be.logs[i] != want[i]) printf("    devkey %s #%zu got '%s' want '%s'\n", tag, i + 1, be.logs[i].c_str(), want[i].c_str());
+        if (be.logs[i] != want[i])
+          printf("    devkey %s #%zu got '%s' want '%s'\n", tag, i + 1, be.logs[i].c_str(), want[i].c_str());
       }
     };
-    const std::string V_TEST_VAULT = "c08ad8310a9ea74608eab2b302a362638dc2c614014ecc5fe68cc371102d547b";  // hmac(secret=00..1f, "crosslua-device-key:v1\0test\0vault")
+    const std::string V_TEST_VAULT =
+        "c08ad8310a9ea74608eab2b302a362638dc2c614014ecc5fe68cc371102d547b";  // hmac(secret=00..1f,
+                                                                             // "crosslua-device-key:v1\0test\0vault")
     const std::string V_TEST_OTHER = "323a2c241e4433cb50bc7cf2611d7c1eee357d65148fac55cd7a218ec657b514";
-    const std::string V_NOTES_VAULT = "122c871a70f675c58e0a4808e46f0db25324015248f7ace702da550783dfadc6";  // app "Notes_Lua" is lower-cased
+    const std::string V_NOTES_VAULT =
+        "122c871a70f675c58e0a4808e46f0db25324015248f7ace702da550783dfadc6";  // app "Notes_Lua" is lower-cased
     const std::string V_OTHERAPP_VAULT = "5deed0b4c3793805b7bc455ed3b2532bb56a617e1ef326c7b9a42f0fd01ca53e";
     {
       MockBackend be;
@@ -6537,7 +7514,8 @@ int main() {
       expect(be, {V_NOTES_VAULT, V_NOTES_VAULT, V_OTHERAPP_VAULT}, "app name");
     }
     {
-      MockBackend be;  // a different device secret gives a different key (a card copied to another device cannot derive it)
+      MockBackend
+          be;  // a different device secret gives a different key (a card copied to another device cannot derive it)
       be.secretBytes[0] ^= 1;
       go(be, "print(crypto.hex(crypto.device_key(\"vault\")))");
       CHECK(be.logs.size() == 1 && be.logs[0] != V_TEST_VAULT && be.logs[0].size() == 64);
@@ -6575,15 +7553,22 @@ int main() {
       go(be, "print(#crypto.device_key(\"vault\"))");
       be.appNameVal = "";
       go(be, "print(crypto.device_key(\"vault\"))");
-      expect(be, {"nil\tthis app's folder name is too long to derive a key from", "32", "nil\tthis app's folder name is too long to derive a key from"}, "app name length");
+      expect(be,
+             {"nil\tthis app's folder name is too long to derive a key from", "32",
+              "nil\tthis app's folder name is too long to derive a key from"},
+             "app name length");
     }
   }
   {
-    TEST("vault.lua: matches an independent implementation (python hmac/pbkdf2 + openssl AES), roundtrip, PIN change, validation, tampering, device binding");
-    // python: dk = hmac(secret 00..1f, "crosslua-device-key:v1\0test\0vault-v1"); pre = hmac(dk, "1234"); master = pbkdf2(pre, salt a0..af, 1000, 32);
-    // enc/mac = hmac(master, "vault-enc\1"/"vault-mac\1"); AES-256-CBC (openssl) over "hello vault\n"*3; HMAC over header+ciphertext.
+    TEST(
+        "vault.lua: matches an independent implementation (python hmac/pbkdf2 + openssl AES), roundtrip, PIN change, "
+        "validation, tampering, device binding");
+    // python: dk = hmac(secret 00..1f, "crosslua-device-key:v1\0test\0vault-v1"); pre = hmac(dk, "1234"); master =
+    // pbkdf2(pre, salt a0..af, 1000, 32); enc/mac = hmac(master, "vault-enc\1"/"vault-mac\1"); AES-256-CBC (openssl)
+    // over "hello vault\n"*3; HMAC over header+ciphertext.
     const std::string HEX =
-        "58564c5401000003e8a0a1a2a3a4a5a6a7a8a9aaabacadaeafc0c1c2c3c4c5c6c7c8c9cacbcccdcecfa67e0b8c8c6eb4e897edd3aa08f1a6c33426e692fac06a50271cc718"
+        "58564c5401000003e8a0a1a2a3a4a5a6a7a8a9aaabacadaeafc0c1c2c3c4c5c6c7c8c9cacbcccdcecfa67e0b8c8c6eb4e897edd3aa08f1"
+        "a6c33426e692fac06a50271cc718"
         "3ca42ca02936bc7bc0a6bf8680ba8501918a7dbcdbbb253d0274c99c0f3a76fdec6a2c591bbfcae528508018fe1ccc5291ae1a8c";
     auto go = [&](MockBackend& be, const std::string& script) {
       loadApp(be, "totp_lua");  // /plugins/test/vault.lua
@@ -6594,18 +7579,23 @@ int main() {
       CHECK(run(vm, be, 2000000) == Status::Finished);
     };
     auto expect = [&](MockBackend& be, std::vector<std::string> want, const char* tag) {
-      if (be.logs.size() != want.size()) { printf("    vault %s: %zu logs, want %zu\n", tag, be.logs.size(), want.size()); for (auto& l : be.logs) printf("      '%s'\n", l.c_str()); }
+      if (be.logs.size() != want.size()) {
+        printf("    vault %s: %zu logs, want %zu\n", tag, be.logs.size(), want.size());
+        for (auto& l : be.logs) printf("      '%s'\n", l.c_str());
+      }
       CHECK(be.logs.size() == want.size());
       for (size_t i = 0; i < want.size() && i < be.logs.size(); i++) {
         CHECK(be.logs[i] == want[i]);
-        if (be.logs[i] != want[i]) printf("    vault %s #%zu got '%s' want '%s'\n", tag, i + 1, be.logs[i].c_str(), want[i].c_str());
+        if (be.logs[i] != want[i])
+          printf("    vault %s #%zu got '%s' want '%s'\n", tag, i + 1, be.logs[i].c_str(), want[i].c_str());
       }
     };
     const std::string BAD = "nil\twrong PIN or damaged vault";
     const std::string PINMSG = "nil\tthe PIN must be 4..64 characters";
     const std::string ITER = "nil\titerations must be 1000..20000";
     {
-      MockBackend be;  // reference vector: byte-identical to the independent implementation, and the python-made file opens
+      MockBackend
+          be;  // reference vector: byte-identical to the independent implementation, and the python-made file opens
       go(be, "local EXPECTED = '" + HEX + R"LUA('
         local vault = require("vault")
         local salt = crypto.unhex("a0a1a2a3a4a5a6a7a8a9aaabacadaeaf")
@@ -6621,7 +7611,8 @@ int main() {
       expect(be, {"true", "true\tnil", BAD, BAD}, "reference");
     }
     {
-      MockBackend be;  // roundtrip: fresh IV per save (same salt), new salt on a PIN change, the old PIN stops working, lock() is final
+      MockBackend be;  // roundtrip: fresh IV per save (same salt), new salt on a PIN change, the old PIN stops working,
+                       // lock() is final
       go(be, R"LUA(
         local vault = require("vault")
         local v, e = vault.create("data:v.bin", "4321", "secret one", 1000)
@@ -6650,8 +7641,10 @@ int main() {
         print(vault.create("data:v.bin", "4321", "x", 1000))
         print(vault.exists("data:v.bin"), vault.exists("data:none.bin"))
       )LUA");
-      expect(be, {"true\tnil", "true\tXVLT", "true\ttrue", "true", "true\ttrue", "secret two", PINMSG, "true", "true", "true", BAD, "secret two",
-                  "true\ttrue\tnil\tnil\tnil\tthe vault is locked", "nil\tthe vault is locked", "nil\ta vault already exists there", "true\tfalse"},
+      expect(be,
+             {"true\tnil", "true\tXVLT", "true\ttrue", "true", "true\ttrue", "secret two", PINMSG, "true", "true",
+              "true", BAD, "secret two", "true\ttrue\tnil\tnil\tnil\tthe vault is locked", "nil\tthe vault is locked",
+              "nil\ta vault already exists there", "true\tfalse"},
              "roundtrip");
     }
     {
@@ -6674,8 +7667,9 @@ int main() {
         fs.write("data:junk.bin", "short")
         print(vault.unlock("data:junk.bin", "1234"))
       )LUA");
-      expect(be, {PINMSG, PINMSG, PINMSG, ITER, ITER, ITER, "nil\tthe vault holds at most 24 KB", "false", "true", "true\ttrue", "nil\tno vault",
-                  "nil\tnot a vault file"},
+      expect(be,
+             {PINMSG, PINMSG, PINMSG, ITER, ITER, ITER, "nil\tthe vault holds at most 24 KB", "false", "true",
+              "true\ttrue", "nil\tno vault", "nil\tnot a vault file"},
              "validation");
     }
     {
@@ -6698,25 +7692,31 @@ int main() {
         print(try("iterhi.bin", good:sub(1, 5) .. string.pack(">I4", 20001) .. good:sub(10)))
         print(try("short.bin", good:sub(1, 88)))
       )LUA");
-      expect(be, {"true", BAD, BAD, BAD, BAD, BAD, BAD, "nil\tnot a vault file", "nil\tunsupported vault version", "nil\tunsupported vault settings",
-                  "nil\tunsupported vault settings", "nil\tnot a vault file"},
+      expect(be,
+             {"true", BAD, BAD, BAD, BAD, BAD, BAD, "nil\tnot a vault file", "nil\tunsupported vault version",
+              "nil\tunsupported vault settings", "nil\tunsupported vault settings", "nil\tnot a vault file"},
              "tamper");
     }
     {
-      MockBackend be;  // device binding: the same file under another device secret does not open; no secret is an honest error
+      MockBackend
+          be;  // device binding: the same file under another device secret does not open; no secret is an honest error
       go(be, "local vault = require('vault'); print(vault.create('data:d.bin', '4321', 'bound', 1000) ~= nil)");
       be.secretBytes[0] ^= 1;
       go(be, "local vault = require('vault'); print(vault.unlock('data:d.bin', '4321'))");
       be.secretBytes[0] ^= 1;
       go(be, "local vault = require('vault'); local v = vault.unlock('data:d.bin', '4321'); print(v and v.data)");
       be.secretOk = false;
-      go(be, "local vault = require('vault'); print(vault.unlock('data:d.bin', '4321'))\nprint(vault.create('data:e.bin', '4321', 'x', 1000))");
+      go(be,
+         "local vault = require('vault'); print(vault.unlock('data:d.bin', '4321'))\nprint(vault.create('data:e.bin', "
+         "'4321', 'x', 1000))");
       const std::string NOSEC = "nil\tno device secret available (the key storage could not be read)";
       expect(be, {"true", BAD, "bound", NOSEC, NOSEC}, "device binding");
     }
   }
   {
-    TEST("totp.lua: RFC 6238 vectors + python-generated codes (digits/period/SHA1/SHA256), base32, validation, otpauth:// parsing");
+    TEST(
+        "totp.lua: RFC 6238 vectors + python-generated codes (digits/period/SHA1/SHA256), base32, validation, "
+        "otpauth:// parsing");
     auto go = [&](MockBackend& be, const std::string& script) {
       loadApp(be, "totp_lua");
       LuaVm vm;
@@ -6726,11 +7726,15 @@ int main() {
       CHECK(run(vm, be, 2000000) == Status::Finished);
     };
     auto expect = [&](MockBackend& be, std::vector<std::string> want, const char* tag) {
-      if (be.logs.size() != want.size()) { printf("    totp %s: %zu logs, want %zu\n", tag, be.logs.size(), want.size()); for (auto& l : be.logs) printf("      '%s'\n", l.c_str()); }
+      if (be.logs.size() != want.size()) {
+        printf("    totp %s: %zu logs, want %zu\n", tag, be.logs.size(), want.size());
+        for (auto& l : be.logs) printf("      '%s'\n", l.c_str());
+      }
       CHECK(be.logs.size() == want.size());
       for (size_t i = 0; i < want.size() && i < be.logs.size(); i++) {
         CHECK(be.logs[i] == want[i]);
-        if (be.logs[i] != want[i]) printf("    totp %s #%zu got '%s' want '%s'\n", tag, i + 1, be.logs[i].c_str(), want[i].c_str());
+        if (be.logs[i] != want[i])
+          printf("    totp %s #%zu got '%s' want '%s'\n", tag, i + 1, be.logs[i].c_str(), want[i].c_str());
       }
     };
     {
@@ -6742,12 +7746,14 @@ int main() {
           print(t, totp.code(s1, t, {digits = 8}), totp.code(s256, t, {digits = 8, alg = "SHA256"}))
         end
       )LUA");
-      expect(be, {"59\t94287082\t46119246", "1111111109\t07081804\t68084774", "1111111111\t14050471\t67062674", "1234567890\t89005924\t91819424",
-                  "2000000000\t69279037\t90698825"},
+      expect(be,
+             {"59\t94287082\t46119246", "1111111109\t07081804\t68084774", "1111111111\t14050471\t67062674",
+              "1234567890\t89005924\t91819424", "2000000000\t69279037\t90698825"},
              "rfc");
     }
     {
-      MockBackend be;  // codes from an independent python implementation (hmac + struct), incl. a leading zero and a 45 s period
+      MockBackend be;  // codes from an independent python implementation (hmac + struct), incl. a leading zero and a 45
+                       // s period
       go(be, R"LUA(
         local totp = require("totp")
         local sec = totp.b32decode("JBSWY3DPEHPK3PXP")
@@ -6758,9 +7764,11 @@ int main() {
           print(c[1], c[2], c[3], totp.code(sec, 1700000000, o), totp.code(sec, 1700000029, o), totp.code(sec, 1700000030, o))
         end
       )LUA");
-      expect(be, {"48656c6c6f21deadbeef", "324550", "6\t30\tSHA1\t324550\t367665\t367665", "7\t30\tSHA1\t2324550\t2367665\t2367665",
-                  "8\t30\tSHA1\t02324550\t02367665\t02367665", "6\t60\tSHA1\t508648\t508648\t508648", "6\t30\tSHA256\t049486\t315597\t315597",
-                  "8\t45\tSHA256\t64158300\t59961940\t59961940"},
+      expect(be,
+             {"48656c6c6f21deadbeef", "324550", "6\t30\tSHA1\t324550\t367665\t367665",
+              "7\t30\tSHA1\t2324550\t2367665\t2367665", "8\t30\tSHA1\t02324550\t02367665\t02367665",
+              "6\t60\tSHA1\t508648\t508648\t508648", "6\t30\tSHA256\t049486\t315597\t315597",
+              "8\t45\tSHA256\t64158300\t59961940\t59961940"},
              "python");
     }
     {
@@ -6776,7 +7784,10 @@ int main() {
         print(totp.b32decode("===="))
         print(totp.b32decode(5))
       )LUA");
-      expect(be, {"48656c6c6f21deadbeef", "foo\tfoo", "foob", "nil\tnot base32", "nil\tnot base32", "nil\tempty secret", "nil\tempty secret", "nil\tnot base32"}, "base32");
+      expect(be,
+             {"48656c6c6f21deadbeef", "foo\tfoo", "foob", "nil\tnot base32", "nil\tnot base32", "nil\tempty secret",
+              "nil\tempty secret", "nil\tnot base32"},
+             "base32");
     }
     {
       MockBackend be;  // code() validation and remaining()
@@ -6797,9 +7808,11 @@ int main() {
         print(totp.code(s, 59, {period = 300}) ~= nil, totp.code(s, 59, {period = 1}) ~= nil)
         print(totp.remaining(1700000000, 30), totp.remaining(60, 30), totp.remaining(59, 30), totp.remaining(7), totp.remaining(10, 45))
       )LUA");
-      const std::string D = "nil\tdigits must be 6, 7 or 8", P = "nil\tperiod must be 1..300 seconds", T = "nil\ttime must be a non-negative integer";
-      expect(be, {D, D, P, P, P, "nil\tunsupported algorithm (SHA1 and SHA256 only)", T, T, "nil\tempty secret", "nil\tempty secret", "true", "true\ttrue",
-                  "10\t30\t1\t23\t35"},
+      const std::string D = "nil\tdigits must be 6, 7 or 8", P = "nil\tperiod must be 1..300 seconds",
+                        T = "nil\ttime must be a non-negative integer";
+      expect(be,
+             {D, D, P, P, P, "nil\tunsupported algorithm (SHA1 and SHA256 only)", T, T, "nil\tempty secret",
+              "nil\tempty secret", "true", "true\ttrue", "10\t30\t1\t23\t35"},
              "validation");
     }
     {
@@ -6824,18 +7837,27 @@ int main() {
         show("otpauth://totp/x?secret=JBSWY3DPEHPK3PXP&algorithm=SHA512")
         show(42)
       )LUA");
-      expect(be,
-             {"alice@example.com\tExample\tJBSWY3DPEHPK3PXP\t8\t45\tSHA256", "bob\tGitHub\tJBSWY3DPEHPK3PXP\t6\t30\tSHA1",
-              "plainlabel\tAcme Corp\tJBSWY3DPEHPK3PXP\t6\t30\tSHA1", "me\tNew\tJBSWY3DPEHPK3PXP\t6\t30\tSHA1", "x\t\tJBSWY3DPEHPK3PXP\t6\t30\tSHA1",
-              "Zed\tZed\tJBSWY3DPEHPK3PXP\t6\t30\tSHA1", "nil\tnot an otpauth://totp/ link", "nil\tno secret in the link", "nil\tnot base32",
-              "nil\tdigits must be 6, 7 or 8", "nil\tperiod must be 1..300 seconds", "nil\tunsupported algorithm (SHA1 and SHA256 only)",
-              "nil\tnot an otpauth://totp/ link"},
-             "uri");
+      expect(
+          be,
+          {"alice@example.com\tExample\tJBSWY3DPEHPK3PXP\t8\t45\tSHA256", "bob\tGitHub\tJBSWY3DPEHPK3PXP\t6\t30\tSHA1",
+           "plainlabel\tAcme Corp\tJBSWY3DPEHPK3PXP\t6\t30\tSHA1", "me\tNew\tJBSWY3DPEHPK3PXP\t6\t30\tSHA1",
+           "x\t\tJBSWY3DPEHPK3PXP\t6\t30\tSHA1", "Zed\tZed\tJBSWY3DPEHPK3PXP\t6\t30\tSHA1",
+           "nil\tnot an otpauth://totp/ link", "nil\tno secret in the link", "nil\tnot base32",
+           "nil\tdigits must be 6, 7 or 8", "nil\tperiod must be 1..300 seconds",
+           "nil\tunsupported algorithm (SHA1 and SHA256 only)", "nil\tnot an otpauth://totp/ link"},
+          "uri");
     }
   }
   {
-    TEST("totp_lua app: digit-wheel PIN, setup, wrong PIN, add, import, delete, change PIN, lock, idle lock, no clock (the real main.lua, scripted keys and typed text)");
-    struct Drive { std::vector<std::string> titles; std::vector<int> modes; bool finished = false; size_t textsLeft = 0, eventsLeft = 0; };
+    TEST(
+        "totp_lua app: digit-wheel PIN, setup, wrong PIN, add, import, delete, change PIN, lock, idle lock, no clock "
+        "(the real main.lua, scripted keys and typed text)");
+    struct Drive {
+      std::vector<std::string> titles;
+      std::vector<int> modes;
+      bool finished = false;
+      size_t textsLeft = 0, eventsLeft = 0;
+    };
     // keys that enter a numeric PIN on the wheel: up x digit, right to lock it in, confirm after the last one
     auto PIN = [](const std::string& d) {
       std::vector<std::string> k;
@@ -6847,11 +7869,12 @@ int main() {
     };
     auto KEYS = [](std::initializer_list<std::vector<std::string>> parts) {
       std::deque<std::string> out;
-      for (auto& p : parts) for (auto& e : p) out.push_back(e);
+      for (auto& p : parts)
+        for (auto& e : p) out.push_back(e);
       return out;
     };
-    // an "@ms" token waits (on the mock clock, through the app's own timeouts) until ms have passed; a screen that waits for a key
-    // with no timeout drops the token, like a user who walks away and comes back
+    // an "@ms" token waits (on the mock clock, through the app's own timeouts) until ms have passed; a screen that
+    // waits for a key with no timeout drops the token, like a user who walks away and comes back
     auto drive = [&](MockBackend& be, std::deque<std::string> texts, std::deque<std::string> keys) {
       Drive d;
       std::string src = loadApp(be, "totp_lua");
@@ -6865,19 +7888,33 @@ int main() {
       CHECK(vm.load("totp", src.data(), src.size()));
       for (int i = 0; i < 20000; i++) {
         Status s = vm.status();
-        if (s == Status::Error) { printf("  [lua error] %s\n", vm.error().c_str()); break; }
-        if (s == Status::Finished || be.exitReq) { d.finished = true; break; }
+        if (s == Status::Error) {
+          printf("  [lua error] %s\n", vm.error().c_str());
+          break;
+        }
+        if (s == Status::Finished || be.exitReq) {
+          d.finished = true;
+          break;
+        }
         if (s == Status::Waiting) {
           if (be.textAsked) {
             be.textAsked = false;
             d.titles.push_back(be.textTitle);
             d.modes.push_back(be.textMode);
-            if (texts.empty()) { vm.resume("text:cancel"); }
-            else { std::string r = "text:ok:" + texts.front(); texts.pop_front(); vm.resume(r.c_str()); }
+            if (texts.empty()) {
+              vm.resume("text:cancel");
+            } else {
+              std::string r = "text:ok:" + texts.front();
+              texts.pop_front();
+              vm.resume(r.c_str());
+            }
           } else if (!be.events.empty() && be.events.front()[0] == '@') {
             const uint32_t target = static_cast<uint32_t>(std::stoul(be.events.front().substr(1)));
-            if (be.now < target && vm.timeoutMs() >= 0) { be.now += static_cast<uint32_t>(vm.timeoutMs()); vm.resume(nullptr); }
-            else be.events.pop_front();
+            if (be.now < target && vm.timeoutMs() >= 0) {
+              be.now += static_cast<uint32_t>(vm.timeoutMs());
+              vm.resume(nullptr);
+            } else
+              be.events.pop_front();
           } else if (vm.wakesOnEvent() && !be.events.empty()) {
             std::string e = be.events.front();
             be.events.pop_front();
@@ -6885,19 +7922,23 @@ int main() {
           } else if (vm.timeoutMs() >= 0) {
             be.now += static_cast<uint32_t>(vm.timeoutMs());
             vm.resume(nullptr);
-          } else break;  // would wait forever
-        } else vm.resume();
+          } else
+            break;  // would wait forever
+        } else
+          vm.resume();
       }
       d.textsLeft = texts.size();
       d.eventsLeft = be.events.size();
       return d;
     };
     auto shown = [&](MockBackend& be, const std::string& s) {
-      for (auto& c : be.calls) if (c.find(s) != std::string::npos) return true;
+      for (auto& c : be.calls)
+        if (c.find(s) != std::string::npos) return true;
       return false;
     };
     auto lastAt = [&](MockBackend& be, const std::string& s) {
-      for (int i = static_cast<int>(be.calls.size()) - 1; i >= 0; i--) if (be.calls[i].find(s) != std::string::npos) return i;
+      for (int i = static_cast<int>(be.calls.size()) - 1; i >= 0; i--)
+        if (be.calls[i].find(s) != std::string::npos) return i;
       return -1;
     };
     auto lua = [&](MockBackend& be, const std::string& script) {
@@ -6915,11 +7956,15 @@ int main() {
     be.epoch = 1700000000;  // clock: 20 s into a 30 s window (python: 324550 now, 367665 after the boundary)
     {
       // A. first start: intro, PIN twice on the wheel, add one account by typing
-      Drive d = drive(be, {"GitHub", "", "JBSWY3DPEHPK3PXP"}, KEYS({{"confirm"}, PIN("1234"), PIN("1234"), {"confirm", "confirm", "confirm", "back"}}));
+      Drive d = drive(be, {"GitHub", "", "JBSWY3DPEHPK3PXP"},
+                      KEYS({{"confirm"}, PIN("1234"), PIN("1234"), {"confirm", "confirm", "confirm", "back"}}));
       CHECK(d.finished && d.textsLeft == 0 && d.eventsLeft == 0);
       CHECK(d.titles == vec({"Account name", "Issuer (optional)", "Secret (base32)"}) && d.modes[0] == 0);
       CHECK(shown(be, ":GitHub:") && shown(be, ":324 550:") && shown(be, ":10 s:"));
-      lua(be, "local vault = require('vault'); local v = vault.unlock('data:vault.bin', '1234'); local db = json.decode(v.data); print(#db.accounts, db.accounts[1].name, db.accounts[1].secret, db.accounts[1].digits, db.accounts[1].period, db.accounts[1].alg)");
+      lua(be,
+          "local vault = require('vault'); local v = vault.unlock('data:vault.bin', '1234'); local db = "
+          "json.decode(v.data); print(#db.accounts, db.accounts[1].name, db.accounts[1].secret, db.accounts[1].digits, "
+          "db.accounts[1].period, db.accounts[1].alg)");
       CHECK(be.logs.size() == 1 && be.logs[0] == "1\tGitHub\tJBSWY3DPEHPK3PXP\t6\t30\tSHA1");
     }
     {
@@ -6930,19 +7975,26 @@ int main() {
       CHECK(shown(be, "Spin each digit") && shown(be, ":*:"));  // the wheel was drawn and locked digits are masked
     }
     {
-      // C. back on the wheel leaves the app; left on the first digit offers the keyboard (a passphrase is the same string)
+      // C. back on the wheel leaves the app; left on the first digit offers the keyboard (a passphrase is the same
+      // string)
       Drive c = drive(be, {}, {"back"});
       CHECK(c.finished && c.eventsLeft == 0 && !shown(be, ":GitHub:"));
       Drive k = drive(be, {"1234"}, {"left", "back"});
-      CHECK(k.finished && k.eventsLeft == 0 && k.titles == vec({"Enter PIN (passphrase)"}) && k.modes[0] == 1 && shown(be, ":GitHub:"));
+      CHECK(k.finished && k.eventsLeft == 0 && k.titles == vec({"Enter PIN (passphrase)"}) && k.modes[0] == 1 &&
+            shown(be, ":GitHub:"));
     }
     {
       // D. import: two bad lines are skipped, the file is deleted, the account is stored
-      lua(be, "fs.write('data:import.txt', 'otpauth://totp/Acme:bob?secret=JBSWY3DPEHPK3PXP&issuer=Acme\\nhello\\n  \t\\notpauth://hotp/x?secret=JBSWY3DPEHPK3PXP\\n')");
+      lua(be,
+          "fs.write('data:import.txt', 'otpauth://totp/Acme:bob?secret=JBSWY3DPEHPK3PXP&issuer=Acme\\nhello\\n  "
+          "\t\\notpauth://hotp/x?secret=JBSWY3DPEHPK3PXP\\n')");
       Drive d = drive(be, {}, KEYS({PIN("1234"), {"confirm", "down", "confirm", "confirm", "back"}}));
       CHECK(d.finished && d.eventsLeft == 0);
       CHECK(shown(be, ":Added 1, skipped 2.:") && shown(be, ":import.txt was deleted from the card.:"));
-      lua(be, "print(fs.exists('data:import.txt')); local vault = require('vault'); local db = json.decode(vault.unlock('data:vault.bin', '1234').data); print(#db.accounts, db.accounts[2].name, db.accounts[2].issuer)");
+      lua(be,
+          "print(fs.exists('data:import.txt')); local vault = require('vault'); local db = "
+          "json.decode(vault.unlock('data:vault.bin', '1234').data); print(#db.accounts, db.accounts[2].name, "
+          "db.accounts[2].issuer)");
       CHECK(be.logs.size() == 2 && be.logs[0] == "false" && be.logs[1] == "2\tbob\tAcme");
       // importing again with no file explains where to put it; importing the same link again adds nothing
       Drive d2 = drive(be, {}, KEYS({PIN("1234"), {"confirm", "down", "confirm", "confirm", "back"}}));
@@ -6952,55 +8004,74 @@ int main() {
       CHECK(d3.finished && d3.eventsLeft == 0 && shown(be, ":Added 0, skipped 1.:"));
     }
     {
-      // E. delete: "Keep it" changes nothing, "Delete it" removes the selected account (the last row, however often down is pressed)
+      // E. delete: "Keep it" changes nothing, "Delete it" removes the selected account (the last row, however often
+      // down is pressed)
       Drive keep = drive(be, {}, KEYS({PIN("1234"), {"confirm", "down", "down", "confirm", "confirm", "back"}}));
       CHECK(keep.finished && keep.eventsLeft == 0);
-      lua(be, "local vault = require('vault'); print(#json.decode(vault.unlock('data:vault.bin', '1234').data).accounts)");
+      lua(be,
+          "local vault = require('vault'); print(#json.decode(vault.unlock('data:vault.bin', '1234').data).accounts)");
       CHECK(be.logs.size() == 1 && be.logs[0] == "2");
-      Drive del = drive(be, {}, KEYS({PIN("1234"), {"down", "down", "down", "confirm", "down", "down", "confirm", "down", "confirm", "back"}}));
+      Drive del =
+          drive(be, {},
+                KEYS({PIN("1234"),
+                      {"down", "down", "down", "confirm", "down", "down", "confirm", "down", "confirm", "back"}}));
       CHECK(del.finished && del.eventsLeft == 0);
-      lua(be, "local vault = require('vault'); local db = json.decode(vault.unlock('data:vault.bin', '1234').data); print(#db.accounts, db.accounts[1].name)");
+      lua(be,
+          "local vault = require('vault'); local db = json.decode(vault.unlock('data:vault.bin', '1234').data); "
+          "print(#db.accounts, db.accounts[1].name)");
       CHECK(be.logs.size() == 1 && be.logs[0] == "1\tGitHub");
     }
     {
-      // F. change PIN: a short passphrase and a mismatch are refused (vault unchanged), then it works and the old PIN stops working
+      // F. change PIN: a short passphrase and a mismatch are refused (vault unchanged), then it works and the old PIN
+      // stops working
       const std::vector<std::string> TO_CHANGE = {"confirm", "down", "down", "down", "confirm"};
       Drive d1 = drive(be, {"12"}, KEYS({PIN("1234"), TO_CHANGE, {"left", "confirm", "back"}}));
-      CHECK(d1.finished && d1.eventsLeft == 0 && d1.titles == vec({"New PIN (passphrase)"}) && shown(be, "PIN too short"));
+      CHECK(d1.finished && d1.eventsLeft == 0 && d1.titles == vec({"New PIN (passphrase)"}) &&
+            shown(be, "PIN too short"));
       Drive d2 = drive(be, {}, KEYS({PIN("1234"), TO_CHANGE, PIN("5678"), PIN("5679"), {"confirm", "back"}}));
       CHECK(d2.finished && d2.eventsLeft == 0 && shown(be, "PINs differ"));
       lua(be, "local vault = require('vault'); print(vault.unlock('data:vault.bin', '1234') ~= nil)");
       CHECK(be.logs.size() == 1 && be.logs[0] == "true");
       Drive d3 = drive(be, {}, KEYS({PIN("1234"), TO_CHANGE, PIN("5678"), PIN("5678"), {"confirm", "back"}}));
       CHECK(d3.finished && d3.eventsLeft == 0 && shown(be, "PIN changed"));
-      lua(be, "local vault = require('vault'); print(vault.unlock('data:vault.bin', '1234')); local v = vault.unlock('data:vault.bin', '5678'); print(#json.decode(v.data).accounts)");
+      lua(be,
+          "local vault = require('vault'); print(vault.unlock('data:vault.bin', '1234')); local v = "
+          "vault.unlock('data:vault.bin', '5678'); print(#json.decode(v.data).accounts)");
       CHECK(be.logs.size() == 2 && be.logs[0] == "nil\twrong PIN or damaged vault" && be.logs[1] == "1");
     }
     {
-      // G. "Lock now" asks for the PIN again; H. an idle app locks itself after two minutes and the code changes at the window boundary
-      Drive g = drive(be, {}, KEYS({PIN("5678"), {"confirm", "down", "down", "down", "down", "confirm"}, PIN("5678"), {"back"}}));
+      // G. "Lock now" asks for the PIN again; H. an idle app locks itself after two minutes and the code changes at the
+      // window boundary
+      Drive g = drive(
+          be, {}, KEYS({PIN("5678"), {"confirm", "down", "down", "down", "down", "confirm"}, PIN("5678"), {"back"}}));
       CHECK(g.finished && g.eventsLeft == 0);
       Drive h = drive(be, {}, KEYS({PIN("5678"), {"@125000", "back"}}));
       CHECK(h.finished && h.eventsLeft == 0);
       CHECK(shown(be, ":324 550:") && shown(be, ":367 665:"));  // before and after the first boundary (python values)
-      CHECK(be.now >= 120000 && lastAt(be, ":Enter PIN:") > lastAt(be, ":GitHub:"));  // the PIN wheel is on screen after the list: it locked
+      CHECK(be.now >= 120000 && lastAt(be, ":Enter PIN:") >
+                                    lastAt(be, ":GitHub:"));  // the PIN wheel is on screen after the list: it locked
     }
     {
       // I. without a trusted clock the list says so and shows no codes
       be.epoch = 0;
       Drive d = drive(be, {}, KEYS({PIN("5678"), {"back"}}));
-      CHECK(d.finished && d.eventsLeft == 0 && shown(be, "The clock is not set") && shown(be, ":GitHub:") && !shown(be, ":324 550:"));
+      CHECK(d.finished && d.eventsLeft == 0 && shown(be, "The clock is not set") && shown(be, ":GitHub:") &&
+            !shown(be, ":324 550:"));
       be.epoch = 1700000000;
     }
     {
       // J. typed input: a bad secret, a duplicate, and a lower-case secret with spaces (normalised)
       Drive bad = drive(be, {"Bad", "", "not base32!"}, KEYS({PIN("5678"), {"confirm", "confirm", "confirm", "back"}}));
       CHECK(bad.finished && bad.eventsLeft == 0 && shown(be, "Bad secret"));
-      Drive dup = drive(be, {"GitHub", "", "JBSWY3DPEHPK3PXP"}, KEYS({PIN("5678"), {"confirm", "confirm", "confirm", "back"}}));
+      Drive dup =
+          drive(be, {"GitHub", "", "JBSWY3DPEHPK3PXP"}, KEYS({PIN("5678"), {"confirm", "confirm", "confirm", "back"}}));
       CHECK(dup.finished && dup.eventsLeft == 0 && shown(be, "Not added") && shown(be, ":already there:"));
-      Drive ok = drive(be, {"Mail", "Fastmail", "jbsw y3dp ehpk 3pxp"}, KEYS({PIN("5678"), {"confirm", "confirm", "confirm", "back"}}));
+      Drive ok = drive(be, {"Mail", "Fastmail", "jbsw y3dp ehpk 3pxp"},
+                       KEYS({PIN("5678"), {"confirm", "confirm", "confirm", "back"}}));
       CHECK(ok.finished && ok.eventsLeft == 0 && shown(be, ":Added:"));
-      lua(be, "local vault = require('vault'); local db = json.decode(vault.unlock('data:vault.bin', '5678').data); print(#db.accounts, db.accounts[2].name, db.accounts[2].issuer, db.accounts[2].secret)");
+      lua(be,
+          "local vault = require('vault'); local db = json.decode(vault.unlock('data:vault.bin', '5678').data); "
+          "print(#db.accounts, db.accounts[2].name, db.accounts[2].issuer, db.accounts[2].secret)");
       CHECK(be.logs.size() == 1 && be.logs[0] == "2\tMail\tFastmail\tJBSWY3DPEHPK3PXP");
     }
     {
@@ -7009,50 +8080,82 @@ int main() {
       Drive nos = drive(be, {}, KEYS({PIN("5678"), {"confirm"}}));
       CHECK(nos.finished && nos.eventsLeft == 0 && shown(be, "Cannot open the vault") && shown(be, "device secret"));
       be.secretOk = true;
-      lua(be, "local b = fs.read('data:vault.bin'); fs.write('data:vault.bak', b); fs.write('data:vault.bin', b:sub(1, #b - 1) .. string.char(b:byte(#b) ~ 1))");
+      lua(be,
+          "local b = fs.read('data:vault.bin'); fs.write('data:vault.bak', b); fs.write('data:vault.bin', b:sub(1, #b "
+          "- 1) .. string.char(b:byte(#b) ~ 1))");
       Drive dmg = drive(be, {}, KEYS({PIN("5678"), {"confirm", "back"}}));
       CHECK(dmg.finished && dmg.eventsLeft == 0 && shown(be, "Wrong PIN"));
       lua(be, "fs.write('data:vault.bin', fs.read('data:vault.bak'))");
-      lua(be, "local vault = require('vault'); local v = vault.unlock('data:vault.bin', '5678'); v.data = '[[[['; print(v:save())");
+      lua(be,
+          "local vault = require('vault'); local v = vault.unlock('data:vault.bin', '5678'); v.data = '[[[['; "
+          "print(v:save())");
       Drive junk = drive(be, {}, KEYS({PIN("5678"), {"confirm"}}));
       CHECK(junk.finished && junk.eventsLeft == 0 && shown(be, "Vault unreadable"));
     }
     {
       // L. a vault whose JSON has no accounts is "unreadable" too
-      lua(be, "local vault = require('vault'); local v = vault.unlock('data:vault.bin', '5678'); v.data = '{\"foo\":1}'; print(v:save())");
+      lua(be,
+          "local vault = require('vault'); local v = vault.unlock('data:vault.bin', '5678'); v.data = '{\"foo\":1}'; "
+          "print(v:save())");
       Drive nojson = drive(be, {}, KEYS({PIN("5678"), {"confirm"}}));
-      CHECK(nojson.finished && nojson.eventsLeft == 0 && shown(be, "Vault unreadable") && !shown(be, "Authenticator error"));
-      lua(be, "local vault = require('vault'); local v = vault.unlock('data:vault.bin', '5678'); v.data = json.encode({accounts = {{name = 'GitHub', issuer = '', secret = 'JBSWY3DPEHPK3PXP', digits = 6, period = 30, alg = 'SHA1'}, {name = 'Mail', issuer = 'Fastmail', secret = 'JBSWY3DPEHPK3PXP', digits = 6, period = 30, alg = 'SHA1'}}}); print(v:save())");
+      CHECK(nojson.finished && nojson.eventsLeft == 0 && shown(be, "Vault unreadable") &&
+            !shown(be, "Authenticator error"));
+      lua(be,
+          "local vault = require('vault'); local v = vault.unlock('data:vault.bin', '5678'); v.data = "
+          "json.encode({accounts = {{name = 'GitHub', issuer = '', secret = 'JBSWY3DPEHPK3PXP', digits = 6, period = "
+          "30, alg = 'SHA1'}, {name = 'Mail', issuer = 'Fastmail', secret = 'JBSWY3DPEHPK3PXP', digits = 6, period = "
+          "30, alg = 'SHA1'}}}); print(v:save())");
     }
     {
       // M. the account cap (50) and an 8-digit account in the list
-      lua(be, "local t = {'otpauth://totp/n1?secret=JBSWY3DPEHPK3PXP&digits=8&issuer=Big'}; for i = 2, 60 do t[#t + 1] = 'otpauth://totp/n' .. i .. '?secret=JBSWY3DPEHPK3PXP' end; fs.write('data:import.txt', table.concat(t, '\\n'))");
+      lua(be,
+          "local t = {'otpauth://totp/n1?secret=JBSWY3DPEHPK3PXP&digits=8&issuer=Big'}; for i = 2, 60 do t[#t + 1] = "
+          "'otpauth://totp/n' .. i .. '?secret=JBSWY3DPEHPK3PXP' end; fs.write('data:import.txt', table.concat(t, "
+          "'\\n'))");
       Drive d = drive(be, {}, KEYS({PIN("5678"), {"confirm", "down", "confirm", "confirm", "back"}}));
       CHECK(d.finished && d.eventsLeft == 0 && shown(be, ":Added 48, skipped 12.:"));
       CHECK(shown(be, ":0232 4550:"));  // python: 8-digit SHA1 code at t=1700000000 is 02324550
-      lua(be, "local vault = require('vault'); print(#json.decode(vault.unlock('data:vault.bin', '5678').data).accounts)");
+      lua(be,
+          "local vault = require('vault'); print(#json.decode(vault.unlock('data:vault.bin', '5678').data).accounts)");
       CHECK(be.logs.size() == 1 && be.logs[0] == "50");
     }
     {
-      // S. first start on a fresh card: the wheel refuses fewer than 4 digits, a short passphrase and a mismatch are refused too
+      // S. first start on a fresh card: the wheel refuses fewer than 4 digits, a short passphrase and a mismatch are
+      // refused too
       MockBackend fresh;
       fresh.epoch = 1700000000;
-      Drive d = drive(fresh, {"12"}, KEYS({{"confirm"}, {"confirm"}, {"left"}, {"confirm"}, PIN("1234"), PIN("9999"), {"confirm"}, PIN("5555"), PIN("5555"), {"back"}}));
+      Drive d = drive(fresh, {"12"},
+                      KEYS({{"confirm"},
+                            {"confirm"},
+                            {"left"},
+                            {"confirm"},
+                            PIN("1234"),
+                            PIN("9999"),
+                            {"confirm"},
+                            PIN("5555"),
+                            PIN("5555"),
+                            {"back"}}));
       CHECK(d.finished && d.eventsLeft == 0 && d.textsLeft == 0 && d.titles == vec({"Choose a PIN (passphrase)"}));
       CHECK(shown(fresh, "At least 4 digits.") && shown(fresh, "PIN too short") && shown(fresh, "PINs differ"));
-      lua(fresh, "local vault = require('vault'); print(vault.unlock('data:vault.bin', '5555') ~= nil, vault.unlock('data:vault.bin', '1234'))");
+      lua(fresh,
+          "local vault = require('vault'); print(vault.unlock('data:vault.bin', '5555') ~= nil, "
+          "vault.unlock('data:vault.bin', '1234'))");
       CHECK(fresh.logs.size() == 1 && fresh.logs[0] == "true\tnil\twrong PIN or damaged vault");
     }
     {
-      // W. wheel mechanics: down wraps 0 -> 9, left puts the erased digit back on the wheel, confirm takes the digit being spun
+      // W. wheel mechanics: down wraps 0 -> 9, left puts the erased digit back on the wheel, confirm takes the digit
+      // being spun
       MockBackend fresh;
       fresh.epoch = 1700000000;
-      const std::vector<std::string> W9120 = {"down", "right", "up", "right", "up", "right", "left", "up", "right", "confirm"};
-      // walk: down wraps 0 to 9 and locks it; 1 and 1 follow; left takes the second 1 back onto the wheel, up makes it 2, lock;
-      // confirm adds the digit being spun (0): 9, 1, 2, 0
+      const std::vector<std::string> W9120 = {"down",  "right", "up", "right", "up",
+                                              "right", "left",  "up", "right", "confirm"};
+      // walk: down wraps 0 to 9 and locks it; 1 and 1 follow; left takes the second 1 back onto the wheel, up makes it
+      // 2, lock; confirm adds the digit being spun (0): 9, 1, 2, 0
       Drive d = drive(fresh, {}, KEYS({{"confirm"}, W9120, W9120, {"back"}}));
       CHECK(d.finished && d.eventsLeft == 0);
-      lua(fresh, "local vault = require('vault'); print(vault.unlock('data:vault.bin', '9120') ~= nil, vault.unlock('data:vault.bin', '9111') ~= nil, vault.unlock('data:vault.bin', '9100') ~= nil)");
+      lua(fresh,
+          "local vault = require('vault'); print(vault.unlock('data:vault.bin', '9120') ~= nil, "
+          "vault.unlock('data:vault.bin', '9111') ~= nil, vault.unlock('data:vault.bin', '9100') ~= nil)");
       CHECK(fresh.logs.size() == 1 && fresh.logs[0] == "true\tfalse\tfalse");
     }
     {
@@ -7063,7 +8166,9 @@ int main() {
       twelve.push_back("confirm");
       Drive d = drive(fresh, {}, KEYS({{"confirm"}, twelve, twelve, {"back"}}));
       CHECK(d.finished && d.eventsLeft == 0);
-      lua(fresh, "local vault = require('vault'); print(vault.unlock('data:vault.bin', ('0'):rep(12)) ~= nil, vault.unlock('data:vault.bin', ('0'):rep(13)) ~= nil)");
+      lua(fresh,
+          "local vault = require('vault'); print(vault.unlock('data:vault.bin', ('0'):rep(12)) ~= nil, "
+          "vault.unlock('data:vault.bin', ('0'):rep(13)) ~= nil)");
       CHECK(fresh.logs.size() == 1 && fresh.logs[0] == "true\tfalse");
     }
     {
@@ -7071,7 +8176,10 @@ int main() {
       MockBackend fresh;
       fresh.epoch = 1700000000;
       std::vector<std::string> turns;
-      for (int i = 0; i < 4; i++) { for (int j = 0; j < 10; j++) turns.push_back("up"); turns.push_back(i < 3 ? "right" : "confirm"); }
+      for (int i = 0; i < 4; i++) {
+        for (int j = 0; j < 10; j++) turns.push_back("up");
+        turns.push_back(i < 3 ? "right" : "confirm");
+      }
       Drive d = drive(fresh, {}, KEYS({{"confirm"}, turns, turns, {"back"}}));
       CHECK(d.finished && d.eventsLeft == 0);
       lua(fresh, "local vault = require('vault'); print(vault.unlock('data:vault.bin', '0000') ~= nil)");
@@ -7080,13 +8188,23 @@ int main() {
   }
   {
     TEST("vault.lua: the test hub's copy is identical to the Authenticator's (one source of truth)");
-    auto slurp = [](const char* path) { std::ifstream f(path, std::ios::binary); std::stringstream ss; ss << f.rdbuf(); return ss.str(); };
-    const std::string a = slurp("sd_card_contents/plugins/totp_lua/vault.lua"), b = slurp("sd_card_contents/plugins/lua_tests_lua/vault.lua");
+    auto slurp = [](const char* path) {
+      std::ifstream f(path, std::ios::binary);
+      std::stringstream ss;
+      ss << f.rdbuf();
+      return ss.str();
+    };
+    const std::string a = slurp("sd_card_contents/plugins/totp_lua/vault.lua"),
+                      b = slurp("sd_card_contents/plugins/lua_tests_lua/vault.lua");
     CHECK(!a.empty() && a == b);
   }
   {
-    TEST("ble raw mode: ble.start(\"raw\"), observe / adverts / observe_stop, mode exclusivity with the keyboard calls, gates and validation");
-    const std::string DENIED = "nil\tbluetooth not permitted: add \"permissions\": [\"bluetooth\"] to this app's manifest.json (and approve it)";
+    TEST(
+        "ble raw mode: ble.start(\"raw\"), observe / adverts / observe_stop, mode exclusivity with the keyboard calls, "
+        "gates and validation");
+    const std::string DENIED =
+        "nil\tbluetooth not permitted: add \"permissions\": [\"bluetooth\"] to this app's manifest.json (and approve "
+        "it)";
     const std::string NOTRUN = "nil\tbluetooth is not running (call ble.start() first)";
     const std::string NEEDKB = "nil\tthis needs ble.start(\"keyboard\") (bluetooth is running in raw mode)";
     const std::string NEEDRAW = "nil\tthis needs ble.start(\"raw\") (bluetooth is running in keyboard mode)";
@@ -7099,11 +8217,15 @@ int main() {
       CHECK(run(vm, be, 100000) == Status::Finished);
     };
     auto expect = [&](MockBackend& be, std::vector<std::string> want, const char* tag) {
-      if (be.logs.size() != want.size()) { printf("    raw %s: %zu logs, want %zu\n", tag, be.logs.size(), want.size()); for (auto& l : be.logs) printf("      '%s'\n", l.c_str()); }
+      if (be.logs.size() != want.size()) {
+        printf("    raw %s: %zu logs, want %zu\n", tag, be.logs.size(), want.size());
+        for (auto& l : be.logs) printf("      '%s'\n", l.c_str());
+      }
       CHECK(be.logs.size() == want.size());
       for (size_t i = 0; i < want.size() && i < be.logs.size(); i++) {
         CHECK(be.logs[i] == want[i]);
-        if (be.logs[i] != want[i]) printf("    raw %s #%zu got '%s' want '%s'\n", tag, i + 1, be.logs[i].c_str(), want[i].c_str());
+        if (be.logs[i] != want[i])
+          printf("    raw %s #%zu got '%s' want '%s'\n", tag, i + 1, be.logs[i].c_str(), want[i].c_str());
       }
     };
     {
@@ -7121,8 +8243,10 @@ int main() {
         print(ble.scan_stop())
         print(ble.disconnect())
       )LUA");
-      expect(be, {"true", "true\traw\tidle\tfalse", NEEDKB, NEEDKB, NEEDKB, NEEDKB, NEEDKB, "true", "true"}, "keyboard calls in raw mode");
-      CHECK(be.bleModeStarted == "raw" && be.bleScanMsLog.empty() && be.bleConnectLog.empty() && be.bleScanStops == 0 && be.bleDisconnects == 0);
+      expect(be, {"true", "true\traw\tidle\tfalse", NEEDKB, NEEDKB, NEEDKB, NEEDKB, NEEDKB, "true", "true"},
+             "keyboard calls in raw mode");
+      CHECK(be.bleModeStarted == "raw" && be.bleScanMsLog.empty() && be.bleConnectLog.empty() && be.bleScanStops == 0 &&
+            be.bleDisconnects == 0);
     }
     {
       MockBackend be;  // and the raw calls are refused in keyboard mode, or when nothing runs
@@ -7152,7 +8276,10 @@ int main() {
         print(ble.observe(5000, 7))
         print(ble.observe(5000, {active = 1}))
       )LUA");
-      expect(be, {"true", RANGE, RANGE, RANGE, RANGE, RANGE, RANGE, "nil\toptions must be a table like {active=true}", "nil\tactive must be a boolean"}, "validation");
+      expect(be,
+             {"true", RANGE, RANGE, RANGE, RANGE, RANGE, RANGE, "nil\toptions must be a table like {active=true}",
+              "nil\tactive must be a boolean"},
+             "validation");
       CHECK(be.bleObserveCalls == 0);
       be.logs.clear();
       go(be, "print(ble.observe(0)); print(ble.observe(500)); print(ble.observe(600000)); print(ble.observe())");
@@ -7179,19 +8306,28 @@ int main() {
     {
       MockBackend be;  // the advertisement table: shape, order, binary-safe data, the drop count, the observing flag
       be.blePermitted = true;
-      auto mk = [](const char* addr, uint8_t type, int rssi, uint8_t advType, bool conn, bool scan, uint8_t advLen, uint32_t age, std::vector<uint8_t> data) {
+      auto mk = [](const char* addr, uint8_t type, int rssi, uint8_t advType, bool conn, bool scan, uint8_t advLen,
+                   uint32_t age, std::vector<uint8_t> data) {
         crosslua::Backend::BleAdvert a;
         memset(&a, 0, sizeof(a));
         snprintf(a.addr, sizeof(a.addr), "%s", addr);
-        a.addrType = type; a.rssi = rssi; a.advType = advType; a.connectable = conn; a.scannable = scan; a.advLen = advLen; a.ageMs = age;
+        a.addrType = type;
+        a.rssi = rssi;
+        a.advType = advType;
+        a.connectable = conn;
+        a.scannable = scan;
+        a.advLen = advLen;
+        a.ageMs = age;
         a.len = static_cast<uint8_t>(data.size());
         if (!data.empty()) memcpy(a.data, data.data(), data.size());
         return a;
       };
       std::vector<uint8_t> big(62);
       for (size_t i = 0; i < big.size(); i++) big[i] = static_cast<uint8_t>(i * 3 + 1);
-      be.bleAdvertsSeen = {mk("AA:BB:CC:00:11:22", 1, -62, 0, true, true, 4, 1234, {0x02, 0x01, 0x06, 0x00, 0xFF, 0x80, 0x00}),
-                           mk("11:22:33:44:55:66", 0, -90, 3, false, false, 31, 0, big), mk("FE:ED:00:00:00:01", 3, 0, 2, false, true, 0, 99999, {})};
+      be.bleAdvertsSeen = {
+          mk("AA:BB:CC:00:11:22", 1, -62, 0, true, true, 4, 1234, {0x02, 0x01, 0x06, 0x00, 0xFF, 0x80, 0x00}),
+          mk("11:22:33:44:55:66", 0, -90, 3, false, false, 31, 0, big),
+          mk("FE:ED:00:00:00:01", 3, 0, 2, false, true, 0, 99999, {})};
       be.bleDroppedVal = 7;
       go(be, R"LUA(
         print(ble.start("raw"))
@@ -7210,9 +8346,11 @@ int main() {
         print(ble.stop())
         print(ble.adverts())
       )LUA");
-      expect(be, {"true", "0\t0", "true", "true", "3\t7", "AA:BB:CC:00:11:22\t1\t-62\t0\ttrue\ttrue\t4\t1234\t7\t02010600ff8000",
-                  "11:22:33:44:55:66\t0\t-90\t3\tfalse\tfalse\t31\t0\t62\t1\t184", "FE:ED:00:00:00:01\t3\t0\t2\tfalse\ttrue\t0\t99999\t0\ttrue", "true", "false",
-                  "true", NOTRUN},
+      expect(be,
+             {"true", "0\t0", "true", "true", "3\t7",
+              "AA:BB:CC:00:11:22\t1\t-62\t0\ttrue\ttrue\t4\t1234\t7\t02010600ff8000",
+              "11:22:33:44:55:66\t0\t-90\t3\tfalse\tfalse\t31\t0\t62\t1\t184",
+              "FE:ED:00:00:00:01\t3\t0\t2\tfalse\ttrue\t0\t99999\t0\ttrue", "true", "false", "true", NOTRUN},
              "adverts");
       CHECK(be.bleObserveStops == 1 && be.bleStopCalls == 1 && be.bleObserveMs == 2000 && be.bleObserveActive);
     }
@@ -7221,12 +8359,16 @@ int main() {
       be.blePermitted = true;
       crosslua::Backend::BleAdvert a;
       memset(&a, 0, sizeof(a));
-      for (int i = 0; i < 40; i++) { snprintf(a.addr, sizeof(a.addr), "00:00:00:00:00:%02X", i); be.bleAdvertsSeen.push_back(a); }
+      for (int i = 0; i < 40; i++) {
+        snprintf(a.addr, sizeof(a.addr), "00:00:00:00:00:%02X", i);
+        be.bleAdvertsSeen.push_back(a);
+      }
       go(be, "print(ble.start('raw')); print(ble.observe()); local l = ble.adverts(); print(#l, l[32].addr, l[33])");
       expect(be, {"true", "true", "32\t00:00:00:00:00:1F\tnil"}, "cap");
     }
     {
-      MockBackend be;  // gates: not permitted, no bluetooth in this firmware: every raw call says so, nothing reaches the backend
+      MockBackend be;  // gates: not permitted, no bluetooth in this firmware: every raw call says so, nothing reaches
+                       // the backend
       be.blePermitted = false;
       const char* script = "print(ble.observe()); print(ble.adverts()); print(ble.observe_stop())";
       go(be, script);
@@ -7235,7 +8377,10 @@ int main() {
       be.blePermitted = true;
       be.bleSupportedVal = false;
       go(be, script);
-      expect(be, {"nil\tno bluetooth on this device", "nil\tno bluetooth on this device", "nil\tno bluetooth on this device"}, "unsupported");
+      expect(
+          be,
+          {"nil\tno bluetooth on this device", "nil\tno bluetooth on this device", "nil\tno bluetooth on this device"},
+          "unsupported");
       CHECK(be.bleObserveCalls == 0 && be.bleObserveStops == 0);
     }
   }

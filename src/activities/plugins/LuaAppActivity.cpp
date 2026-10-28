@@ -1,80 +1,77 @@
 #include "LuaAppActivity.h"
 
-
-#include <BoardConfig.h>
-#include <DevCapture.h>
 #include <AudioManager.h>
+#include <BleKeyboardHost.h>
+#include <BoardConfig.h>
 #include <Buzzer.h>
+#include <DevCapture.h>
+#include <EnvironmentSensor.h>
+#include <Epub.h>
+#include <GfxRenderer.h>
+#include <HalMemory.h>
+#include <HalPowerManager.h>
+#include <Imu.h>
+#include <LedManager.h>
 #include <Microphone.h>
-#include <atomic>
+#include <SecureClient.h>
+#include <SecureHttpClient.h>
+#include <arpa/inet.h>
 #include <esp_now.h>
 #include <esp_sleep.h>
 #include <esp_timer.h>
 #include <esp_wifi.h>
-#include <SecureClient.h>
-#include <SecureHttpClient.h>
-#include <EnvironmentSensor.h>
-#include <Epub.h>
-#include <functional>
-#include <sys/socket.h>
-#include <cerrno>
 #include <fcntl.h>
-#include <sys/select.h>
 #include <netinet/in.h>
-#include <arpa/inet.h>
-#include <GfxRenderer.h>
-#include <Imu.h>
-#include <LedManager.h>
-#include <HalMemory.h>
-#include <HalPowerManager.h>
-#include <BleKeyboardHost.h>
+#include <sys/select.h>
+#include <sys/socket.h>
+
+#include <atomic>
+#include <cerrno>
+#include <functional>
 #if FREEINK_CAP_BLE_HID_HOST
 #include <NimBLEDevice.h>  // raw mode: the observer talks to NimBLE itself (the library the SDK host already links)
 #endif
+#include <ArduinoJson.h>
+#include <Bitmap.h>
 #include <DeviceSecret.h>
-
-#include "activities/plugins/LuaBluetoothHold.h"
+#include <ESPmDNS.h>
+#include <HalFrontlight.h>
 #include <HalStorage.h>
+#include <InflateReader.h>
 #include <Logging.h>
+#include <Memory.h>
 #include <TrustedTime.h>
+#include <WiFi.h>
+#include <WiFiUdp.h>
+#include <ZipFile.h>
 #include <esp_mac.h>
 #include <esp_random.h>
 #include <sys/time.h>
-#include <InflateReader.h>
-#include <ArduinoJson.h>
-#include <WiFi.h>
-#include <WiFiUdp.h>
-#include <ESPmDNS.h>
-#include <ZipFile.h>
 
 #include <algorithm>
 #include <cstring>
 #include <deque>
 #include <vector>
 
-#include <Memory.h>
-
-#include <Bitmap.h>
-
+#include "CrossPointSettings.h"
 #include "Epub/converters/ImageDecoderFactory.h"
-#include "activities/util/ConfirmationActivity.h"
 #include "MappedInputManager.h"
 #include "SilentRestart.h"
 #include "activities/ActivityManager.h"
 #include "activities/network/WifiSelectionActivity.h"
+#include "activities/plugins/LuaBluetoothHold.h"
+#include "activities/util/ConfirmationActivity.h"
+#include "activities/util/KeyboardEntryActivity.h"
+#include "components/themes/BaseTheme.h"
 #include "fontIds.h"
+#include "lua/LuaApi.h"
+#include "lua/LuaInternal.h"
+#include "lua/LuaVm.h"
+#include "lua/PermText.h"
 #include "network/HttpDownloader.h"
 #include "network/WifiPowerSaveGuard.h"
 #include "util/QrUtils.h"
 #include "util/ScreenshotUtil.h"
-#include "CrossPointSettings.h"
-#include "activities/util/KeyboardEntryActivity.h"
-#include "components/themes/BaseTheme.h"
-#include <HalFrontlight.h>
-#include "lua/LuaApi.h"
-#include "lua/PermText.h"
-#include "lua/LuaInternal.h"
-#include "lua/LuaVm.h"
 
 static bool g_inDeepSleepCall = false;  // true while system.sleep() is inside upstream enterDeepSleep()
 
@@ -93,38 +90,44 @@ constexpr size_t LUA_MAX_BUDGET = 160 * 1024;
 // Hard floor of free device RAM that an allocation may never eat into (see LuaVm::setHeapGuard). On-device
 // measurement: without it a table-growth stress test drove lifetime min-free heap down to 7 KB.
 constexpr size_t LUA_HEAP_FLOOR = 40 * 1024;
-// Once wifi.connect() has succeeded the radio owns ~57 KB and only ~44 KB remain free, so the 40 KB floor would leave Lua about
-// 1 KB. Measured on the X4 (memprobe_lua, development knob system.dev_floor): any floor above ~16 KB makes ordinary
-// reads fail mid-stream because TCP buffering alone drives free heap down to ~16.7 KB during a 64 KB burst; 16, 12 and 8 KB all
-// completed with a matching hash. 12 KB leaves Lua ~32 KB to work with. One-way for the app's lifetime: apps that touched
-// WiFi restart the device on exit (heap defrag), so the framework is not left starved.
+// Once wifi.connect() has succeeded the radio owns ~57 KB and only ~44 KB remain free, so the 40 KB floor would leave
+// Lua about 1 KB. Measured on the X4 (memprobe_lua, development knob system.dev_floor): any floor above ~16 KB makes
+// ordinary reads fail mid-stream because TCP buffering alone drives free heap down to ~16.7 KB during a 64 KB burst;
+// 16, 12 and 8 KB all completed with a matching hash. 12 KB leaves Lua ~32 KB to work with. One-way for the app's
+// lifetime: apps that touched WiFi restart the device on exit (heap defrag), so the framework is not left starved.
 constexpr size_t LUA_HEAP_FLOOR_ONLINE = 12 * 1024;
-// Characters per line the native confirmation dialog shows before it wraps (measured on the X4 with upper-case labels: "HOTSPOT, SERVER," fit, "HOTSPOT, SERVER, SPEAKER" wrapped; 22 keeps our line count equal to the real one).
+// Characters per line the native confirmation dialog shows before it wraps (measured on the X4 with upper-case labels:
+// "HOTSPOT, SERVER," fit, "HOTSPOT, SERVER, SPEAKER" wrapped; 22 keeps our line count equal to the real one).
 constexpr size_t PERMISSION_LINE_WIDTH = 22;
-// net.read may go this low for the single allocation that copies data OUT of the network stack (which relieves the pressure).
+// net.read may go this low for the single allocation that copies data OUT of the network stack (which relieves the
+// pressure).
 constexpr size_t LUA_HEAP_FLOOR_DRAIN = 6 * 1024;
-// True once any app in this activity session asked for WiFi. wifi.off() sets the WiFi mode back to NULL, but the radio has
-// already fragmented the heap (measured: ~20 KB never comes back until a reboot), so the exit-time defrag restart must not
-// depend on the CURRENT mode. Cleared when the activity is entered; survives app.restart on purpose (same heap).
+// True once any app in this activity session asked for WiFi. wifi.off() sets the WiFi mode back to NULL, but the radio
+// has already fragmented the heap (measured: ~20 KB never comes back until a reboot), so the exit-time defrag restart
+// must not depend on the CURRENT mode. Cleared when the activity is entered; survives app.restart on purpose (same
+// heap).
 bool g_radioUsedThisSession = false;
-std::atomic<bool> g_bluetoothHeld{false};  // a Lua app's Bluetooth session owns the shared stack (read through luabt::held())
+std::atomic<bool> g_bluetoothHeld{
+    false};  // a Lua app's Bluetooth session owns the shared stack (read through luabt::held())
 constexpr size_t MAX_SCRIPT_BYTES = 64 * 1024;
 
-constexpr uint32_t SLICE_MS = 25;          // max time one loop() pass spends inside Lua
-constexpr uint32_t EXIT_HOLD_MS = 1000;    // hold Back this long to force-quit any app
+constexpr uint32_t SLICE_MS = 25;        // max time one loop() pass spends inside Lua
+constexpr uint32_t EXIT_HOLD_MS = 1000;  // hold Back this long to force-quit any app
 constexpr size_t EVENT_QUEUE_MAX = 16;
 
 }  // namespace
 
 // ---------------------------------------------------------------------------
 #if FREEINK_CAP_BLE_HID_HOST
-// ble.start("raw"): one table of advertisers, filled on NimBLE's host task and copied out by the script's thread under a spinlock.
-// NimBLE itself keeps nothing (setMaxResults(0) erases a device once its callback ran), so its memory stays flat in a crowd.
+// ble.start("raw"): one table of advertisers, filled on NimBLE's host task and copied out by the script's thread under
+// a spinlock. NimBLE itself keeps nothing (setMaxResults(0) erases a device once its callback ran), so its memory stays
+// flat in a crowd.
 class RawObserver final : public NimBLEScanCallbacks {
  public:
   bool alloc() {
     if (tab_) return true;
-    tab_ = static_cast<crosslua::Backend::BleAdvert*>(calloc(crosslua::Backend::BLE_MAX_ADVERTS, sizeof(crosslua::Backend::BleAdvert)));
+    tab_ = static_cast<crosslua::Backend::BleAdvert*>(
+        calloc(crosslua::Backend::BLE_MAX_ADVERTS, sizeof(crosslua::Backend::BleAdvert)));
     return tab_ != nullptr;
   }
   void clear() {
@@ -156,7 +159,8 @@ class RawObserver final : public NimBLEScanCallbacks {
     crosslua::Backend::BleAdvert e;
     memset(&e, 0, sizeof(e));
     const std::string a = d->getAddress().toString();
-    for (size_t i = 0; i < a.size() && i < sizeof(e.addr) - 1; i++) e.addr[i] = static_cast<char>(toupper(static_cast<unsigned char>(a[i])));
+    for (size_t i = 0; i < a.size() && i < sizeof(e.addr) - 1; i++)
+      e.addr[i] = static_cast<char>(toupper(static_cast<unsigned char>(a[i])));
     e.addrType = d->getAddressType();
     e.rssi = d->getRSSI();
     e.advType = d->getAdvType();
@@ -193,7 +197,11 @@ class RawObserver final : public NimBLEScanCallbacks {
 class LuaAppActivity::Backend final : public crosslua::Backend {
  public:
   Backend(GfxRenderer& r, MappedInputManager& in, std::string name, std::string dir, std::string entry)
-      : r_(r), in_(in), name_(std::move(name)), dir_(std::move(dir)), dataDir_("/.crosslua/data/" + name_),
+      : r_(r),
+        in_(in),
+        name_(std::move(name)),
+        dir_(std::move(dir)),
+        dataDir_("/.crosslua/data/" + name_),
         entry_(std::move(entry)) {
     loadPermissions();
   }
@@ -206,34 +214,38 @@ class LuaAppActivity::Backend final : public crosslua::Backend {
   int textMax = 128, textMode = 0;
   std::deque<std::pair<int, int>> evPos;  // parallel to `events`: touch position, or (-1,-1) for button events
   bool havePos = false;
-  int posX = 0, posY = 0;                 // position of the event popEvent() returned last
+  int posX = 0, posY = 0;                                         // position of the event popEvent() returned last
   std::deque<std::pair<bool, crosslua::Backend::KeyInfo>> evKey;  // parallel to `events`: (is a key event, its details)
-  bool haveKey = false;                   // the event popEvent() returned last was a Bluetooth key press
+  bool haveKey = false;  // the event popEvent() returned last was a Bluetooth key press
   crosslua::Backend::KeyInfo lastKey = {};
-  bool bleUp_ = false;                    // the Bluetooth stack (the SDK's BleKeyboardHost, or NimBLE itself in raw mode) is up
-  int bleMode_ = 0;                       // crosslua::Backend::BleMode of the running stack
+  bool bleUp_ = false;  // the Bluetooth stack (the SDK's BleKeyboardHost, or NimBLE itself in raw mode) is up
+  int bleMode_ = 0;     // crosslua::Backend::BleMode of the running stack
 #if FREEINK_CAP_BLE_HID_HOST
   RawObserver rawObs_;
 #endif
-  int touchX = 0, touchY = 0;             // last finger position seen (a release has no coordinates of its own)
-  std::string openBookPath;           // set by app.open_book(); the activity hands it to the reader
-  std::string restartEntry;          // set by app.restart(); the activity starts a fresh VM from this script
+  int touchX = 0, touchY = 0;  // last finger position seen (a release has no coordinates of its own)
+  std::string openBookPath;    // set by app.open_book(); the activity hands it to the reader
+  std::string restartEntry;    // set by app.restart(); the activity starts a fresh VM from this script
 
   // ---- storage grants ("storage": {"read": [...], "write": [...]} in manifest.json) ------------------------------
   // Parsed from the manifest but INVISIBLE to the API (grantCount() == 0) until the user approved exactly this request.
-  bool hasGrantRequest() const { return !requested_.empty() || listenReq_ || hotspotReq_ || espnowReq_ || monitorReq_ || txReq_ || audioReq_ || micReq_ || bleReq_; }
+  bool hasGrantRequest() const {
+    return !requested_.empty() || listenReq_ || hotspotReq_ || espnowReq_ || monitorReq_ || txReq_ || audioReq_ ||
+           micReq_ || bleReq_;
+  }
   // Canonical text of the request; an approval is valid only for an identical request (any change asks again).
   std::string grantCanonical() const {
     std::vector<std::string> v;
     for (const Grant& g : requested_) v.push_back(std::string(g.write ? "w:" : "r:") + g.rel);
-    if (espnowReq_) v.push_back("p:espnow");  // raw frames to anyone in radio range
+    if (espnowReq_) v.push_back("p:espnow");    // raw frames to anyone in radio range
     if (monitorReq_) v.push_back("p:monitor");  // passive capture of everything in radio range
-    if (txReq_) v.push_back("p:tx");  // sending arbitrary frames: can deauthenticate other people's devices
-    if (bleReq_) v.push_back("p:bluetooth");  // a keyboard is a typing channel into the app; a BLE scan sees everyone nearby
+    if (txReq_) v.push_back("p:tx");            // sending arbitrary frames: can deauthenticate other people's devices
+    if (bleReq_)
+      v.push_back("p:bluetooth");  // a keyboard is a typing channel into the app; a BLE scan sees everyone nearby
     if (hotspotReq_) v.push_back("p:hotspot");  // starting a WiFi network that others can join
-    if (listenReq_) v.push_back("p:listen");  // accepting connections from the LAN is part of the approved request too
+    if (listenReq_) v.push_back("p:listen");   // accepting connections from the LAN is part of the approved request too
     if (micReq_) v.push_back("p:microphone");  // a recording device: consented to explicitly, never silently
-    if (audioReq_) v.push_back("p:audio");    // playing sounds is consented to for the same reason (a device that talks)
+    if (audioReq_) v.push_back("p:audio");  // playing sounds is consented to for the same reason (a device that talks)
     std::sort(v.begin(), v.end());
     std::string s;
     for (const std::string& x : v) s += x + "\n";
@@ -265,8 +277,9 @@ class LuaAppActivity::Backend final : public crosslua::Backend {
       if (g.write && crosslua::grantIsDangerous(g.rel.c_str())) *danger = true;
     }
     std::string s;
-    // One short label per permission, packed into as few lines as fit (the dialog clips after ~3 lines of ~25 characters), the most
-    // sensitive first so a recording device can never be the part that is cut off. Packing is host-tested (PermText.h).
+    // One short label per permission, packed into as few lines as fit (the dialog clips after ~3 lines of ~25
+    // characters), the most sensitive first so a recording device can never be the part that is cut off. Packing is
+    // host-tested (PermText.h).
     {
       std::vector<const char*> labels;
       if (micReq_) labels.push_back("MICROPHONE");
@@ -281,15 +294,17 @@ class LuaAppActivity::Backend final : public crosslua::Backend {
     }
     if (!rd.empty()) s += "READ: " + rd + "\n";
     if (!wr.empty()) s += "WRITE: " + wr + "\n";
-    if (*danger) s += "\nWARNING: this includes the whole card or the plugins folder, i.e. other apps' code.";
-    else if (!rd.empty() || !wr.empty()) s += "\nIt can never touch hidden folders (WiFi passwords, other apps' data) or firmware images.";
+    if (*danger)
+      s += "\nWARNING: this includes the whole card or the plugins folder, i.e. other apps' code.";
+    else if (!rd.empty() || !wr.empty())
+      s += "\nIt can never touch hidden folders (WiFi passwords, other apps' data) or firmware images.";
     return s;
   }
   // Title of the confirmation screen: says what is being asked for.
   std::string grantTitle(const std::string& app) const {
     const bool files = !requested_.empty();
-    const int n = (listenReq_ ? 1 : 0) + (hotspotReq_ ? 1 : 0) + (espnowReq_ ? 1 : 0) + (audioReq_ ? 1 : 0) + (micReq_ ? 1 : 0) +
-                  (monitorReq_ ? 1 : 0) + (txReq_ ? 1 : 0) + (bleReq_ ? 1 : 0) + (files ? 1 : 0);
+    const int n = (listenReq_ ? 1 : 0) + (hotspotReq_ ? 1 : 0) + (espnowReq_ ? 1 : 0) + (audioReq_ ? 1 : 0) +
+                  (micReq_ ? 1 : 0) + (monitorReq_ ? 1 : 0) + (txReq_ ? 1 : 0) + (bleReq_ ? 1 : 0) + (files ? 1 : 0);
     if (n > 1) return app + " wants access to your device";
     if (micReq_) return app + " wants to use the microphone";
     if (txReq_) return app + " wants to inject WiFi frames";
@@ -302,7 +317,9 @@ class LuaAppActivity::Backend final : public crosslua::Backend {
     return app + " wants access to your files";
   }
   void randomBytes(uint8_t* out, size_t n) override { esp_fill_random(out, n); }
-  bool deviceKeyMaterial(uint8_t out[32]) override { return ::deviceSecret(*reinterpret_cast<uint8_t(*)[32]>(out)); }  // upstream's NVS secret
+  bool deviceKeyMaterial(uint8_t out[32]) override {
+    return ::deviceSecret(*reinterpret_cast<uint8_t (*)[32]>(out));
+  }  // upstream's NVS secret
   int grantCount() override { return approved_ ? static_cast<int>(requested_.size()) : 0; }
   const char* grantPath(int i, bool* write) override {
     *write = requested_[i].write;
@@ -316,8 +333,10 @@ class LuaAppActivity::Backend final : public crosslua::Backend {
   void line(int x0, int y0, int x1, int y1, bool black) override { r_.drawLine(x0, y0, x1, y1, black); }
   void rect(int x, int y, int w, int h, bool black, bool filled) override {
     if (w <= 0 || h <= 0) return;
-    if (filled) r_.fillRect(x, y, w, h, black);
-    else r_.drawRect(x, y, w, h, black);
+    if (filled)
+      r_.fillRect(x, y, w, h, black);
+    else
+      r_.drawRect(x, y, w, h, black);
   }
   void text(int font, int x, int y, const char* s, bool black, int style) override {
     r_.drawText(font, x, y, s, black, toStyle(style));
@@ -329,8 +348,8 @@ class LuaAppActivity::Backend final : public crosslua::Backend {
       const char* name;
       int id;
     };
-    static const F fonts[] = {{"ui", UI_10_FONT_ID},          {"ui12", UI_12_FONT_ID},
-                              {"small", SMALL_FONT_ID},       {"sans12", NOTOSANS_12_FONT_ID},
+    static const F fonts[] = {{"ui", UI_10_FONT_ID},           {"ui12", UI_12_FONT_ID},
+                              {"small", SMALL_FONT_ID},        {"sans12", NOTOSANS_12_FONT_ID},
                               {"sans14", NOTOSANS_14_FONT_ID}, {"sans16", NOTOSANS_16_FONT_ID},
                               {"sans18", NOTOSANS_18_FONT_ID}};
     for (const auto& f : fonts)
@@ -369,12 +388,16 @@ class LuaAppActivity::Backend final : public crosslua::Backend {
   size_t radioFloorBytes() override { return radioEverStarted_ ? 48 * 1024 : 80 * 1024; }
   const char* wakeCause() override {
     switch (esp_sleep_get_wakeup_cause()) {
-      case ESP_SLEEP_WAKEUP_TIMER: return "timer";
+      case ESP_SLEEP_WAKEUP_TIMER:
+        return "timer";
       case ESP_SLEEP_WAKEUP_EXT0:
       case ESP_SLEEP_WAKEUP_EXT1:
-      case ESP_SLEEP_WAKEUP_GPIO: return "button";
-      case ESP_SLEEP_WAKEUP_UNDEFINED: return "power-on";
-      default: return "other";
+      case ESP_SLEEP_WAKEUP_GPIO:
+        return "button";
+      case ESP_SLEEP_WAKEUP_UNDEFINED:
+        return "power-on";
+      default:
+        return "other";
     }
   }
   bool systemSleep(int seconds, char* err, size_t errCap) override {
@@ -387,14 +410,17 @@ class LuaAppActivity::Backend final : public crosslua::Backend {
       return false;
     }
     extern void enterDeepSleep(bool fromTimeout);
-    g_inDeepSleepCall = true;  // goToSleep() pumps loop() right here: it must not resume the VM that is blocked in this very call
+    g_inDeepSleepCall =
+        true;  // goToSleep() pumps loop() right here: it must not resume the VM that is blocked in this very call
     enterDeepSleep(false);
     g_inDeepSleepCall = false;
     snprintf(err, errCap, "the device refused to enter deep sleep");
     return false;
   }
   size_t freeHeap() override { return HalMemory::getInternalHeap().freeBytes; }
-  size_t freeHeapQuick() override { return ESP.getFreeHeap(); }  // O(1); getInternalHeap() also walks for the largest block
+  size_t freeHeapQuick() override {
+    return ESP.getFreeHeap();
+  }  // O(1); getInternalHeap() also walks for the largest block
   size_t minFreeHeap() override { return HalMemory::getInternalHeap().minFreeBytes; }
   int battery() override { return powerManager.getBatteryPercentage(); }
   int64_t epochNow() override { return trustedtime::trustedNow(); }
@@ -423,12 +449,13 @@ class LuaAppActivity::Backend final : public crosslua::Backend {
   // An app may only use the network if its manifest.json says so: {"permissions": ["network"]}.
   bool netAllowed() override { return net_; }
   bool wifiConnected() override { return WiFi.status() == WL_CONNECTED; }
-  // --- hotspot: Arduino WiFi.softAP, the same calls File Transfer's access-point mode makes (nothing upstream is touched) ---
+  // --- hotspot: Arduino WiFi.softAP, the same calls File Transfer's access-point mode makes (nothing upstream is
+  // touched) ---
   bool apRunning() { return (WiFi.getMode() & WIFI_MODE_AP) != 0 && WiFi.softAPIP() != IPAddress(0, 0, 0, 0); }
   bool netReady() override { return wifiConnected() || apRunning(); }
   bool hotspotAllowed() override { return net_ && hotspotReq_ && approved_; }
-  bool softApStart(const char* ssid, const char* password, int channel, int maxClients, char* ip, size_t ipCap, char* err,
-                   size_t errCap) override {
+  bool softApStart(const char* ssid, const char* password, int channel, int maxClients, char* ip, size_t ipCap,
+                   char* err, size_t errCap) override {
     g_radioUsedThisSession = true;  // leaving the app reboots into a clean heap, like every WiFi screen
     WiFi.mode(WIFI_AP);
     delay(100);
@@ -439,8 +466,9 @@ class LuaAppActivity::Backend final : public crosslua::Backend {
     }
     delay(100);  // the AP needs a moment before its address is valid (same wait as the upstream screen)
     fmtIp(ip, ipCap, WiFi.softAPIP());
-    // Same as after a successful wifi.connect(): the radio now owns ~60 KB, so the 40 KB allocator floor would leave Lua nothing
-    // (measured: a client joining made the app die with "not enough memory"). Sockets keep their own 16 KB check.
+    // Same as after a successful wifi.connect(): the radio now owns ~60 KB, so the 40 KB allocator floor would leave
+    // Lua nothing (measured: a client joining made the app die with "not enough memory"). Sockets keep their own 16 KB
+    // check.
     if (setFloorFn) setFloorFn(LUA_HEAP_FLOOR_ONLINE);
     return true;
   }
@@ -451,8 +479,9 @@ class LuaAppActivity::Backend final : public crosslua::Backend {
     *clients = WiFi.softAPgetStationNum();
     return true;
   }
-  // --- ESP-NOW (same call sequence as crossplay's LinkRadio / biscuit's MeshChat: STA mode, fixed channel, broadcast peer).
-  // The receive callback runs in the WiFi task, so it only copies into a single-producer/single-consumer ring; Lua polls it. ---
+  // --- ESP-NOW (same call sequence as crossplay's LinkRadio / biscuit's MeshChat: STA mode, fixed channel, broadcast
+  // peer). The receive callback runs in the WiFi task, so it only copies into a single-producer/single-consumer ring;
+  // Lua polls it. ---
   static constexpr int ESPNOW_RING = 6;
   struct EnPacket {
     uint8_t mac[6];
@@ -499,14 +528,16 @@ class LuaAppActivity::Backend final : public crosslua::Backend {
       snprintf(err, errCap, "the WiFi sniffer is running: call wifi.monitor_stop() first");
       return false;
     }
-    if (esp_wifi_set_channel(static_cast<uint8_t>(channel), WIFI_SECOND_CHAN_NONE) != ESP_OK) return fail("could not set the channel");
+    if (esp_wifi_set_channel(static_cast<uint8_t>(channel), WIFI_SECOND_CHAN_NONE) != ESP_OK)
+      return fail("could not set the channel");
     if (esp_now_init() != ESP_OK) return fail("esp_now_init failed");
     espnowUp_ = true;
     enHead_.store(0);
     enTail_.store(0);
     enDropped_.store(0);
     espnowSelf_ = this;
-    if (esp_now_register_recv_cb(&Backend::onEspNowRecv) != ESP_OK) return fail("could not register the receive callback");
+    if (esp_now_register_recv_cb(&Backend::onEspNowRecv) != ESP_OK)
+      return fail("could not register the receive callback");
     esp_now_peer_info_t peer = {};
     memset(peer.peer_addr, 0xFF, 6);
     peer.channel = static_cast<uint8_t>(channel);
@@ -517,7 +548,8 @@ class LuaAppActivity::Backend final : public crosslua::Backend {
     if (esp_wifi_get_mac(WIFI_IF_STA, espnowMac_) != ESP_OK) return fail("could not read the MAC address");
     espnowChannel_ = channel;
     memcpy(mac, espnowMac_, 6);
-    if (setFloorFn) setFloorFn(LUA_HEAP_FLOOR_ONLINE);  // the radio owns its RAM now (same as after wifi.connect / a hotspot)
+    if (setFloorFn)
+      setFloorFn(LUA_HEAP_FLOOR_ONLINE);  // the radio owns its RAM now (same as after wifi.connect / a hotspot)
     return true;
   }
   void espnowStop() override {
@@ -567,8 +599,9 @@ class LuaAppActivity::Backend final : public crosslua::Backend {
     return true;
   }
   // --- wifi.monitor (promiscuous 802.11 capture; the PCAP writer streams through a 2 KB buffer, no heap; biscuit's
-  // PacketMonitorActivity does the same callback-to-file trick). Frames are truncated at 250 bytes in the ring; the PCAP
-  // record keeps the original length so readers know what was cut. Timestamps are us since boot, not wall clock. ---
+  // PacketMonitorActivity does the same callback-to-file trick). Frames are truncated at 250 bytes in the ring; the
+  // PCAP record keeps the original length so readers know what was cut. Timestamps are us since boot, not wall clock.
+  // ---
   static constexpr int MON_RING = 8;
   static constexpr size_t MON_PCAP_BUFFER = 2048;
   struct MonPkt {
@@ -640,11 +673,12 @@ class LuaAppActivity::Backend final : public crosslua::Backend {
       return false;
     };
     WiFi.persistent(false);
-    // Like biscuit's PacketMonitorActivity: keep the driver running as a (disconnected) STA and enable promiscuous on top.
-    // Arduino's WiFi.mode(WIFI_MODE_NULL) never boots the driver and NULL mode broke reception on the X4.
+    // Like biscuit's PacketMonitorActivity: keep the driver running as a (disconnected) STA and enable promiscuous on
+    // top. Arduino's WiFi.mode(WIFI_MODE_NULL) never boots the driver and NULL mode broke reception on the X4.
     WiFi.mode(WIFI_MODE_STA);
     WiFi.disconnect(false);
-    if (esp_wifi_set_channel(static_cast<uint8_t>(channel), WIFI_SECOND_CHAN_NONE) != ESP_OK) return fail("could not set the channel");
+    if (esp_wifi_set_channel(static_cast<uint8_t>(channel), WIFI_SECOND_CHAN_NONE) != ESP_OK)
+      return fail("could not set the channel");
     radioEverStarted_ = true;
     wifi_promiscuous_filter_t filter = {.filter_mask = WIFI_PROMIS_FILTER_MASK_MGMT | WIFI_PROMIS_FILTER_MASK_DATA};
     if (esp_wifi_set_promiscuous_filter(&filter) != ESP_OK) return fail("could not set the capture filter");
@@ -659,19 +693,21 @@ class LuaAppActivity::Backend final : public crosslua::Backend {
       monFile_ = Storage.open(pcapPath, O_WRONLY | O_CREAT | O_TRUNC);
       if (!monFile_) return fail("cannot open the file for writing");
       snprintf(monPath_, sizeof(monPath_), "%s", pcapPath);
-      // PCAP global header: little-endian MICROSECOND magic 0xa1b2c3d4 (0xa1b23c4d would mean nanoseconds), version 2.4,
-      // snaplen 65535, LINKTYPE_IEEE802_11 (105)
-      static const uint8_t pcapHeader[24] = {0xd4, 0xc3, 0xb2, 0xa1, 0x02, 0x00, 0x04, 0x00, 0, 0, 0, 0,
-                                             0, 0, 0, 0, 0xff, 0xff, 0x00, 0x00, 0x69, 0x00, 0x00, 0x00};
+      // PCAP global header: little-endian MICROSECOND magic 0xa1b2c3d4 (0xa1b23c4d would mean nanoseconds),
+      // version 2.4, snaplen 65535, LINKTYPE_IEEE802_11 (105)
+      static const uint8_t pcapHeader[24] = {0xd4, 0xc3, 0xb2, 0xa1, 0x02, 0x00, 0x04, 0x00, 0,    0,    0,    0,
+                                             0,    0,    0,    0,    0xff, 0xff, 0x00, 0x00, 0x69, 0x00, 0x00, 0x00};
       memcpy(monBuf_, pcapHeader, sizeof(pcapHeader));
       monBufLen_ = sizeof(pcapHeader);
     }
     monSelf_ = this;
     monUp_ = true;
     monChannel_ = channel;
-    if (esp_wifi_set_promiscuous_rx_cb(&Backend::onPromiscuous) != ESP_OK) return fail("could not register the capture callback");
+    if (esp_wifi_set_promiscuous_rx_cb(&Backend::onPromiscuous) != ESP_OK)
+      return fail("could not register the capture callback");
     if (esp_wifi_set_promiscuous(true) != ESP_OK) return fail("could not start promiscuous mode");
-    if (setFloorFn) setFloorFn(LUA_HEAP_FLOOR_ONLINE);  // the radio owns its RAM now (same as after wifi.connect / a hotspot)
+    if (setFloorFn)
+      setFloorFn(LUA_HEAP_FLOOR_ONLINE);  // the radio owns its RAM now (same as after wifi.connect / a hotspot)
     return true;
   }
   void monitorStop(uint32_t* pcapBytes) override {
@@ -687,7 +723,8 @@ class LuaAppActivity::Backend final : public crosslua::Backend {
       monFile_.close();
     }
     *pcapBytes = monBytes_;
-    if (!txUp_ && !wifiConnected() && !WiFi.softAPIP()) {  // give the radio back entirely (promiscuous leaves it started)
+    if (!txUp_ && !wifiConnected() &&
+        !WiFi.softAPIP()) {  // give the radio back entirely (promiscuous leaves it started)
       WiFi.mode(WIFI_OFF);
     }
   }
@@ -714,7 +751,8 @@ class LuaAppActivity::Backend final : public crosslua::Backend {
     monChannel_ = channel;  // one radio, one channel: the sniffer and the injector always follow together
     return true;
   }
-  bool monitorInfo(int* channel, int* captured, int* dropped, char* path, size_t pathCap, uint32_t* pcapBytes) override {
+  bool monitorInfo(int* channel, int* captured, int* dropped, char* path, size_t pathCap,
+                   uint32_t* pcapBytes) override {
     if (!monUp_) return false;
     *channel = monChannel_;
     *captured = monCaptured_.load(std::memory_order_relaxed);
@@ -723,8 +761,9 @@ class LuaAppActivity::Backend final : public crosslua::Backend {
     *pcapBytes = monBytes_;
     return true;
   }
-  // --- wifi.tx (esp_wifi_80211_tx; the radio stays a disconnected STA with promiscuous enabled, like the monitor, and the FCS is
-  // computed by the driver). Coexists with the monitor on one channel: whoever stops last turns the radio off. ---
+  // --- wifi.tx (esp_wifi_80211_tx; the radio stays a disconnected STA with promiscuous enabled, like the monitor, and
+  // the FCS is computed by the driver). Coexists with the monitor on one channel: whoever stops last turns the radio
+  // off. ---
   bool txUp_ = false;
   int txChannel_ = 1, txSent_ = 0;
   bool txAllowed() override { return net_ && txReq_ && approved_; }
@@ -739,7 +778,8 @@ class LuaAppActivity::Backend final : public crosslua::Backend {
     };
     WiFi.mode(WIFI_MODE_STA);  // same boot dance as the monitor (Arduino never boots the driver in NULL mode)
     WiFi.disconnect(false);
-    if (esp_wifi_set_channel(static_cast<uint8_t>(channel), WIFI_SECOND_CHAN_NONE) != ESP_OK) return fail("could not set the channel");
+    if (esp_wifi_set_channel(static_cast<uint8_t>(channel), WIFI_SECOND_CHAN_NONE) != ESP_OK)
+      return fail("could not set the channel");
     if (esp_wifi_set_promiscuous(true) != ESP_OK) return fail("could not enable raw sending");
     txUp_ = true;
     txChannel_ = channel;
@@ -774,7 +814,8 @@ class LuaAppActivity::Backend final : public crosslua::Backend {
     wifiConnectRequested = true;
   }
 
-  // --- device capabilities (CrossPoint runs on many boards; the FREEINK_CAP_* flags say what this build has) -----------
+  // --- device capabilities (CrossPoint runs on many boards; the FREEINK_CAP_* flags say what this build has)
+  // -----------
   void deviceCaps(DeviceCaps* c) override {
 #if FREEINK_CAP_TOUCH
     c->touch = gpio.hasTouch();  // e.g. X4 vs X4 Pro: decided at runtime
@@ -789,7 +830,8 @@ class LuaAppActivity::Backend final : public crosslua::Backend {
     c->bleKeyboard = FREEINK_CAP_BLE_KEYBOARD;
     c->usbMsc = FREEINK_CAP_USB_MSC;
     c->imu = BoardConfig::hasImu();
-    c->gyro = c->imu && BoardConfig::ACTIVE.sensors.imuType != BoardConfig::ImuType::Sc7a20h;  // SC7A20H is accelerometer-only
+    c->gyro = c->imu &&
+              BoardConfig::ACTIVE.sensors.imuType != BoardConfig::ImuType::Sc7a20h;  // SC7A20H is accelerometer-only
     c->rtc = BoardConfig::hasRtc();
     c->tempHumidity = BoardConfig::hasTempHumidity();
     c->buzzer = BoardConfig::hasBuzzer();
@@ -822,9 +864,10 @@ class LuaAppActivity::Backend final : public crosslua::Backend {
     }
   }
 
-  // --- Bluetooth LE central: the SDK's BleKeyboardHost (the same NimBLE central, Just-Works bonding and HID decoding the page
-  // turner uses). One stack: it refuses while the page turner or any WiFi mode holds the radio, and the activity holds the CPU
-  // clock steady (skipLoopDelay) while it is up. Bonds persist in NVS and reconnect on their own through poll(). ---
+  // --- Bluetooth LE central: the SDK's BleKeyboardHost (the same NimBLE central, Just-Works bonding and HID decoding
+  // the page turner uses). One stack: it refuses while the page turner or any WiFi mode holds the radio, and the
+  // activity holds the CPU clock steady (skipLoopDelay) while it is up. Bonds persist in NVS and reconnect on their own
+  // through poll(). ---
   bool bleSupported() override { return FREEINK_CAP_BLE_HID_HOST != 0; }
   bool bleAllowed() override { return bleReq_ && approved_; }
   bool bleRunning() override { return bleUp_; }
@@ -850,8 +893,8 @@ class LuaAppActivity::Backend final : public crosslua::Backend {
     }
     g_radioUsedThisSession = true;  // leaving the app reboots into a clean heap, like every WiFi screen
     radioEverStarted_ = true;
-    powerManager.setPowerSaving(false);  // begin() and end() must run at the normal CPU frequency; while the stack is up
-                                         // LuaAppActivity::skipLoopDelay() keeps the main loop from clocking down
+    powerManager.setPowerSaving(false);  // begin() and end() must run at the normal CPU frequency; while the stack is
+                                         // up LuaAppActivity::skipLoopDelay() keeps the main loop from clocking down
     if (raw) {
 #if FREEINK_CAP_BLE_HID_HOST
       if (!NimBLEDevice::init("CrossLua")) {
@@ -870,7 +913,8 @@ class LuaAppActivity::Backend final : public crosslua::Backend {
     bleUp_ = true;
     g_bluetoothHeld.store(true);
     bleClearLink();
-    if (setFloorFn) setFloorFn(LUA_HEAP_FLOOR_ONLINE);  // the stack owns its RAM now (same as after wifi.connect / a hotspot)
+    if (setFloorFn)
+      setFloorFn(LUA_HEAP_FLOOR_ONLINE);  // the stack owns its RAM now (same as after wifi.connect / a hotspot)
     return true;
   }
   void bleStop() override {
@@ -905,7 +949,8 @@ class LuaAppActivity::Backend final : public crosslua::Backend {
     return true;
   }
   void bleScanStop() override { BleHid.stopScan(); }
-  static void bleCopy(crosslua::Backend::BleDevice* o, const char* addr, const char* name, int rssi, bool conn, bool hid) {
+  static void bleCopy(crosslua::Backend::BleDevice* o, const char* addr, const char* name, int rssi, bool conn,
+                      bool hid) {
     snprintf(o->addr, sizeof(o->addr), "%s", addr);
     snprintf(o->name, sizeof(o->name), "%s", name);
     o->rssi = rssi;
@@ -920,7 +965,8 @@ class LuaAppActivity::Backend final : public crosslua::Backend {
     }
     return n;
   }
-  // The SDK compares addresses with strncmp; use ITS spelling of a known device so the case the app typed cannot matter.
+  // The SDK compares addresses with strncmp; use ITS spelling of a known device so the case the app typed cannot
+  // matter.
   const char* bleKnownSpelling(const char* addr) {
     for (uint8_t i = 0; i < BleHid.deviceCount(); i++)
       if (!strcasecmp(BleHid.device(i).addr, addr)) return BleHid.device(i).addr;
@@ -935,17 +981,18 @@ class LuaAppActivity::Backend final : public crosslua::Backend {
     snprintf(bleTarget_, sizeof(bleTarget_), "%s", spelled);
     if (!BleHid.connect(spelled)) {
       bleTarget_[0] = 0;
-      snprintf(err, errCap, BleHid.isRunning() ? "a connection attempt is already running"
-                                                : "the Bluetooth stack went down (ble.stop() then ble.start())");
+      snprintf(err, errCap,
+               BleHid.isRunning() ? "a connection attempt is already running"
+                                  : "the Bluetooth stack went down (ble.stop() then ble.start())");
       return false;
     }
     return true;
   }
   void bleDisconnect() override {
     if (BleHid.isConnecting() && !BleHid.isConnected()) {
-      // The SDK cannot cancel an attempt in flight from outside (disconnect() only drops an established link, and a connect to a
-      // device that is not there runs for tens of seconds): end() is its supported way to abandon one, so take the stack down
-      // and bring it back, keeping the session alive. Bonds live in NVS and are untouched.
+      // The SDK cannot cancel an attempt in flight from outside (disconnect() only drops an established link, and a
+      // connect to a device that is not there runs for tens of seconds): end() is its supported way to abandon one, so
+      // take the stack down and bring it back, keeping the session alive. Bonds live in NVS and are untouched.
       for (int i = 0; i < 4 && !BleHid.end(1000); i++) {
       }
       if (!BleHid.begin("CrossLua")) {  // could not come back: the session is over, say so honestly
@@ -977,7 +1024,8 @@ class LuaAppActivity::Backend final : public crosslua::Backend {
       s->link = crosslua::Backend::BLE_CONNECTING;
       snprintf(s->addr, sizeof(s->addr), "%s", bleTarget_);
       for (uint8_t i = 0; i < BleHid.deviceCount(); i++)
-        if (!strcasecmp(BleHid.device(i).addr, bleTarget_)) snprintf(s->name, sizeof(s->name), "%s", BleHid.device(i).name);
+        if (!strcasecmp(BleHid.device(i).addr, bleTarget_))
+          snprintf(s->name, sizeof(s->name), "%s", BleHid.device(i).name);
       s->hasPasskey = bleHasPasskey_;
       s->passkey = blePasskey_;
       return;
@@ -1032,14 +1080,16 @@ class LuaAppActivity::Backend final : public crosslua::Backend {
     sc->setActiveScan(active);
     sc->setInterval(100);
     sc->setWindow(90);
-    sc->setScanResponseTimeout(500);  // an active scan reports a scannable device when its response arrives, or after this
+    sc->setScanResponseTimeout(
+        500);  // an active scan reports a scannable device when its response arrives, or after this
     if (!sc->start(static_cast<uint32_t>(ms))) {
       snprintf(err, errCap, "the scan did not start");
       return false;
     }
     return true;
 #else
-    (void)ms; (void)active;
+    (void)ms;
+    (void)active;
     snprintf(err, errCap, "no bluetooth on this device");
     return false;
 #endif
@@ -1060,7 +1110,8 @@ class LuaAppActivity::Backend final : public crosslua::Backend {
 #if FREEINK_CAP_BLE_HID_HOST
     return rawObs_.snapshot(out, cap, dropped);
 #else
-    (void)out; (void)cap;
+    (void)out;
+    (void)cap;
     *dropped = 0;
     return 0;
 #endif
@@ -1070,16 +1121,18 @@ class LuaAppActivity::Backend final : public crosslua::Backend {
     *k = lastKey;
     return true;
   }
-  // --- sensors / outputs. Each SDK lib is begun on first use and put back to rest when the app ends (see ~Backend). ---
+  // --- sensors / outputs. Each SDK lib is begun on first use and put back to rest when the app ends (see ~Backend).
+  // ---
   freeink::Imu imu_;
   freeink::EnvironmentSensor env_;
   freeink::Buzzer buzzer_;
   freeink::LedManager led_;
   bool imuTried_ = false, envTried_ = false, buzzerTried_ = false, ledTried_ = false;
   ~Backend() override {
-    bleStop();                         // BleKeyboardHost::end(): the stack, its task and its RAM go; bonds stay in NVS
+    bleStop();  // BleKeyboardHost::end(): the stack, its task and its RAM go; bonds stay in NVS
     for (int i = 0; i < crosslua::Backend::MAX_SOCKETS; i++)
-      if (sockUsed_[i]) netClose(i);  // an app that exits with sockets open must not leak them (TCP, UDP, listen server, TLS session)
+      if (sockUsed_[i])
+        netClose(i);  // an app that exits with sockets open must not leak them (TCP, UDP, listen server, TLS session)
     if (buzzer_.present()) {
       buzzer_.noTone();
       buzzer_.end();
@@ -1089,11 +1142,11 @@ class LuaAppActivity::Backend final : public crosslua::Backend {
     txStop();
     {
       uint32_t monBytes = 0;
-      monitorStop(&monBytes);          // the capture callback points into this object; flush and close the PCAP
+      monitorStop(&monBytes);  // the capture callback points into this object; flush and close the PCAP
     }
-    espnowStop();                      // the receive callback points into this object
-    audio_.stop();                     // waits for the playback task, so the WAV callbacks die with us
-    if (mic_.present()) mic_.end();    // powers the mic rail down
+    espnowStop();                    // the receive callback points into this object
+    audio_.stop();                   // waits for the playback task, so the WAV callbacks die with us
+    if (mic_.present()) mic_.end();  // powers the mic rail down
     if (audioFile_) audioFile_.close();
   }
   SensorStatus motionRead(Motion* o) override {
@@ -1145,9 +1198,12 @@ class LuaAppActivity::Backend final : public crosslua::Backend {
   }
   void ledSet(int i, int r, int g, int b) override {
     if (!led_.begun()) return;
-    const freeink::LedColor c = freeink::LedColor::rgb(static_cast<uint8_t>(r), static_cast<uint8_t>(g), static_cast<uint8_t>(b));
-    if (i < 0) led_.setAll(c);
-    else led_.setColor(static_cast<uint8_t>(i), c);
+    const freeink::LedColor c =
+        freeink::LedColor::rgb(static_cast<uint8_t>(r), static_cast<uint8_t>(g), static_cast<uint8_t>(b));
+    if (i < 0)
+      led_.setAll(c);
+    else
+      led_.setColor(static_cast<uint8_t>(i), c);
     led_.show();
   }
   void ledOff() override {
@@ -1200,21 +1256,29 @@ class LuaAppActivity::Backend final : public crosslua::Backend {
   static constexpr size_t ZIP_RESERVE = 48 * 1024;
   // Contiguous block each decoder allocates in one piece (PNGdec's PNG object is ~44 KB, JPEGDEC ~20 KB, see the
   // *_DECODER_APPROX_SIZE constants in lib/Epub/Epub/converters) plus a little slack for its line buffers.
-  static constexpr size_t PNG_MIN_BLOCK = 62 * 1024;  // sizeof(PNG) = 59.5 KB: PNGdec 45.7 KB + the build raises PNG_MAX_BUFFERED_PIXELS to 16416
+  static constexpr size_t PNG_MIN_BLOCK =
+      62 * 1024;  // sizeof(PNG) = 59.5 KB: PNGdec 45.7 KB + the build raises PNG_MAX_BUFFERED_PIXELS to 16416
   static constexpr size_t JPEG_MIN_BLOCK = 24 * 1024;
-  static constexpr size_t EPUB_META_MIN_FREE = 64 * 1024;  // measured on the X4: the metadata parse peaks at ~55 KB (epubtest_lua PEAK line)
+  static constexpr size_t EPUB_META_MIN_FREE =
+      64 * 1024;  // measured on the X4: the metadata parse peaks at ~55 KB (epubtest_lua PEAK line)
   static constexpr size_t BMP_MIN_BLOCK = 16 * 1024;  // Bitmap row buffers (<= 2048 px wide) + dither state
-  // --- raw TCP client sockets (net.*): Arduino WiFiClient (NetworkClient over lwIP), already linked for the web server ---
+  // --- raw TCP client sockets (net.*): Arduino WiFiClient (NetworkClient over lwIP), already linked for the web server
+  // ---
   WiFiClient socks_[crosslua::Backend::MAX_SOCKETS];
   WiFiUDP udps_[crosslua::Backend::MAX_SOCKETS];
   bool sockUsed_[crosslua::Backend::MAX_SOCKETS] = {};
-  int sockKind_[crosslua::Backend::MAX_SOCKETS] = {};  // 0 free, 1 TCP, 2 UDP, 3 server
+  int sockKind_[crosslua::Backend::MAX_SOCKETS] = {};             // 0 free, 1 TCP, 2 UDP, 3 server
   WiFiServer* sockServers_[crosslua::Backend::MAX_SOCKETS] = {};  // non-null for kind-3 slots
-  // One TLS client at a time (kind 4): the wolfSSL session + record buffers cost ~40 KB, so it is heap-allocated only while open.
+  // One TLS client at a time (kind 4): the wolfSSL session + record buffers cost ~40 KB, so it is heap-allocated only
+  // while open.
   freeink::SecureClient* tls_ = nullptr;
   std::string tlsCa_;  // the pinned PEM; SecureClient keeps the pointer, so it must outlive the session
-  Client& sockCli(int s) { return sockKind_[s] == 4 && tls_ ? static_cast<Client&>(*tls_) : static_cast<Client&>(socks_[s]); }
-  static void fmtIp(char* out, size_t cap, const IPAddress& ip) { snprintf(out, cap, "%u.%u.%u.%u", ip[0], ip[1], ip[2], ip[3]); }
+  Client& sockCli(int s) {
+    return sockKind_[s] == 4 && tls_ ? static_cast<Client&>(*tls_) : static_cast<Client&>(socks_[s]);
+  }
+  static void fmtIp(char* out, size_t cap, const IPAddress& ip) {
+    snprintf(out, cap, "%u.%u.%u.%u", ip[0], ip[1], ip[2], ip[3]);
+  }
   bool netLocal(char* ip, char* mask, char* gw, char* dns, size_t cap) override {
     if (WiFi.status() != WL_CONNECTED) {
       if (!apRunning()) return false;  // our own hotspot: we are the gateway and the DNS, clients live in the same /24
@@ -1281,7 +1345,8 @@ class LuaAppActivity::Backend final : public crosslua::Backend {
       devcapture::pollSerial();  // serial-injected buttons (x4ctl) stay alive while the loop is blocked here
       in_.update(true);
       if (in_.wasPressed(MappedInputManager::Button::Back) || in_.isPressed(MappedInputManager::Button::Back)) {
-        for (int i = 0; i < 200 && in_.isPressed(MappedInputManager::Button::Back); i++) {  // swallow the release like http
+        for (int i = 0; i < 200 && in_.isPressed(MappedInputManager::Button::Back);
+             i++) {  // swallow the release like http
           delay(10);
           in_.update(true);
         }
@@ -1317,7 +1382,8 @@ class LuaAppActivity::Backend final : public crosslua::Backend {
     return slot;
   }
   // TLS client. The handshake polls the abort callback between its steps, so Back cancels (the longest uninterruptible
-  // stretch is one TCP connect window). caPem != nullptr verifies the server against it; nullptr = unverified (app asked).
+  // stretch is one TCP connect window). caPem != nullptr verifies the server against it; nullptr = unverified (app
+  // asked).
   int netConnectTls(const char* host, int port, int timeoutMs, const char* caPem, char* err, size_t errCap) override {
     int slot = -1;
     for (int i = 0; i < crosslua::Backend::MAX_SOCKETS && slot < 0; i++)
@@ -1345,9 +1411,14 @@ class LuaAppActivity::Backend final : public crosslua::Backend {
       delete c;
       tlsCa_.clear();
       tlsCa_.shrink_to_fit();
-      if (cancelled) snprintf(err, errCap, "cancelled");
-      else if (caPem) snprintf(err, errCap, "cannot connect to %s:%d (tls handshake failed: unreachable, or the certificate does not match ca)", host, port);
-      else snprintf(err, errCap, "cannot connect to %s:%d (tls handshake failed or unreachable)", host, port);
+      if (cancelled)
+        snprintf(err, errCap, "cancelled");
+      else if (caPem)
+        snprintf(err, errCap,
+                 "cannot connect to %s:%d (tls handshake failed: unreachable, or the certificate does not match ca)",
+                 host, port);
+      else
+        snprintf(err, errCap, "cannot connect to %s:%d (tls handshake failed or unreachable)", host, port);
       return -1;
     }
     c->setAbortCallback(nullptr);  // the lambda captures `this`; the session outlives the connect call
@@ -1383,8 +1454,8 @@ class LuaAppActivity::Backend final : public crosslua::Backend {
       snprintf(err, errCap, "cannot resolve '%s' (no such host or DNS unreachable)", host);
       return -1;
     }
-    if (udps_[s].beginPacket(a, static_cast<uint16_t>(port)) != 1 || udps_[s].write(static_cast<const uint8_t*>(d), n) != n ||
-        udps_[s].endPacket() != 1) {
+    if (udps_[s].beginPacket(a, static_cast<uint16_t>(port)) != 1 ||
+        udps_[s].write(static_cast<const uint8_t*>(d), n) != n || udps_[s].endPacket() != 1) {
       snprintf(err, errCap, "UDP send to %s:%d failed", host, port);
       return -1;
     }
@@ -1399,8 +1470,9 @@ class LuaAppActivity::Backend final : public crosslua::Backend {
     return udps_[s].read(static_cast<uint8_t*>(buf), std::min(max, static_cast<size_t>(size)));
   }
   bool netIsOpen(int s) override { return s >= 0 && s < crosslua::Backend::MAX_SOCKETS && sockUsed_[s]; }
-  // Arduino's NetworkClient::connected() does not notice a graceful close (FIN) until a later read, so ask the socket directly:
-  // a non-destructive peek returns 0 on an orderly shutdown, > 0 if data waits, and -1/EWOULDBLOCK when simply idle.
+  // Arduino's NetworkClient::connected() does not notice a graceful close (FIN) until a later read, so ask the socket
+  // directly: a non-destructive peek returns 0 on an orderly shutdown, > 0 if data waits, and -1/EWOULDBLOCK when
+  // simply idle.
   bool peerAlive(int s) {
     if (sockKind_[s] == 4) return tls_ && tls_->connected();
     const int fd = socks_[s].fd();
@@ -1426,19 +1498,29 @@ class LuaAppActivity::Backend final : public crosslua::Backend {
   bool netConnected(int s) override { return netIsOpen(s) && (sockCli(s).available() > 0 || peerAlive(s)); }
   void netClose(int s) override {
     if (!netIsOpen(s)) return;
-    if (sockKind_[s] == 2) udps_[s].stop();
+    if (sockKind_[s] == 2)
+      udps_[s].stop();
     else if (sockKind_[s] == 3) {
-      if (sockServers_[s]) { delete sockServers_[s]; sockServers_[s] = nullptr; }
+      if (sockServers_[s]) {
+        delete sockServers_[s];
+        sockServers_[s] = nullptr;
+      }
     } else if (sockKind_[s] == 4) {
-      if (tls_) { tls_->stop(); delete tls_; tls_ = nullptr; }
+      if (tls_) {
+        tls_->stop();
+        delete tls_;
+        tls_ = nullptr;
+      }
       tlsCa_.clear();
       tlsCa_.shrink_to_fit();
-    } else socks_[s].stop();
+    } else
+      socks_[s].stop();
     sockUsed_[s] = false;
     sockKind_[s] = 0;
   }
   bool saveScreenBmp(const char* path, char* err, size_t errCap) override {
-    // The firmware's own screenshot writer: rotates to the panel's portrait orientation while streaming rows (68-byte buffer).
+    // The firmware's own screenshot writer: rotates to the panel's portrait orientation while streaming rows (68-byte
+    // buffer).
     const uint8_t* fb = r_.getFrameBuffer();
     if (!fb) {
       snprintf(err, errCap, "no frame buffer");
@@ -1564,12 +1646,13 @@ class LuaAppActivity::Backend final : public crosslua::Backend {
     bool cancelled = false;
     auto pollCancel = [&]() {  // the Lua app is blocked in this call, so pump the buttons ourselves: Back cancels
       in_.update(true);
-      if (in_.wasPressed(MappedInputManager::Button::Back) || in_.isPressed(MappedInputManager::Button::Back)) cancelled = true;  // a quick tap counts
+      if (in_.wasPressed(MappedInputManager::Button::Back) || in_.isPressed(MappedInputManager::Button::Back))
+        cancelled = true;  // a quick tap counts
       return cancelled;
     };
     auto finishCancel = [&]() {
       for (int i = 0; i < 200 && in_.isPressed(MappedInputManager::Button::Back); i++) {  // swallow the release so the
-        delay(10);                                                                          // app never sees this Back
+        delay(10);                                                                        // app never sees this Back
         in_.update(true);
       }
       events.clear();
@@ -1597,7 +1680,8 @@ class LuaAppActivity::Backend final : public crosslua::Backend {
       if (!http.begin(url)) return fail("cannot parse the url");
       for (int i = 0; i < rq.headerCount; i++) http.addHeader(rq.headers[i].name, rq.headers[i].value);
       if (rq.contentType) http.addHeader("Content-Type", rq.contentType);
-      if (!strcmp(rq.method, "GET")) http.setFollowRedirects(3);  // like the plain GET path; other methods return the 3xx as is
+      if (!strcmp(rq.method, "GET"))
+        http.setFollowRedirects(3);  // like the plain GET path; other methods return the 3xx as is
       char* buf = nullptr;
       size_t n = 0, cap = 0;
       bool tooBig = false, oom = false;
@@ -1667,7 +1751,12 @@ class LuaAppActivity::Backend final : public crosslua::Backend {
       const size_t slash = dest.rfind('/');
       if (slash != std::string::npos && slash > 0) Storage.ensureDirectoryExists(dest.substr(0, slash).c_str());
       const auto err = HttpDownloader::downloadToFile(
-          url, dest, [&](size_t done, size_t) { rs.bytes = done; pollCancel(); }, &cancelled, "", "", hdrs, false);
+          url, dest,
+          [&](size_t done, size_t) {
+            rs.bytes = done;
+            pollCancel();
+          },
+          &cancelled, "", "", hdrs, false);
       rs.status = HttpDownloader::lastStatus();
       if (cancelled) return finishCancel();
       switch (err) {
@@ -1793,7 +1882,9 @@ class LuaAppActivity::Backend final : public crosslua::Backend {
     Storage.remove(tmp.c_str());
     return false;
   }
-  bool fsMkdir(const char* path) override { return Storage.exists(path) ? fsSize(path) == -2 : Storage.mkdir(path, true); }
+  bool fsMkdir(const char* path) override {
+    return Storage.exists(path) ? fsSize(path) == -2 : Storage.mkdir(path, true);
+  }
   bool fsRemove(const char* path) override { return fsSize(path) == -2 ? Storage.rmdir(path) : Storage.remove(path); }
   bool fsListBegin(const char* path) override {
     listDir_ = Storage.open(path);
@@ -2030,8 +2121,10 @@ class LuaAppActivity::Backend final : public crosslua::Backend {
 
  private:
   static EpdFontFamily::Style toStyle(int s) {
-    return s == 3 ? EpdFontFamily::BOLD_ITALIC : s == 1 ? EpdFontFamily::BOLD
-                                                 : s == 2 ? EpdFontFamily::ITALIC : EpdFontFamily::REGULAR;
+    return s == 3   ? EpdFontFamily::BOLD_ITALIC
+           : s == 1 ? EpdFontFamily::BOLD
+           : s == 2 ? EpdFontFamily::ITALIC
+                    : EpdFontFamily::REGULAR;
   }
   GfxRenderer& r_;
   std::string name_;
@@ -2041,55 +2134,70 @@ class LuaAppActivity::Backend final : public crosslua::Backend {
     JsonDocument doc;
     if (deserializeJson(doc, json) != DeserializationError::Ok) return;
     for (JsonVariantConst p : doc["permissions"].as<JsonArrayConst>())
-      if (p.is<const char*>() && !strcmp(p.as<const char*>(), "network")) net_ = true;
-      else if (p.is<const char*>() && !strcmp(p.as<const char*>(), "library")) lib_ = true;
-      else if (p.is<const char*>() && !strcmp(p.as<const char*>(), "listen")) listenReq_ = true;
-      else if (p.is<const char*>() && !strcmp(p.as<const char*>(), "audio")) audioReq_ = true;
-      else if (p.is<const char*>() && !strcmp(p.as<const char*>(), "microphone")) micReq_ = true;
-      else if (p.is<const char*>() && !strcmp(p.as<const char*>(), "hotspot")) hotspotReq_ = true;
-      else if (p.is<const char*>() && !strcmp(p.as<const char*>(), "espnow")) espnowReq_ = true;
-      else if (p.is<const char*>() && !strcmp(p.as<const char*>(), "monitor")) monitorReq_ = true;
-      else if (p.is<const char*>() && !strcmp(p.as<const char*>(), "tx")) txReq_ = true;
-      else if (p.is<const char*>() && !strcmp(p.as<const char*>(), "bluetooth")) bleReq_ = true;
+      if (p.is<const char*>() && !strcmp(p.as<const char*>(), "network"))
+        net_ = true;
+      else if (p.is<const char*>() && !strcmp(p.as<const char*>(), "library"))
+        lib_ = true;
+      else if (p.is<const char*>() && !strcmp(p.as<const char*>(), "listen"))
+        listenReq_ = true;
+      else if (p.is<const char*>() && !strcmp(p.as<const char*>(), "audio"))
+        audioReq_ = true;
+      else if (p.is<const char*>() && !strcmp(p.as<const char*>(), "microphone"))
+        micReq_ = true;
+      else if (p.is<const char*>() && !strcmp(p.as<const char*>(), "hotspot"))
+        hotspotReq_ = true;
+      else if (p.is<const char*>() && !strcmp(p.as<const char*>(), "espnow"))
+        espnowReq_ = true;
+      else if (p.is<const char*>() && !strcmp(p.as<const char*>(), "monitor"))
+        monitorReq_ = true;
+      else if (p.is<const char*>() && !strcmp(p.as<const char*>(), "tx"))
+        txReq_ = true;
+      else if (p.is<const char*>() && !strcmp(p.as<const char*>(), "bluetooth"))
+        bleReq_ = true;
     for (int w = 0; w < 2; w++)
       for (JsonVariantConst v : doc["storage"][w ? "write" : "read"].as<JsonArrayConst>()) {
         char rel[104];
-        if (requested_.size() < 8 && v.is<const char*>() && crosslua::parseGrantPath(v.as<const char*>(), rel, sizeof(rel)))
+        if (requested_.size() < 8 && v.is<const char*>() &&
+            crosslua::parseGrantPath(v.as<const char*>(), rel, sizeof(rel)))
           requested_.push_back({rel, w == 1});
       }
   }
 
   // --- listen sockets ---
-    int netListen(int port, char* err, size_t errCap) override {
-      WiFiServer* srv = new WiFiServer(port);
-      if (!srv) { snprintf(err, errCap, "out of memory for server"); return -1; }
-      srv->begin();
-      for (int i = 0; i < Backend::MAX_SOCKETS; i++) {
-        if (sockUsed_[i]) continue;
-        sockUsed_[i] = true;
-        sockKind_[i] = 3;
-        sockServers_[i] = srv;
-        return i;
-      }
-      delete srv;
-      snprintf(err, errCap, "no free slot");
+  int netListen(int port, char* err, size_t errCap) override {
+    WiFiServer* srv = new WiFiServer(port);
+    if (!srv) {
+      snprintf(err, errCap, "out of memory for server");
       return -1;
     }
-    int netAccept(int serverSlot) override {
-      if (!sockUsed_[serverSlot] || sockKind_[serverSlot] != 3 || !sockServers_[serverSlot]) return -2;
-      WiFiClient cl = sockServers_[serverSlot]->available();
-      if (!cl) return -1;
-      for (int i = 0; i < Backend::MAX_SOCKETS; i++) {
-        if (sockUsed_[i]) continue;
-        sockUsed_[i] = true;
-        sockKind_[i] = 1;
-        socks_[i] = cl;
-        return i;
-      }
-      cl.stop();
-      return -2;
+    srv->begin();
+    for (int i = 0; i < Backend::MAX_SOCKETS; i++) {
+      if (sockUsed_[i]) continue;
+      sockUsed_[i] = true;
+      sockKind_[i] = 3;
+      sockServers_[i] = srv;
+      return i;
     }
-    // "permissions": ["network", "listen"]: the device may accept connections from the LAN. Needs the user's approval (same screen
+    delete srv;
+    snprintf(err, errCap, "no free slot");
+    return -1;
+  }
+  int netAccept(int serverSlot) override {
+    if (!sockUsed_[serverSlot] || sockKind_[serverSlot] != 3 || !sockServers_[serverSlot]) return -2;
+    WiFiClient cl = sockServers_[serverSlot]->available();
+    if (!cl) return -1;
+    for (int i = 0; i < Backend::MAX_SOCKETS; i++) {
+      if (sockUsed_[i]) continue;
+      sockUsed_[i] = true;
+      sockKind_[i] = 1;
+      socks_[i] = cl;
+      return i;
+    }
+    cl.stop();
+    return -2;
+  }
+  // "permissions": ["network", "listen"]: the device may accept connections from the LAN. Needs the user's approval
+  // (same screen
   // and stored record as the storage grants), so an app that merely declares it still reads as "not permitted".
   bool listenAllowed() override { return net_ && listenReq_ && approved_; }
   // --- audio (boards with the AUDIO cap; the SDK stub links elsewhere and begin() reports absence) ---
@@ -2099,11 +2207,17 @@ class LuaAppActivity::Backend final : public crosslua::Backend {
   bool audioAllowed() override { return audioReq_ && approved_; }
   bool audioPlay(const char* path, bool loop, char* err, size_t errCap) override {
     if (!audioBegun_) {
-      if (!audio_.begin()) { snprintf(err, errCap, "no audio on this board"); return false; }
+      if (!audio_.begin()) {
+        snprintf(err, errCap, "no audio on this board");
+        return false;
+      }
       audioBegun_ = true;
     }
     if (audio_.isPlaying()) audio_.stop();
-    if (!Storage.openFileForRead(TAG, path, audioFile_)) { snprintf(err, errCap, "cannot open the file"); return false; }
+    if (!Storage.openFileForRead(TAG, path, audioFile_)) {
+      snprintf(err, errCap, "cannot open the file");
+      return false;
+    }
     AudioManager::WavSource src;
     src.read = [this](uint8_t* dst, size_t len) -> int { return audioFile_ ? audioFile_.read(dst, len) : -1; };
     src.seek = [this](size_t pos) -> bool { return audioFile_ && audioFile_.seek(pos); };
@@ -2114,26 +2228,35 @@ class LuaAppActivity::Backend final : public crosslua::Backend {
     }
     return true;
   }
-  void audioStop() override { audio_.stop(); if (audioFile_) audioFile_.close(); }
+  void audioStop() override {
+    audio_.stop();
+    if (audioFile_) audioFile_.close();
+  }
   void audioVolume(int pct) override {
     if (!audioBegun_ && !audio_.begin()) return;
     audio_.setVolume(static_cast<uint8_t>(pct));
   }
   bool audioPlaying() override { return audioBegun_ && audio_.isPlaying(); }
-  // --- microphone: begun on first use, released in ~Backend. 16 kHz mono PCM; the WAV is streamed to the card in 512-byte
-  // blocks (no heap buffer), the header sizes are patched at the end. Back (physical or x4ctl-injected) cancels.
+  // --- microphone: begun on first use, released in ~Backend. 16 kHz mono PCM; the WAV is streamed to the card in
+  // 512-byte blocks (no heap buffer), the header sizes are patched at the end. Back (physical or x4ctl-injected)
+  // cancels.
   freeink::Microphone mic_;
   bool micAllowed() override { return micReq_ && approved_; }
   bool micBegin(char* err, size_t errCap) {
     if (mic_.present()) return true;
-    if (!BoardConfig::hasMic() || !mic_.begin(16000)) { snprintf(err, errCap, "no microphone on this board"); return false; }
+    if (!BoardConfig::hasMic() || !mic_.begin(16000)) {
+      snprintf(err, errCap, "no microphone on this board");
+      return false;
+    }
     return true;
   }
   bool backCancelRequested() {
     devcapture::pollSerial();
     in_.update(true);
-    if (!(in_.wasPressed(MappedInputManager::Button::Back) || in_.isPressed(MappedInputManager::Button::Back))) return false;
-    for (int i = 0; i < 200 && in_.isPressed(MappedInputManager::Button::Back); i++) {  // swallow the release like http/connect
+    if (!(in_.wasPressed(MappedInputManager::Button::Back) || in_.isPressed(MappedInputManager::Button::Back)))
+      return false;
+    for (int i = 0; i < 200 && in_.isPressed(MappedInputManager::Button::Back);
+         i++) {  // swallow the release like http/connect
       delay(10);
       in_.update(true);
     }
@@ -2142,47 +2265,84 @@ class LuaAppActivity::Backend final : public crosslua::Backend {
     evKey.clear();
     return true;
   }
-  static void le32(uint8_t* p, uint32_t v) { p[0] = v; p[1] = v >> 8; p[2] = v >> 16; p[3] = v >> 24; }
+  static void le32(uint8_t* p, uint32_t v) {
+    p[0] = v;
+    p[1] = v >> 8;
+    p[2] = v >> 16;
+    p[3] = v >> 24;
+  }
   static void wavHeader(uint8_t h[44], uint32_t dataBytes) {
     memcpy(h, "RIFF\0\0\0\0WAVEfmt \x10\0\0\0\x01\0\x01\0", 24);  // up to and including the channel count
     le32(h + 4, 36 + dataBytes);
-    le32(h + 24, 16000);       // sample rate
-    le32(h + 28, 16000 * 2);   // byte rate
-    h[32] = 2; h[33] = 0;      // block align
-    h[34] = 16; h[35] = 0;     // bits per sample
+    le32(h + 24, 16000);      // sample rate
+    le32(h + 28, 16000 * 2);  // byte rate
+    h[32] = 2;
+    h[33] = 0;  // block align
+    h[34] = 16;
+    h[35] = 0;  // bits per sample
     memcpy(h + 36, "data", 4);
     le32(h + 40, dataBytes);
   }
   bool micRecord(const char* path, int seconds, int* bytes, char* err, size_t errCap) override {
     if (!micBegin(err, errCap)) return false;
     HalFile f = Storage.open(path, O_WRONLY | O_CREAT | O_TRUNC);
-    if (!f) { snprintf(err, errCap, "cannot open the file for writing"); return false; }
+    if (!f) {
+      snprintf(err, errCap, "cannot open the file for writing");
+      return false;
+    }
     uint8_t hdr[44];
     wavHeader(hdr, 0);
-    if (f.write(hdr, sizeof(hdr)) != sizeof(hdr)) { f.close(); Storage.remove(path); snprintf(err, errCap, "write error"); return false; }
+    if (f.write(hdr, sizeof(hdr)) != sizeof(hdr)) {
+      f.close();
+      Storage.remove(path);
+      snprintf(err, errCap, "write error");
+      return false;
+    }
     const uint32_t wantBytes = static_cast<uint32_t>(seconds) * 16000u * 2u;
     uint32_t got = 0;
     int16_t buf[256];
     uint32_t lastData = millis();
     while (got < wantBytes) {
-      if (backCancelRequested()) { f.close(); Storage.remove(path); snprintf(err, errCap, "cancelled"); return false; }
+      if (backCancelRequested()) {
+        f.close();
+        Storage.remove(path);
+        snprintf(err, errCap, "cancelled");
+        return false;
+      }
       const size_t room = std::min<size_t>(256, (wantBytes - got) / 2);
       const int n = mic_.read(buf, room, 100);
-      if (n < 0) { f.close(); Storage.remove(path); snprintf(err, errCap, "microphone read failed"); return false; }
+      if (n < 0) {
+        f.close();
+        Storage.remove(path);
+        snprintf(err, errCap, "microphone read failed");
+        return false;
+      }
       if (n == 0) {
-        if (millis() - lastData > 2000) { f.close(); Storage.remove(path); snprintf(err, errCap, "microphone stopped delivering data"); return false; }
+        if (millis() - lastData > 2000) {
+          f.close();
+          Storage.remove(path);
+          snprintf(err, errCap, "microphone stopped delivering data");
+          return false;
+        }
         continue;
       }
       lastData = millis();
       if (f.write(reinterpret_cast<uint8_t*>(buf), n * 2) != static_cast<size_t>(n) * 2) {
-        f.close(); Storage.remove(path); snprintf(err, errCap, "write error (card full?)"); return false;
+        f.close();
+        Storage.remove(path);
+        snprintf(err, errCap, "write error (card full?)");
+        return false;
       }
       got += static_cast<uint32_t>(n) * 2;
     }
     wavHeader(hdr, got);
     const bool patched = f.seek(0) && f.write(hdr, sizeof(hdr)) == sizeof(hdr);
     f.close();
-    if (!patched) { Storage.remove(path); snprintf(err, errCap, "write error"); return false; }
+    if (!patched) {
+      Storage.remove(path);
+      snprintf(err, errCap, "write error");
+      return false;
+    }
     *bytes = static_cast<int>(got + 44);
     return true;
   }
@@ -2192,9 +2352,15 @@ class LuaAppActivity::Backend final : public crosslua::Backend {
     int p = 0;
     const uint32_t t0 = millis();
     while (millis() - t0 < static_cast<uint32_t>(ms)) {
-      if (backCancelRequested()) { snprintf(err, errCap, "cancelled"); return false; }
+      if (backCancelRequested()) {
+        snprintf(err, errCap, "cancelled");
+        return false;
+      }
       const int n = mic_.read(buf, 256, 50);
-      if (n < 0) { snprintf(err, errCap, "microphone read failed"); return false; }
+      if (n < 0) {
+        snprintf(err, errCap, "microphone read failed");
+        return false;
+      }
       for (int i = 0; i < n; i++) {
         const int a = buf[i] < 0 ? -static_cast<int>(buf[i]) : buf[i];
         if (a > p) p = a;
@@ -2204,42 +2370,49 @@ class LuaAppActivity::Backend final : public crosslua::Backend {
     return true;
   }
 
-    // --- mDNS ---
+  // --- mDNS ---
   // ESPmDNS needs begin() (responder + query machinery) before queryService works; without it the
   // query returns 0 in microseconds. Track it globally: the radio teardown / reboot resets it.
   bool mdnsBegun_ = false;
   int mdnsQuery(const char* service, const char* proto, char* err, size_t errCap) override {
     if (!mdnsBegun_) {
-      if (!MDNS.begin("crosspoint")) { snprintf(err, errCap, "mDNS could not start"); return -1; }
+      if (!MDNS.begin("crosspoint")) {
+        snprintf(err, errCap, "mDNS could not start");
+        return -1;
+      }
       mdnsBegun_ = true;
     }
     int n = MDNS.queryService(service, proto);
-    if (n < 0) { snprintf(err, errCap, "mDNS query failed"); return -1; }
+    if (n < 0) {
+      snprintf(err, errCap, "mDNS query failed");
+      return -1;
+    }
     return n;
   }
-    bool mdnsResult(int i, char* hostname, size_t hnCap, char* ip, size_t ipCap, int* port, char* instanceName, size_t inCap) override {
-      if (i < 0) return false;
-      auto addr = MDNS.address(i);
-      if (!addr) return false;
-      snprintf(ip, ipCap, "%s", addr.toString().c_str());
-      snprintf(hostname, hnCap, "%s", MDNS.hostname(i).c_str());
-      *port = MDNS.port(i);
-      snprintf(instanceName, inCap, "%s", MDNS.instanceName(i).c_str());
-      return true;
-    }
+  bool mdnsResult(int i, char* hostname, size_t hnCap, char* ip, size_t ipCap, int* port, char* instanceName,
+                  size_t inCap) override {
+    if (i < 0) return false;
+    auto addr = MDNS.address(i);
+    if (!addr) return false;
+    snprintf(ip, ipCap, "%s", addr.toString().c_str());
+    snprintf(hostname, hnCap, "%s", MDNS.hostname(i).c_str());
+    *port = MDNS.port(i);
+    snprintf(instanceName, inCap, "%s", MDNS.instanceName(i).c_str());
+    return true;
+  }
 
   MappedInputManager& in_;
   bool net_ = false;
   bool lib_ = false;
-  bool listenReq_ = false;  // manifest asked for "listen" (effective only after approval)
-  bool audioReq_ = false;   // manifest asked for "audio" (effective only after approval)
-  bool micReq_ = false;     // manifest asked for "microphone" (effective only after approval)
-  bool hotspotReq_ = false; // manifest asked for "hotspot" (effective only after approval)
-  bool espnowReq_ = false;  // manifest asked for "espnow" (effective only after approval)
-  bool monitorReq_ = false; // manifest asked for "monitor" (effective only after approval)
-  bool txReq_ = false;      // manifest asked for "tx" (effective only after approval)
-  bool bleReq_ = false;     // manifest asked for "bluetooth" (effective only after approval)
-  bool bleFailed_ = false;  // the last connect failed (reason in bleReason_)
+  bool listenReq_ = false;   // manifest asked for "listen" (effective only after approval)
+  bool audioReq_ = false;    // manifest asked for "audio" (effective only after approval)
+  bool micReq_ = false;      // manifest asked for "microphone" (effective only after approval)
+  bool hotspotReq_ = false;  // manifest asked for "hotspot" (effective only after approval)
+  bool espnowReq_ = false;   // manifest asked for "espnow" (effective only after approval)
+  bool monitorReq_ = false;  // manifest asked for "monitor" (effective only after approval)
+  bool txReq_ = false;       // manifest asked for "tx" (effective only after approval)
+  bool bleReq_ = false;      // manifest asked for "bluetooth" (effective only after approval)
+  bool bleFailed_ = false;   // the last connect failed (reason in bleReason_)
   bool bleHasPasskey_ = false;
   uint32_t blePasskey_ = 0;
   char bleReason_[64] = {0};
@@ -2267,8 +2440,8 @@ namespace luabt {
 bool held() { return g_bluetoothHeld.load(); }
 }  // namespace luabt
 
-// While the Bluetooth stack is up the controller needs a steady CPU clock: asking for "no loop delay" makes the main loop run at
-// full speed instead of clocking down after a quiet spell (the same request the web-server screens make).
+// While the Bluetooth stack is up the controller needs a steady CPU clock: asking for "no loop delay" makes the main
+// loop run at full speed instead of clocking down after a quiet spell (the same request the web-server screens make).
 bool LuaAppActivity::skipLoopDelay() { return backend_ && backend_->bleUp_; }
 
 void LuaAppActivity::logMemory(const char* when) const {
@@ -2290,8 +2463,9 @@ void LuaAppActivity::startApp() {
   errorShown_ = false;
   waitDeadline_ = 0;
 
-  // Start from a quiet radio. Screens earlier in the same menu (the Plugin Hub, a book sync...) can leave WiFi up, which
-  // holds ~56 KB and would make every Lua app fail to start with "free RAM too low". An app that wants WiFi asks for it.
+  // Start from a quiet radio. Screens earlier in the same menu (the Plugin Hub, a book sync...) can leave WiFi up,
+  // which holds ~56 KB and would make every Lua app fail to start with "free RAM too low". An app that wants WiFi asks
+  // for it.
   if (WiFi.getMode() != WIFI_MODE_NULL) {
     LOG_INF(TAG, "radio was left on: switching it off before the app starts");
     WiFi.disconnect(false);
@@ -2306,7 +2480,8 @@ void LuaAppActivity::startApp() {
   }
 
   if (backend_->hasGrantRequest()) {
-    if (backend_->grantsApprovedOnDisk()) backend_->approveGrants();
+    if (backend_->grantsApprovedOnDisk())
+      backend_->approveGrants();
     else {  // ask first (from loop(): sub-activities cannot be started from onEnter)
       pendingGrantPrompt_ = true;
       return;
@@ -2321,8 +2496,8 @@ void LuaAppActivity::startVm() {
   const auto heap = HalMemory::getInternalHeap();
   logMemory("start");
   if (heap.freeBytes < LUA_RESERVE_BYTES + LUA_MIN_BUDGET) {
-    showError("Not enough memory", "Free RAM too low to start a Lua app (" + std::to_string(heap.freeBytes) +
-                                       " bytes free).");
+    showError("Not enough memory",
+              "Free RAM too low to start a Lua app (" + std::to_string(heap.freeBytes) + " bytes free).");
     return;
   }
   const size_t budget = std::clamp(heap.freeBytes - LUA_RESERVE_BYTES, LUA_MIN_BUDGET, LUA_MAX_BUDGET);
@@ -2330,8 +2505,8 @@ void LuaAppActivity::startVm() {
   const std::string path = appDir_ + "/" + entry_;
   std::string src;
   if (!Storage.readFileToString(TAG, path, MAX_SCRIPT_BYTES, src)) {
-    showError("Cannot load app", path + " is missing, empty, or larger than " + std::to_string(MAX_SCRIPT_BYTES) +
-                                     " bytes.");
+    showError("Cannot load app",
+              path + " is missing, empty, or larger than " + std::to_string(MAX_SCRIPT_BYTES) + " bytes.");
     return;
   }
   if (!vm_->open(budget)) {
@@ -2399,33 +2574,37 @@ void LuaAppActivity::askGrants() {
 
 void LuaAppActivity::launchWifi() {
   WiFi.mode(WIFI_STA);
-  startActivityForResult(std::make_unique<WifiSelectionActivity>(renderer, mappedInput), [this](const ActivityResult& r) {
-    const bool ok = !r.isCancelled;
-    LOG_INF(TAG, "wifi.connect -> %s", ok ? "connected" : "not connected");
-    if (ok && vm_) vm_->setHeapFloor(LUA_HEAP_FLOOR_ONLINE);
-    renderer.clearScreen();
-    if (vm_ && vm_->status() == crosslua::Status::Waiting) {
-      vm_->resume(ok ? "wifi:ok" : "wifi:fail");
-      armWait();
-    }
-  });
+  startActivityForResult(std::make_unique<WifiSelectionActivity>(renderer, mappedInput),
+                         [this](const ActivityResult& r) {
+                           const bool ok = !r.isCancelled;
+                           LOG_INF(TAG, "wifi.connect -> %s", ok ? "connected" : "not connected");
+                           if (ok && vm_) vm_->setHeapFloor(LUA_HEAP_FLOOR_ONLINE);
+                           renderer.clearScreen();
+                           if (vm_ && vm_->status() == crosslua::Status::Waiting) {
+                             vm_->resume(ok ? "wifi:ok" : "wifi:fail");
+                             armWait();
+                           }
+                         });
 }
 
 void LuaAppActivity::launchKeyboard() {
-  const InputType type = backend_->textMode == 1 ? InputType::Password : backend_->textMode == 2 ? InputType::Url : InputType::Text;
-  startActivityForResult(std::make_unique<KeyboardEntryActivity>(renderer, mappedInput, backend_->textTitle,
-                                                                 backend_->textInitial, static_cast<size_t>(backend_->textMax), type),
-                         [this](const ActivityResult& r) {
-                           renderer.clearScreen();
-                           if (!vm_ || vm_->status() != crosslua::Status::Waiting) return;
-                           if (r.isCancelled) {
-                             vm_->resume("text:cancel");
-                           } else {
-                             const std::string reply = "text:ok:" + std::get<KeyboardResult>(r.data).text;
-                             vm_->resume(reply.c_str());
-                           }
-                           armWait();
-                         });
+  const InputType type = backend_->textMode == 1   ? InputType::Password
+                         : backend_->textMode == 2 ? InputType::Url
+                                                   : InputType::Text;
+  startActivityForResult(
+      std::make_unique<KeyboardEntryActivity>(renderer, mappedInput, backend_->textTitle, backend_->textInitial,
+                                              static_cast<size_t>(backend_->textMax), type),
+      [this](const ActivityResult& r) {
+        renderer.clearScreen();
+        if (!vm_ || vm_->status() != crosslua::Status::Waiting) return;
+        if (r.isCancelled) {
+          vm_->resume("text:cancel");
+        } else {
+          const std::string reply = "text:ok:" + std::get<KeyboardResult>(r.data).text;
+          vm_->resume(reply.c_str());
+        }
+        armWait();
+      });
 }
 
 void LuaAppActivity::armWait() {
@@ -2488,7 +2667,8 @@ void LuaAppActivity::collectInput() {
     leave();
     return;
   }
-  if (backend_ && backend_->bleUp_) {  // Bluetooth keyboard: drive the stack's reconnect/repeat timers, then queue what was typed
+  if (backend_ &&
+      backend_->bleUp_) {  // Bluetooth keyboard: drive the stack's reconnect/repeat timers, then queue what was typed
     BleHid.poll();
     freeink::KeyEvent ev;
     while (BleHid.popKey(ev)) {
@@ -2503,7 +2683,8 @@ void LuaAppActivity::collectInput() {
   if (mappedInput.wasReleased(B::Up)) push("up");
   if (mappedInput.wasReleased(B::Down)) push("down");
 #if FREEINK_CAP_TOUCH
-  if (mappedInput.hasTouch()) {  // touch boards: "press" (finger down), "long", "tap", "release" with input.pos() = x, y
+  if (mappedInput
+          .hasTouch()) {  // touch boards: "press" (finger down), "long", "tap", "release" with input.pos() = x, y
     int x = 0, y = 0;
     if (mappedInput.wasScreenTouchDown(x, y)) {
       backend_->touchX = x;

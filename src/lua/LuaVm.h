@@ -56,7 +56,8 @@ class LuaVm {
   // asks to keep it (registerApi() sets this from the presence of <dataDir>/debug.flag). Stripped errors read "?:-1:".
   void setStripDebug(bool strip) { stripDebug_ = strip; }
   bool stripDebug() const { return stripDebug_; }
-  // Compile a TEXT chunk onto L's stack (like luaL_loadbufferx(..., "t")), honouring stripDebug(). Returns a lua status code.
+  // Compile a TEXT chunk onto L's stack (like luaL_loadbufferx(..., "t")), honouring stripDebug(). Returns a lua status
+  // code.
   int loadText(lua_State* L, const char* buf, size_t n, const char* chunkName);
   // Same, but pulls the source through a lua_Reader (e.g. straight from the SD card in small pieces) so the whole text
   // never has to sit in the Lua heap next to the compiled function: a module's compile peak drops by its source size.

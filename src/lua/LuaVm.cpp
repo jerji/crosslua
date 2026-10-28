@@ -44,14 +44,17 @@ void LuaVm::hookFn(lua_State* L, void* /*ar*/) {
 
 static void openSandbox(lua_State* L) {
   // Deliberately NOT luaL_openlibs: no io/os/package/debug. Files go through fs.*.
-  static const luaL_Reg libs[] = {{LUA_GNAME, luaopen_base},     {LUA_TABLIBNAME, luaopen_table},
-                                  {LUA_STRLIBNAME, luaopen_string}, {LUA_MATHLIBNAME, luaopen_math},
+  static const luaL_Reg libs[] = {{LUA_GNAME, luaopen_base},
+                                  {LUA_TABLIBNAME, luaopen_table},
+                                  {LUA_STRLIBNAME, luaopen_string},
+                                  {LUA_MATHLIBNAME, luaopen_math},
                                   {nullptr, nullptr}};  // coroutine and utf8 are lazy (see installLazy in LuaApi.cpp)
   for (const luaL_Reg* l = libs; l->func; l++) {
     luaL_requiref(L, l->name, l->func, 1);
     lua_pop(L, 1);
   }
-  // Base functions that read the filesystem via fopen(). (`load` is re-added by registerRequire as a text-only version.)
+  // Base functions that read the filesystem via fopen(). (`load` is re-added by registerRequire as a text-only
+  // version.)
   static const char* const removed[] = {"dofile", "loadfile", "loadstring", nullptr};
   for (const char* const* n = removed; *n; n++) {
     lua_pushnil(L);
@@ -103,7 +106,10 @@ int dumpWriter(lua_State*, const void* data, size_t sz, void* ud) {
     size_t nc = b->cap ? b->cap * 2 : 4096;
     while (nc < b->n + sz) nc *= 2;
     char* np = static_cast<char*>(realloc(b->p, nc));
-    if (!np) { b->failed = true; return 1; }
+    if (!np) {
+      b->failed = true;
+      return 1;
+    }
     b->p = np;
     b->cap = nc;
   }
@@ -120,7 +126,8 @@ int LuaVm::loadText(lua_State* L, const char* buf, size_t n, const char* chunkNa
   return finishLoad(L, luaL_loadbufferx(L, buf, n, chunkName, "t"), chunkName);
 }
 
-int LuaVm::loadReader(lua_State* L, const char* (*reader)(lua_State*, void*, size_t*), void* ud, const char* chunkName) {
+int LuaVm::loadReader(lua_State* L, const char* (*reader)(lua_State*, void*, size_t*), void* ud,
+                      const char* chunkName) {
   return finishLoad(L, lua_load(L, reader, ud, chunkName, "t"), chunkName);  // "t": bytecode is refused by the parser
 }
 
@@ -178,8 +185,10 @@ Status LuaVm::resume(const char* eventName) {
 
   int nargs = 0;
   if (status_ == Status::Waiting) {
-    if (eventName) lua_pushstring(co_, eventName);
-    else lua_pushnil(co_);
+    if (eventName)
+      lua_pushstring(co_, eventName);
+    else
+      lua_pushnil(co_);
     nargs = 1;
   }  // first run and hook yields: no arguments
 

@@ -49,7 +49,8 @@ int main(int argc, char** argv) {
       study::Outcome o = sched.answer(card, (study::Rating)rating, today, nowMin);
       card = o.card;
       printf("%d %d %d %d %.5g %.5g %d %d %d %d %d\n", card.state, card.stepIndex, card.dueDay, card.dueMinute,
-             card.stability, card.difficulty, card.reps, card.lapses, o.delayMinutes, o.intervalDays, o.graduated ? 1 : 0);
+             card.stability, card.difficulty, card.reps, card.lapses, o.delayMinutes, o.intervalDays,
+             o.graduated ? 1 : 0);
     }
   }
   return 0;

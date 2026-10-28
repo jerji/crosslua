@@ -1,6 +1,7 @@
 #include <Arduino.h>
 #include <BlePageTurner.h>
 #include <BoardConfig.h>
+#include <DevCapture.h>
 #include <Epub.h>
 #include <FontCacheManager.h>
 #include <FontDecompressor.h>
@@ -10,7 +11,6 @@
 #include <HalFrontlight.h>
 #include <HalGPIO.h>
 #include <HalMemory.h>
-#include <DevCapture.h>
 #include <HalPowerManager.h>
 #include <HalStorage.h>
 #include <HalSystem.h>
@@ -41,9 +41,9 @@
 #include "RecentBooksStore.h"
 #include "SdCardFontSystem.h"
 #include "WifiCredentialStore.h"
-#include "activities/plugins/LuaBluetoothHold.h"
 #include "activities/Activity.h"
 #include "activities/ActivityManager.h"
+#include "activities/plugins/LuaBluetoothHold.h"
 #include "activities/settings/SdFirmwareUpdateActivity.h"
 #include "components/UITheme.h"
 #include "fontIds.h"
@@ -520,7 +520,8 @@ void enterDeepSleep(bool fromTimeout = false) {
 
 #ifdef CROSSLUA_DEV
 // Boot memory profile (dev builds only): how much heap each init stage takes. See docs/lua/MEMORY.md.
-#define MEMPROBE(tag) LOG_INF("MEMP", "%-16s free=%6u  largest=%6u", tag, (unsigned)ESP.getFreeHeap(), (unsigned)ESP.getMaxAllocHeap())
+#define MEMPROBE(tag) \
+  LOG_INF("MEMP", "%-16s free=%6u  largest=%6u", tag, (unsigned)ESP.getFreeHeap(), (unsigned)ESP.getMaxAllocHeap())
 #else
 #define MEMPROBE(tag) ((void)0)
 #endif
@@ -892,8 +893,8 @@ void pollSerial() {
         const struct {
           const char* n;
           uint8_t idx;
-        } map[] = {{"back", HalGPIO::BTN_BACK}, {"confirm", HalGPIO::BTN_CONFIRM}, {"left", HalGPIO::BTN_LEFT},
-                   {"right", HalGPIO::BTN_RIGHT}, {"up", HalGPIO::BTN_UP},         {"down", HalGPIO::BTN_DOWN}};
+        } map[] = {{"back", HalGPIO::BTN_BACK},   {"confirm", HalGPIO::BTN_CONFIRM}, {"left", HalGPIO::BTN_LEFT},
+                   {"right", HalGPIO::BTN_RIGHT}, {"up", HalGPIO::BTN_UP},           {"down", HalGPIO::BTN_DOWN}};
         bool ok = false;
         for (const auto& m : map) {
           if (name == m.n) {
@@ -903,7 +904,8 @@ void pollSerial() {
         }
         logSerial.printf("BTN_%s:%s\n", ok ? "OK" : "ERR", name.c_str());
       } else if (cmd == "SCREEN") {
-        devcapture::dump(logSerial, activityManager.currentName(), renderer.getScreenWidth(), renderer.getScreenHeight());
+        devcapture::dump(logSerial, activityManager.currentName(), renderer.getScreenWidth(),
+                         renderer.getScreenHeight());
       } else if (cmd == "PING") {
         logSerial.printf("PONG:%lu:%s\n", millis(), activityManager.currentName());
 #endif
@@ -934,7 +936,8 @@ void loop() {
   scene.pageShown = homeShown || remoteContext;
   scene.storageBusy = activityManager.requiresExclusiveStorageLoop();
   scene.wifiOn = WiFi.getMode() != WIFI_MODE_NULL;
-  // A Lua app's Bluetooth session (ble.*) owns the shared stack: the page turner must not tick (and so must not end it).
+  // A Lua app's Bluetooth session (ble.*) owns the shared stack: the page turner must not tick (and so must not end
+  // it).
   const bool remoteActed = !luabt::held() && bleturner::tick(scene);
 
   if (activityManager.requiresExclusiveStorageLoop()) {
@@ -979,8 +982,8 @@ void loop() {
     lastMemPrint = millis();
   }
 
-  devcapture::pollSerial();  // services the CMD: serial channel (see pollDevSerial below); keeps the dev channel alive even
-                             // when a Lua app blocks the loop inside a backend call (net.connect, http)
+  devcapture::pollSerial();  // services the CMD: serial channel (see pollDevSerial below); keeps the dev channel alive
+                             // even when a Lua app blocks the loop inside a backend call (net.connect, http)
 
   // Check for any user activity (button press or release) or active background work
   static unsigned long lastActivityTime = millis();

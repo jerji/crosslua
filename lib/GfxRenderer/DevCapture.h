@@ -6,7 +6,8 @@
 // prints the last published frame:
 //   SCREEN_START:<seq>:<activity>:<w>x<h>
 //   T <x> <y> <fontId> <text>            one per drawText (logical screen coordinates, y = top of line)
-//   R <x> <y> <w> <h> <color>            one per fillRect/fillRectDither (color: 16=black 1=white 5=lightgray 10=darkgray)
+//   R <x> <y> <w> <h> <color>            one per fillRect/fillRectDither
+//                                        (color: 16=black 1=white 5=lightgray 10=darkgray)
 //   SCREEN_END
 #ifdef CROSSLUA_DEV
 #include <Print.h>

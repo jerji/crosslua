@@ -1,6 +1,7 @@
 // fs.* and the module loader behind require(). Sandboxed to app:/data:/lib: scopes.
-#include <algorithm>
 #include <strings.h>
+
+#include <algorithm>
 #include <cstdio>
 #include <cstring>
 
@@ -51,7 +52,8 @@ bool validRel(const char* rel, const char** err) {
 
 bool resolveIn(Backend& b, Scope scope, const char* rel, char* out, size_t cap, const char** err) {
   if (scope == Scope::Sd) {
-    // The user's SD card outside the app sandbox: read-only (callers enforce), permission-gated, and never anything hidden
+    // The user's SD card outside the app sandbox: read-only (callers enforce), permission-gated, and never anything
+    // hidden
     // (.crosspoint = settings/credentials, .crosslua = other apps' data, any dot-name).
     const bool lib = b.libraryAllowed();
     if (!lib && b.grantCount() == 0) {
@@ -122,7 +124,6 @@ bool resolvePath(Backend& b, const char* spec, char* out, size_t cap, Scope* sco
   if (scope) *scope = sc;
   return resolveIn(b, sc, spec, out, cap, err);
 }
-
 
 // ---- storage grants -----------------------------------------------------------------------------------------------
 bool parseGrantPath(const char* in, char* out, size_t cap) {
@@ -215,6 +216,7 @@ bool pathArg(lua_State* L, int i, bool needWrite, char* out, size_t cap, Scope* 
   return true;
 }
 
+// cppcheck-suppress constParameterPointer // it writes through strrchr()'s result, cppcheck does not follow that
 void parentOf(char* path) {
   char* slash = strrchr(path, '/');
   if (slash && slash != path) *slash = '\0';
@@ -247,7 +249,8 @@ int fs_read(lua_State* L) {
   if (off > static_cast<size_t>(size)) return pushFail(L, "offset beyond end of file");
   size_t want = static_cast<size_t>(size) - off;
   if (lenN >= 0 && static_cast<size_t>(lenN) < want) want = static_cast<size_t>(lenN);
-  if (want > MAX_READ_BYTES) return pushFail(L, ranged ? "length too large" : "file too large (read it in ranges: fs.read(path, offset, len))");
+  if (want > MAX_READ_BYTES)
+    return pushFail(L, ranged ? "length too large" : "file too large (read it in ranges: fs.read(path, offset, len))");
   if (want == 0) {
     lua_pushliteral(L, "");
     return 1;
@@ -284,8 +287,9 @@ int fs_write_at(lua_State* L) {
   return 1;
 }
 
-// gfx.save_bmp(path) -> true | nil, err. The drawing buffer as it is right now (draw first; present is not needed), as a
-// 1-bit BMP in the panel's portrait orientation. Same write rules as fs.write: data: always, sd: only with a write grant.
+// gfx.save_bmp(path) -> true | nil, err. The drawing buffer as it is right now (draw first; present is not needed), as
+// a 1-bit BMP in the panel's portrait orientation. Same write rules as fs.write: data: always, sd: only with a write
+// grant.
 int gfx_save_bmp(lua_State* L) {
   char path[MAX_PATH_LEN + 80];
   Scope sc;
@@ -358,14 +362,16 @@ int fs_remove(lua_State* L) {
   return 1;
 }
 // fs.list(path) -> { "a.txt", "sub/", ... } (directories get a trailing slash), sorted
-// FAT stores LOCAL wall-clock time as a packed stamp: date = (year-1980) << 9 | month << 5 | day, time = hour << 11 | minute << 5 | sec/2.
-// Returns that wall-clock expressed as seconds since 1970 as if it were UTC (a plain, sortable, diffable number; there is no time
-// zone in the stamp). 0 = unknown or not a valid stamp.
+// FAT stores LOCAL wall-clock time as a packed stamp: date = (year-1980) << 9 | month << 5 | day, time = hour << 11 |
+// minute << 5 | sec/2. Returns that wall-clock expressed as seconds since 1970 as if it were UTC (a plain, sortable,
+// diffable number; there is no time zone in the stamp). 0 = unknown or not a valid stamp.
 int64_t fatToEpoch(uint32_t fat) {
   const uint32_t d = fat >> 16, t = fat & 0xFFFF;
   if (d == 0) return 0;
-  const int year = 1980 + static_cast<int>(d >> 9), mon = static_cast<int>((d >> 5) & 15), day = static_cast<int>(d & 31);
-  const int hour = static_cast<int>(t >> 11), min = static_cast<int>((t >> 5) & 63), sec = static_cast<int>((t & 31) * 2);
+  const int year = 1980 + static_cast<int>(d >> 9), mon = static_cast<int>((d >> 5) & 15),
+            day = static_cast<int>(d & 31);
+  const int hour = static_cast<int>(t >> 11), min = static_cast<int>((t >> 5) & 63),
+            sec = static_cast<int>((t & 31) * 2);
   if (mon < 1 || mon > 12 || day < 1 || day > 31 || hour > 23 || min > 59 || sec > 59) return 0;
   const int y = year - (mon <= 2 ? 1 : 0);  // days-from-civil (proleptic Gregorian), March-based year
   const int era = y / 400;
@@ -377,7 +383,8 @@ int64_t fatToEpoch(uint32_t fat) {
 }
 
 // Lua here has 32-bit integers (and 32-bit floats), so a number is only exact up to 2^31-1: sizes above 2 GiB read as
-// 2147483647 (never wrapped negative) and a time past 2038-01-19 (FAT allows 2107) is reported as unknown, not as a wrong date.
+// 2147483647 (never wrapped negative) and a time past 2038-01-19 (FAT allows 2107) is reported as unknown, not as a
+// wrong date.
 constexpr int64_t LUA_INT_MAX = 2147483647;
 
 // Pushes {size=, dir=, mtime=} (mtime only when the card has a stamp that fits).
@@ -409,7 +416,8 @@ int fs_stat(lua_State* L) {
 constexpr int LIST_MAX_NAMES = 512, LIST_MAX_DETAIL = 64, LIST_DEFAULT_DETAIL = 32;
 
 // fs.list(path [, {detail=false, offset=0, limit=N}]) -> array [, total]
-//   plain:  sorted names, folders end in "/" (unchanged). With an options table it also returns the total entry count and
+//   plain:  sorted names, folders end in "/" (unchanged). With an options table it also returns the total entry count
+//   and
 //           only the window offset..offset+limit (limit 1..512, default all).
 //   detail: the same window as tables {name=, dir=, size=, mtime=} (name has no trailing "/"); limit 1..64, default 32,
 //           because a table per entry is ~100 bytes of the ~96 KB Lua heap: page through big folders.
@@ -443,9 +451,11 @@ int fs_list(lua_State* L) {
       lua_pop(L, 1);
     }
   }
-  if (offset < 0 || offset > 100000 || offset != static_cast<int>(offset)) return pushFail(L, "offset must be an integer >= 0");
+  if (offset < 0 || offset > 100000 || offset != static_cast<int>(offset))
+    return pushFail(L, "offset must be an integer >= 0");
   const int maxLimit = detail ? LIST_MAX_DETAIL : LIST_MAX_NAMES;
-  if (limit < 0) limit = detail ? LIST_DEFAULT_DETAIL : LIST_MAX_NAMES;
+  if (limit < 0)
+    limit = detail ? LIST_DEFAULT_DETAIL : LIST_MAX_NAMES;
   else if (limit < 1 || limit > maxLimit || limit != static_cast<int>(limit)) {
     char msg[48];
     snprintf(msg, sizeof(msg), "limit must be an integer 1..%d", maxLimit);
@@ -458,7 +468,7 @@ int fs_list(lua_State* L) {
   char name[130];
   bool isDir = false;
   while (be(L).fsListNext(name, sizeof(name) - 1, &isDir)) {
-    if (n >= LIST_MAX_NAMES) break;  // sanity cap
+    if (n >= LIST_MAX_NAMES) break;                   // sanity cap
     if (sc == Scope::Sd && name[0] == '.') continue;  // hidden entries do not exist as far as an app can tell
     if (isDir) strcat(name, "/");
     lua_pushstring(L, name);
@@ -491,7 +501,8 @@ int fs_list(lua_State* L) {
     Backend::FsStat st;
     const int w = snprintf(child, sizeof(child), "%s/%s", path, entry);
     if (w < 0 || static_cast<size_t>(w) >= sizeof(child) || !be(L).fsStat(child, &st)) {
-      st = Backend::FsStat();  // vanished between the listing and the stat (or a path too long to ask about): size 0, no time
+      st = Backend::FsStat();  // vanished between the listing and the stat (or a path too long to ask about): size 0,
+                               // no time
       st.isDir = dir;
     }
     pushStat(L, st);
@@ -535,8 +546,8 @@ int mod_find(lua_State* L) {
   char rel[128];
   for (size_t i = 0; i <= nl; i++) {
     const char c = name[i];
-    const bool ok = (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '_' ||
-                    c == '.' || c == '\0';
+    const bool ok =
+        (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '_' || c == '.' || c == '\0';
     if (!ok) return pushFail(L, "bad module name (allowed: letters, digits, '_' and '.')");
     rel[i] = (c == '.') ? '/' : c;
   }
@@ -545,8 +556,10 @@ int mod_find(lua_State* L) {
     const char* scName;
     const char* suffix;
   };
-  static const Try tries[] = {{Scope::App, "app", ".lua"},      {Scope::App, "app", "/init.lua"},
-                              {Scope::Lib, "lib", ".lua"},      {Scope::Lib, "lib", "/init.lua"}};
+  static const Try tries[] = {{Scope::App, "app", ".lua"},
+                              {Scope::App, "app", "/init.lua"},
+                              {Scope::Lib, "lib", ".lua"},
+                              {Scope::Lib, "lib", "/init.lua"}};
   char relFile[160];
   char path[MAX_PATH_LEN + 80];
   char tried[640];  // the "tried" list for the error message (a plain buffer: no luaL_Buffer while we push values)
@@ -613,11 +626,12 @@ return require
 
 }  // namespace
 
-// ---- load(text [, chunkname [, mode [, env]]]) -> function | nil, err -------------------------------------------------
-// Text chunks ONLY: precompiled bytecode is a classic VM-escape/crash vector, so it is always refused (whatever `mode`
-// says). No reader functions (they could yield/allocate mid-parse), no files (fs scopes stay the only way to read).
-// `env`, when given (even nil), becomes the chunk's _ENV exactly like standard Lua. Failure is a plain nil,err (a
-// parse error, a chunk over 64 KB, or the VM heap budget running out while compiling) and never aborts the app.
+// ---- load(text [, chunkname [, mode [, env]]]) -> function | nil, err
+// ------------------------------------------------- Text chunks ONLY: precompiled bytecode is a classic VM-escape/crash
+// vector, so it is always refused (whatever `mode` says). No reader functions (they could yield/allocate mid-parse), no
+// files (fs scopes stay the only way to read). `env`, when given (even nil), becomes the chunk's _ENV exactly like
+// standard Lua. Failure is a plain nil,err (a parse error, a chunk over 64 KB, or the VM heap budget running out while
+// compiling) and never aborts the app.
 static constexpr size_t MAX_LOAD_BYTES = 64 * 1024;
 static int lua_load_text(lua_State* L) {
   if (lua_type(L, 1) != LUA_TSTRING) return pushFail(L, "load: text chunks only (a string is required)");
@@ -629,8 +643,10 @@ static int lua_load_text(lua_State* L) {
   if (len > MAX_LOAD_BYTES) return pushFail(L, "chunk too large (max 64 KB)");
   if (len > 0 && src[0] == LUA_SIGNATURE[0]) return pushFail(L, "precompiled chunks are not allowed");
   char chunk[64];
-  if (name) snprintf(chunk, sizeof(chunk), "%s", name);
-  else snprintf(chunk, sizeof(chunk), "=(load)");
+  if (name)
+    snprintf(chunk, sizeof(chunk), "%s", name);
+  else
+    snprintf(chunk, sizeof(chunk), "=(load)");
   if (luaL_loadbufferx(L, src, len, chunk, "t") != LUA_OK) {  // [.., err]
     lua_pushnil(L);
     lua_insert(L, -2);
@@ -660,13 +676,15 @@ int fs_rename(lua_State* L) {
 }
 
 void registerFs(lua_State* L, Ctx* c) {
-  static const luaL_Reg fs[] = {{"read", fs_read},     {"write", fs_write}, {"write_at", fs_write_at}, {"append", fs_append},
-                                {"exists", fs_exists}, {"size", fs_size},   {"mkdir", fs_mkdir},
-                                {"remove", fs_remove}, {"list", fs_list},   {"rename", fs_rename}, {"stat", fs_stat}, {nullptr, nullptr}};
+  static const luaL_Reg fs[] = {{"read", fs_read},     {"write", fs_write},   {"write_at", fs_write_at},
+                                {"append", fs_append}, {"exists", fs_exists}, {"size", fs_size},
+                                {"mkdir", fs_mkdir},   {"remove", fs_remove}, {"list", fs_list},
+                                {"rename", fs_rename}, {"stat", fs_stat},     {nullptr, nullptr}};
   regTable(L, c, "fs", fs);
 }
 
-// gfx.save_bmp shares fs.write's path rules but belongs to gfx, which is always present: registered eagerly, not with fs.
+// gfx.save_bmp shares fs.write's path rules but belongs to gfx, which is always present: registered eagerly, not with
+// fs.
 void registerGfxSaveBmp(lua_State* L) {
   lua_getglobal(L, "gfx");
   if (lua_istable(L, -1)) {

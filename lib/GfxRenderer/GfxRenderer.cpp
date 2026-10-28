@@ -1,7 +1,5 @@
 #include "GfxRenderer.h"
 
-#include "DevCapture.h"
-
 #include <BidiUtils.h>
 #include <BoardConfig.h>
 #include <BuildScratch.h>
@@ -16,6 +14,7 @@
 #include <algorithm>
 
 #include "../Memory/Memory.h"
+#include "DevCapture.h"
 #include "FontCacheManager.h"
 #include "GlyphBitmap.h"
 
