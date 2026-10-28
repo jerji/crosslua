@@ -1,0 +1,1 @@
+{"title": "Probe Sniffer", "description": "Passive: which devices probe for which network names. Receive only; exports CSV on confirm.", "permissions": ["network", "monitor"]}
