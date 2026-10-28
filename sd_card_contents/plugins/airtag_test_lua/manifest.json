@@ -1,0 +1,1 @@
+{"title": "AirTag Test", "description": "ACTIVE: broadcasts Apple Find My (offline-finding, AirTag-format) advertisements with random test keys until Back. Transmits.", "permissions": ["bluetooth"]}
