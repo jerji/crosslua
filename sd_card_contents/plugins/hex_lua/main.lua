@@ -334,6 +334,7 @@ local function playLoop()
 end
 
 -- ---------------------------------------------------------------- front door
+local linkedPlay  -- defined with PLAY NEARBY below
 local function frontRows()
   local rows = {}
   if game and not game.finished then rows[#rows + 1] = "RESUME GAME" end
@@ -392,7 +393,7 @@ local function linkedScreen(view, status)
 end
 
 -- One linked session, from the search screen to leaving. Returns to the menu.
-local function linkedPlay()
+function linkedPlay()
   local S = nearby.new(GAME_ID, "PUP " .. string.sub(system.mac(), 16, 17))
   local ok, err = S:start()
   if not ok then
