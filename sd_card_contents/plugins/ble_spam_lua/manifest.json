@@ -1,1 +1,1 @@
-{"title": "BLE Spam (Swift Pair)", "description": "ACTIVE: broadcasts Swift Pair pairing beacons (Windows pairing prompts) with a chosen name until Back. Transmits.", "permissions": ["bluetooth"]}
+{"title": "BLE Spam (Fast/Swift Pair)", "description": "ACTIVE: broadcasts Google Fast Pair (Android popups) and Microsoft Swift Pair (Windows prompts) pairing beacons with a chosen preset until Back. Transmits.", "permissions": ["bluetooth"]}
