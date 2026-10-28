@@ -90,9 +90,7 @@ local function for_each_legal_move(obs, fn)
         want = want + 1
       end
     end
-    if not usable or want < 2 then
-      -- skip
-    else
+    if usable and want >= 2 then
       local max_camels = obs.herd[obs.seat]
       if want < max_camels then max_camels = want end
       for camels = 0, max_camels do

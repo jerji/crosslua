@@ -27,7 +27,7 @@ local W, H = gfx.size()
 
 -- Forward declarations: the screen loops reference each other (a finished
 -- board delegates to the round screen, which deals back into the board).
-local draw_board, round_loop, board_loop, start_solo
+local draw_board, draw_round, round_loop, board_loop, start_solo
 
 -- ------------------------------------------------------------- app state
 local S = {
@@ -277,7 +277,7 @@ local function tap_market(slot)
   if S.sel.camel_take then clear_selection() end
   S.sel.mask = S.sel.mask ~ (1 << slot)
   if S.sel.mask ~= 0 then
-    for g = 0, 5 do S.sel.hand[g] = 0 end -- a take/drop, not a sale
+    for h = 0, 5 do S.sel.hand[h] = 0 end -- a take/drop, not a sale
     S.sel.camels = 0
   end
 end
