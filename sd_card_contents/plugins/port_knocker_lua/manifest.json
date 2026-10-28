@@ -1,0 +1,1 @@
+{"title": "Port Knocker", "description": "Connect to a typed list of TCP ports in order (knock sequence) to test or trigger port-knock listeners.", "permissions": ["network"]}
