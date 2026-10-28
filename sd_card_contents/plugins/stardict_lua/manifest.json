@@ -1,0 +1,1 @@
+{"title": "StarDict Lookup", "description": "Offline dictionary: looks words up in StarDict dictionaries in Dict/ (plain .dict or dictzip .dict.dz).", "storage": {"read": ["Dict"]}}
