@@ -86,6 +86,14 @@ budget, no leftover globals or modules, WiFi radio switched off. Nothing else is
 files. Use it to give a heavy sub-app a lean start (a launcher that holds a menu, then restarts into a worker script). Errors
 are values (`entry must be a plain .lua file name...`, `no such entry script`); on success the call never returns.
 
+`app.install_plugin(zip_path)` → `true, count` | `false, err` | `nil, err`. Bulk-extracts a plugins bundle (a zip whose
+entries are `plugins/<category>/<app>/<file>…`, i.e. the whole `crosslua-apps-*.zip` — many apps at once) into `/plugins/`.
+Needs the `"plugin_install"` manifest permission **and** user approval (separate from `network`, so an app that merely talks
+to a server cannot overwrite the plugin tree). Every entry path is validated (under `plugins/`, no `..`, no absolute) before
+anything is written; a per-app `.installing` marker guards each app so a crash mid-install quarantines only the app it was
+on. `zip_path` is `data:` or `sd:` (`sd:` needs `library`/a grant). `count` is files written. The new/updated apps appear in
+Home → Plugins the next time it opens (it rescans).
+
 ## system
 `system.millis()` (31-bit, wraps ~24 days — compare with subtraction) · `system.heap()` → free, min_free, largest free block (device RAM) ·
 `system.lua_mem()` → used, peak, budget (this app's Lua heap) · `system.battery()` → percent · `system.language()` → the UI language's native display name (`"English"`, `"Français"`, …) · `system.battery_info()` → `{percent, millivolts, charging, external_power}` (unknown fields omitted; `charging` reflects the charger IC, `external_power` stays true on a full battery; `nil, "no battery on this device"` when the board has none) · `system.last_wake()` → `"timer" | "button" | "power-on" | "other"` — what woke the previous cycle

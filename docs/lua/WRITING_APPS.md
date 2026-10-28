@@ -45,7 +45,7 @@ never hard-freeze the device. Copy it verbatim.
 
 - `permissions` — gate the sensitive APIs. Each one that your app actually calls fires a native
   approval dialog the user must accept. List *only* what you use. Known values: `library`, `network`,
-  `listen`, `audio`, `microphone`, `hotspot`, `espnow`, `monitor`, `tx`, `bluetooth`.
+  `listen`, `audio`, `microphone`, `hotspot`, `espnow`, `monitor`, `tx`, `bluetooth`, `plugin_install`.
 - `storage` — SD-card grants for *specific folders* without the whole-card `library` permission
   (`read` = folders you may read, `write` = folders you may write). Prefer this over `library`.
 
