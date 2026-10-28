@@ -1,0 +1,1 @@
+{"title": "Fire", "description": "ACTIVE multi-mode RF stress: deauth (whole AP or one typed client) or beacon flood. Transmits until Back.", "permissions": ["network", "tx"]}
