@@ -11,6 +11,7 @@ local URL_FILE = "data:url.txt"
 local DEFAULT_URL = "https://github.com/jerji/crosslua/releases/download/2.1.0-crosslua.1/crosslua-apps-2.1.0-crosslua.1.zip"
 
 local W, H
+local fail  -- forward-declared so main() can call it before its definition below
 
 local function main()
   W, H = gfx.size()
@@ -55,7 +56,7 @@ local function main()
   input.wait()
 end
 
-function fail(msg)
+fail = function(msg)
   gfx.clear(); gfx.text(16, 10, "Failed", "ui12", "b")
   gfx.line(0, 44, W - 1, 44)
   gfx.text(16, 60, (msg or "error"):sub(1, 44), "small")

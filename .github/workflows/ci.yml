@@ -242,11 +242,15 @@ jobs:
     steps:
       - uses: actions/checkout@v6
 
-      - name: Install Lua (syntax check for packaged .lua files)
-        run: sudo apt-get update && sudo apt-get install -y lua5.4
+      - name: Install Lua (syntax + lint of packaged .lua files)
+        run: sudo apt-get update && sudo apt-get install -y lua5.4 lua-check
 
       - name: Build the zips
         run: python3 scripts/package_sd_card.py ci dist
+
+      - name: Lint the apps (luacheck, informational)
+        continue-on-error: true
+        run: luacheck --codes sd_card_contents/plugins/ || true
 
       - name: Upload the zips
         uses: actions/upload-artifact@v6
