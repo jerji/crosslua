@@ -1,0 +1,1 @@
+{"title": "Mesh Chat", "description": "Broadcast text chat over ESP-NOW with nearby e-readers on the same channel. Plaintext: anyone in range can read it.", "permissions": ["network", "espnow"]}
