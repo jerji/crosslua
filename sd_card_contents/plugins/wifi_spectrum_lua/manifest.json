@@ -1,0 +1,1 @@
+{"title": "WiFi Spectrum", "description": "Live 2.4 GHz spectrum: strongest beacon per channel. Confirm exports the APs heard to CSV. Receive only.", "permissions": ["network", "monitor"]}
