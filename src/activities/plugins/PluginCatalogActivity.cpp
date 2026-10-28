@@ -207,6 +207,7 @@ std::vector<PluginRef> discoverPlugins() {
     ref.name = e.name;
     ref.dir = e.dir;
     ref.title = e.name;
+    ref.category = e.category;
     // Browser-only plugins (no device.json) stay listed so an install is
     // visibly installed, but carry no manifest to open (empty manifestPath).
     if (e.hasDevice) ref.manifestPath = e.dir + "/device.json";
@@ -224,6 +225,9 @@ std::vector<PluginRef> discoverPlugins() {
     const bool lhsHub = lhs.name == "pluginhub";
     const bool rhsHub = rhs.name == "pluginhub";
     if (lhsHub != rhsHub) return lhsHub;
+    // Categorised apps group together; within a category, title then folder name.
+    const int catOrder = strcasecmp(lhs.category.c_str(), rhs.category.c_str());
+    if (catOrder != 0) return catOrder < 0;
     const int titleOrder = strcasecmp(lhs.title.c_str(), rhs.title.c_str());
     return titleOrder != 0 ? titleOrder < 0 : strcasecmp(lhs.name.c_str(), rhs.name.c_str()) < 0;
   });
@@ -1702,7 +1706,9 @@ void PluginCatalogActivity::rebuildRowItems() {
   if (state == State::PLUGIN_PICKER) {
     if (showOpds) addRow(tr(STR_OPDS_BROWSER), tr(STR_OPDS_SERVERS));
     if (showPluginHubInstallRow) addRow(tr(STR_PLUGIN_HUB), tr(STR_PLUGIN_HUB_DESCRIPTION), ">");
+    std::string prevCategory = "\x01";  // impossible sentinel, so the first plugin's category always "starts"
     for (const auto& plugin : installedPlugins) {
+      const bool categoryStart = plugin.category != prevCategory;
       //   None       -> web-only hint; chevron only with a readme
       //   Catalog    -> browsable, own description, chevron
       //   Background -> events-only, own description, chevron only with a readme
@@ -1721,6 +1727,9 @@ void PluginCatalogActivity::rebuildRowItems() {
           addRow(plugin.title.c_str(), subtitle ? subtitle : "Lua app", ">");
           break;
       }
+      // A category heading shares the first app's row (no index shift). Uncategorized apps get no heading.
+      if (categoryStart && !plugin.category.empty()) rowItems.back().sectionHeading = plugin.category.c_str();
+      prevCategory = plugin.category;
     }
   } else if (state == State::LIST_PICKER) {
     for (const auto& list : manifest.browseLists) addRow(list.title.c_str());

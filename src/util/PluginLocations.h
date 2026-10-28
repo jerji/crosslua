@@ -80,8 +80,9 @@ inline bool isNewerVersion(const std::string& catalog, const std::string& instal
 
 // One SD plugin folder, classified by the marker files it carries.
 struct Entry {
-  std::string name;          // folder name
-  std::string dir;           // "<root>/<name>"
+  std::string name;          // folder name (unique across the card today)
+  std::string dir;           // "<root>/<name>" (flat) or "<root>/<category>/<name>"
+  std::string category;      // "" for apps directly under a root; otherwise the parent folder name
   bool hasPluginJs = false;  // browser-side plugin (plugin.js)
   bool hasDevice = false;    // on-device catalog manifest (device.json)
   bool hasManifest = false;  // web UI card metadata (manifest.json)

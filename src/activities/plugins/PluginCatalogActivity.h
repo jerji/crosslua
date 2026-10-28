@@ -25,6 +25,7 @@ struct PluginRef {
   std::string description;   // one-line summary, if provided
   std::string manifestPath;  // device.json path, "" for a web-only plugin
   std::string readmePath;    // README.md path when present
+  std::string category;      // "" (uncategorized) or the parent category folder name
   PluginLocations::DeviceKind deviceKind = PluginLocations::DeviceKind::None;
 };
 

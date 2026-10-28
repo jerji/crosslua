@@ -8,11 +8,24 @@
 
 namespace PluginLocations {
 
+namespace {
+// The marker files a CrossPoint/CrossLua plugin folder can carry. Returns true when the folder is a plugin.
+bool classifyMarkers(const std::string& dir, Entry& e) {
+  e.hasPluginJs = Storage.exists((dir + "/plugin.js").c_str());
+  e.hasDevice = Storage.exists((dir + "/device.json").c_str());
+  e.hasManifest = Storage.exists((dir + "/manifest.json").c_str());
+  e.hasLua = Storage.exists((dir + "/main.lua").c_str());
+  return e.hasPluginJs || e.hasDevice || e.hasManifest || e.hasLua;
+}
+}  // namespace
+
+// Plugins are either a direct child of a root (flat, "uncategorized") or one level deeper under a category folder.
+// A direct child with no plugin markers is a category: its direct children that carry markers are its apps.
 std::vector<Entry> scanPluginsOnDisk() {
   std::vector<Entry> plugins;
-  plugins.reserve(8);
-  std::vector<std::string> seen;
-  seen.reserve(8);
+  plugins.reserve(16);
+  std::vector<std::string> seen;  // "<category>/<name>" — earlier roots win on collisions
+  seen.reserve(16);
   for (size_t r = 0; r < ROOT_COUNT; r++) {
     HalFile root = Storage.open(ROOTS[r]);
     if (!root || !root.isDirectory()) continue;
@@ -20,19 +33,35 @@ std::vector<Entry> scanPluginsOnDisk() {
       if (!entry.isDirectory()) continue;
       char name[128];
       if (entry.getName(name, sizeof(name)) == 0 || name[0] == '.') continue;
-      if (std::find(seen.begin(), seen.end(), name) != seen.end()) continue;
-      // Claimed even without markers: findPluginDir resolves this name here,
-      // so a same-named folder in a later root must not be reported instead.
-      seen.emplace_back(name);
+      const std::string childDir = std::string(ROOTS[r]) + "/" + name;
 
-      Entry e;
-      e.name = name;
-      e.dir = std::string(ROOTS[r]) + "/" + name;
-      e.hasPluginJs = Storage.exists((e.dir + "/plugin.js").c_str());
-      e.hasDevice = Storage.exists((e.dir + "/device.json").c_str());
-      e.hasManifest = Storage.exists((e.dir + "/manifest.json").c_str());
-      e.hasLua = Storage.exists((e.dir + "/main.lua").c_str());
-      if (e.hasPluginJs || e.hasDevice || e.hasManifest || e.hasLua) plugins.push_back(std::move(e));
+      Entry flat;
+      flat.name = name;
+      flat.dir = childDir;
+      if (classifyMarkers(childDir, flat)) {
+        if (std::find(seen.begin(), seen.end(), "/" + std::string(name)) != seen.end()) continue;
+        seen.emplace_back("/" + std::string(name));
+        plugins.push_back(std::move(flat));
+        continue;
+      }
+
+      // No markers -> a category folder. Its direct children that carry markers are its apps.
+      HalFile cat = Storage.open(childDir.c_str());
+      if (!cat || !cat.isDirectory()) continue;
+      for (HalFile sub = cat.openNextFile(); sub; sub = cat.openNextFile()) {
+        if (!sub.isDirectory()) continue;
+        char subname[128];
+        if (sub.getName(subname, sizeof(subname)) == 0 || subname[0] == '.') continue;
+        Entry e;
+        e.name = subname;
+        e.dir = childDir + "/" + subname;
+        if (!classifyMarkers(e.dir, e)) continue;
+        const std::string key = name + std::string("/") + subname;
+        if (std::find(seen.begin(), seen.end(), key) != seen.end()) continue;
+        seen.emplace_back(key);
+        e.category = name;
+        plugins.push_back(std::move(e));
+      }
     }
   }
   return plugins;
@@ -58,10 +87,18 @@ bool anyPluginInstalledOnDisk() {
       if (!entry.isDirectory()) continue;
       char name[128];
       if (entry.getName(name, sizeof(name)) == 0 || name[0] == '.') continue;
-      const std::string dir = std::string(ROOTS[r]) + "/" + name;
-      if (Storage.exists((dir + "/plugin.js").c_str()) || Storage.exists((dir + "/device.json").c_str()) ||
-          Storage.exists((dir + "/manifest.json").c_str()) || Storage.exists((dir + "/main.lua").c_str())) {
-        return true;
+      const std::string childDir = std::string(ROOTS[r]) + "/" + name;
+      Entry e;
+      if (classifyMarkers(childDir, e)) return true;
+      // Category folder? Check its direct children.
+      HalFile cat = Storage.open(childDir.c_str());
+      if (!cat || !cat.isDirectory()) continue;
+      for (HalFile sub = cat.openNextFile(); sub; sub = cat.openNextFile()) {
+        if (!sub.isDirectory()) continue;
+        char subname[128];
+        if (sub.getName(subname, sizeof(subname)) == 0 || subname[0] == '.') continue;
+        Entry se;
+        if (classifyMarkers(childDir + "/" + subname, se)) return true;
       }
     }
   }
@@ -69,9 +106,22 @@ bool anyPluginInstalledOnDisk() {
 }
 
 std::string findPluginDirOnDisk(const char* name) {
+  // Flat (uncategorized) first, so an app directly under a root wins over a same-named one in a category.
   for (size_t i = 0; i < ROOT_COUNT; i++) {
     std::string dir = std::string(ROOTS[i]) + "/" + name;
     if (Storage.exists(dir.c_str())) return dir;
+  }
+  // Then one level deeper under any category folder.
+  for (size_t i = 0; i < ROOT_COUNT; i++) {
+    HalFile root = Storage.open(ROOTS[i]);
+    if (!root || !root.isDirectory()) continue;
+    for (HalFile cat = root.openNextFile(); cat; cat = root.openNextFile()) {
+      if (!cat.isDirectory()) continue;
+      char cname[128];
+      if (cat.getName(cname, sizeof(cname)) == 0 || cname[0] == '.') continue;
+      std::string dir = std::string(ROOTS[i]) + "/" + cname + "/" + name;
+      if (Storage.exists(dir.c_str())) return dir;
+    }
   }
   return {};
 }
