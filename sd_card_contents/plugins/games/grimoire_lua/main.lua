@@ -193,8 +193,7 @@ local function main()
     end
 end
 
-if _G and _G.__GRIMOIRE_SHIM_TEST then
-else
+if not (_G and _G.__GRIMOIRE_SHIM_TEST) then
     main()
 end
 

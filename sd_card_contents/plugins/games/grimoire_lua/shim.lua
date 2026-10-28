@@ -475,7 +475,7 @@ S.globals = {
     next = next, rawget = rawget, rawset = rawset, rawequal = rawequal,
     setmetatable = setmetatable, getmetatable = getmetatable,
     assert = assert, print = print, collectgarbage = collectgarbage,
-    unpack = table.unpack or unpack, _VERSION = _VERSION,
+    unpack = table.unpack, _VERSION = _VERSION,
 }
 
 -- Fresh globals table for one spell; __index chains to the shim tables.
