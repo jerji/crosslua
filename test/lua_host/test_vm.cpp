@@ -1369,6 +1369,18 @@ struct MockBackend : Backend {
       if (f.first.rfind(std::string(p) + "/", 0) == 0) return false;  // non-empty dir
     return dirs.erase(p) > 0;
   }
+  bool fsRmdir(const char* p) override {
+    const std::string prefix = std::string(p) + "/";
+    for (auto it = files.begin(); it != files.end();) {
+      if (it->first.compare(0, prefix.size(), prefix) == 0) it = files.erase(it);
+      else ++it;
+    }
+    for (auto it = dirs.begin(); it != dirs.end();) {
+      if (*it == p || it->compare(0, prefix.size(), prefix) == 0) it = dirs.erase(it);
+      else ++it;
+    }
+    return true;
+  }
   bool fsListBegin(const char* p) override {
     listing.clear();
     listPos = 0;
@@ -2739,6 +2751,37 @@ int main() {
         if (i < be.logs.size() && be.logs[i] != want[i])
           printf("    aes_gcm #%zu got '%s' want '%s'\n", i + 1, be.logs[i].c_str(), want[i]);
         CHECK(be.logs[i] == want[i]);
+      }
+    }
+    TEST("fs.rmdir: recursive delete vs fs.remove (empty-only), guards");
+    {
+      MockBackend be;
+      be.files["/.crosslua/data/test/nest/a.txt"] = "a";
+      be.files["/.crosslua/data/test/nest/deep/b.txt"] = "b";
+      be.files["/.crosslua/data/test/keep.txt"] = "keep";
+      LuaVm vm;
+      CHECK(vm.open(128 * 1024));
+      registerApi(vm, be);
+      const char* script = R"LUA(
+        print(fs.exists("data:nest"), fs.exists("data:nest/deep/b.txt"))
+        print(fs.remove("data:nest"))                       -- non-empty dir: refused (rmdir is the recursive one)
+        print(fs.rmdir("data:nest"))                        -- recursive delete: ok
+        print(fs.exists("data:nest"), fs.exists("data:nest/deep/b.txt"), fs.exists("data:keep.txt"))
+        print(fs.rmdir("data:keep.txt"))                    -- a file: not a directory
+        print(fs.rmdir("data:nope"))                        -- missing
+        print(fs.rmdir("data:"))                            -- the data root is off-limits
+      )LUA";
+      CHECK(vm.load("t", script, strlen(script)));
+      CHECK(run(vm, be, 200000) == Status::Finished);
+      CHECK(be.logs.size() == 7);
+      if (be.logs.size() == 7) {
+        CHECK(be.logs[0] == "true\ttrue");
+        CHECK(be.logs[1] == "nil\tcannot remove (directories must be empty)");
+        CHECK(be.logs[2] == "true");
+        CHECK(be.logs[3] == "false\tfalse\ttrue");
+        CHECK(be.logs[4] == "nil\tnot a directory (use fs.remove)");
+        CHECK(be.logs[5] == "nil\tno such file or directory");
+        CHECK(be.logs[6] == "nil\tcannot remove the data root");
       }
     }
     TEST("batch A: wifi.scan/time.sync+set/fs.rename/system.mac/gfx.qr/rounded/frontlight");

@@ -2274,6 +2274,30 @@ class LuaAppActivity::Backend final : public crosslua::Backend {
     return Storage.exists(path) ? fsSize(path) == -2 : Storage.mkdir(path, true);
   }
   bool fsRemove(const char* path) override { return fsSize(path) == -2 ? Storage.rmdir(path) : Storage.remove(path); }
+  bool fsRmdir(const char* path) override {
+    // Recursive delete: remove every entry under `path`, then the (now-empty) directory itself. Mirrors the
+    // fsListNext iteration (skip . and ..), but keeps hidden/temp files — a recursive delete is a full wipe.
+    std::function<bool(const std::string&)> wipe = [&](const std::string& p) -> bool {
+      HalFile dir = Storage.open(p.c_str());
+      if (!dir || !dir.isDirectory()) return false;
+      for (;;) {
+        HalFile e = dir.openNextFile();
+        if (!e) break;
+        char name[crosslua::MAX_PATH_LEN + 1];
+        if (e.getName(name, sizeof(name)) == 0) continue;
+        if (name[0] == '.' && (name[1] == '\0' || (name[1] == '.' && name[2] == '\0'))) continue;
+        const std::string child = p + "/" + name;
+        if (e.isDirectory()) {
+          if (!wipe(child)) return false;
+        } else if (!Storage.remove(child.c_str())) {
+          return false;
+        }
+      }
+      dir.close();
+      return Storage.rmdir(p.c_str());
+    };
+    return wipe(path);
+  }
   bool fsListBegin(const char* path) override {
     listDir_ = Storage.open(path);
     return listDir_ && listDir_.isDirectory();

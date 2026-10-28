@@ -82,6 +82,7 @@ class Backend {
   virtual bool saveScreenBmp(const char* absPath, char* err, size_t errCap) = 0;
   virtual bool fsMkdir(const char* path) = 0;   // recursive; ok if it exists
   virtual bool fsRemove(const char* path) = 0;  // file or empty directory
+  virtual bool fsRmdir(const char* path) = 0;   // recursive: delete a directory and everything under it
   // One iterator at a time; fsListBegin() closes any previous one.
   virtual bool fsListBegin(const char* path) = 0;
   virtual bool fsListNext(char* name, size_t cap, bool* isDir) = 0;  // false at end
