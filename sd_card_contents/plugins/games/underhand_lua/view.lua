@@ -176,9 +176,8 @@ function M.costStr(game, cards, k)
   for r = 1, 6 do
     local n = cost[r]
     if n > 0 and n ~= engine.KON then
-      if o.swap and (r == engine.CULTIST or r == engine.PRISONER) then
-        -- shown once, combined
-      else
+      -- cultist and prisoner are shown once, combined, when swapped
+      if not (o.swap and (r == engine.CULTIST or r == engine.PRISONER)) then
         parts[#parts + 1] = "-" .. n .. " " .. RES[r]
       end
     end

@@ -157,6 +157,8 @@ local function __main()
     return rows
   end
 
+  local FONT_TITLE, FONT_BODY, FONT_SMALL = "sans18", "sans14", "ui12"
+
   -- rendering --------------------------------------------------------------
   local function fillRect(x, y, w, h)
     gfx.rect(x, y, w, h, true, true)
@@ -176,8 +178,6 @@ local function __main()
   local function wrap(textStr, font, maxW)
     return view.wrap(textStr, font, maxW)
   end
-
-  local FONT_TITLE, FONT_BODY, FONT_SMALL = "sans18", "sans14", "ui12"
 
   local function drawMenu()
     gfx.clear()
