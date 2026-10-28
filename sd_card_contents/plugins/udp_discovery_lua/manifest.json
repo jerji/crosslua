@@ -1,0 +1,1 @@
+{"title": "UDP Discovery", "description": "Find CrossPoint devices on your LAN (UDP 8134 'hello'), or answer as one", "permissions": ["network"]}
