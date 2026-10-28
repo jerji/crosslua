@@ -1,0 +1,5 @@
+{
+  "title": "Chess",
+  "description": "Chess against the device or a nearby friend.",
+  "permissions": ["network", "espnow"]
+}
