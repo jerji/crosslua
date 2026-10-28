@@ -1,5 +1,5 @@
 {
   "title": "Yahtzee",
-  "description": "Five dice, thirteen boxes. Roll, keep, score. Solo vs the device.",
-  "permissions": []
+  "description": "Five dice, thirteen boxes. Roll, keep, score. Solo vs the device, or PLAY NEARBY with a second device over ESP-NOW.",
+  "permissions": ["network", "espnow"]
 }

@@ -9,6 +9,11 @@
 --   Confirm     act on the selected item (hold a die, ROLL, take a box)
 --   Left/Right  move through the dice band (five dice + the ROLL capsule)
 --   Up/Down     move through the thirteen boxes
+-- PLAY NEARBY (crossplay docs/apps/yahtzee.md, spec play-nearby §4.3): two devices over
+-- ESP-NOW; the cards and dice travel as the 40-byte game blob (wire.lua).
+
+local nearby = require("nearby")
+local wire = require("wire")
 
 -- ============================================================ CORE
 -- Rules ported one-for-one from the C++ core. Pure: no gfx, no input.
@@ -317,6 +322,11 @@ local screen = "menu"
 local menuSel = 1
 local howtoPage = 1
 local recorded = false
+local GAME_ID = 0x0801
+local S = nil            -- PLAY NEARBY session, nil when playing the device
+local mySeat = 0         -- seat 0 = first mover (the wire is by seat, see wire.lua)
+local myAgain = false    -- I have said PLAY AGAIN this round
+local linkErr = ""       -- why PLAY NEARBY would not start
 
 local function slotX(i) return BAND_LEFT + i * (DIE + DGAP) end
 local function stageOf()
@@ -418,11 +428,11 @@ local function drawMenu()
   gfx.line(0, 46, W, 46)
   gfx.text(MARGIN, 62, string.format("%d PLAYED   %d WON", history.played, history.won), "small")
   gfx.line(MARGIN, 62 + gfx.line_height("small") + 8, W - MARGIN, 62 + gfx.line_height("small") + 8)
-  for i = 1, 2 do
-    local y = 96 + (i - 1) * 62
-    if menuSel == i then gfx.rect(MARGIN, y, W - 2 * MARGIN, 50, true) end
-    gfx.text(28, y + 12, i == 1 and "PLAY" or "HOW TO PLAY", "ui12",
-      menuSel == i and "bw" or "b")
+  for i = 1, 3 do
+    local y = 96 + (i - 1) * 52
+    local label = ({ "PLAY", "PLAY NEARBY", "HOW TO PLAY" })[i]
+    if menuSel == i then gfx.rect(MARGIN, y, W - 2 * MARGIN, 44, true) end
+    gfx.text(28, y + 10, label, "ui12", menuSel == i and "bw" or "b")
   end
   gfx.text(MARGIN, 250, "PERSONAL BEST", "small")
   gfx.text(MARGIN, 268, tostring(history.best), "sans18", "b")
@@ -434,6 +444,7 @@ local function drawMenu()
     gfx.text(W // 2, ty + hs + 10, history.yz .. " YAHTZEES ROLLED", "small", "c")
   end
   drawHints("UP/DOWN: MOVE   CONFIRM: SELECT", "Exit", "Select", "", "")
+  if linkErr ~= "" then gfx.text(MARGIN, H - 130, linkErr, "small") end
   gfx.present()
 end
 
@@ -628,7 +639,9 @@ local function drawResult()
     gfx.text(W - MARGIN, y,
       string.format("%d - %d", bonusEarned(mine), bonusEarned(theirs)), "small", "r")
   end
-  drawHints("CONFIRM: PLAY AGAIN", "Menu", "Again", "", "")
+  local caption = "CONFIRM: PLAY AGAIN"
+  if S then caption = myAgain and "WAITING FOR THEM TO SAY PLAY AGAIN" or "CONFIRM: PLAY AGAIN" end
+  drawHints(caption, "Menu", "Again", "", "")
   gfx.present()
 end
 
@@ -653,22 +666,224 @@ local function recordResult()
   saveHistory()
 end
 
+-- ============================================================ PLAY NEARBY
+-- The link (nearby.lua) carries the whole state after every change of mine: roll, hold,
+-- or box. My card is g.card[1] and g.turn 0 is my turn; the wire is by seat, so both
+-- sides map through mySeat (seat 0 is the first mover, and it flips each round).
+
+local function drawLinkWait()
+  gfx.clear()
+  gfx.rect(0, 0, W, 44, true)
+  gfx.text(16, 10, "YAHTZEE  PLAY NEARBY", "sans18", "bw")
+  gfx.line(0, 46, W, 46)
+  gfx.text(W // 2, 300, "LOOKING FOR A PLAYER", "sans18", "c")
+  gfx.text(W // 2, 344, "Turn on PLAY NEARBY on the other device.", "small", "c")
+  drawHints("WAITING FOR A PARTNER", "Cancel", "", "", "")
+  gfx.present()
+end
+
+local function drawLinkEnd()
+  gfx.clear()
+  gfx.rect(0, 0, W, 44, true)
+  gfx.text(16, 10, "YAHTZEE  PLAY NEARBY", "sans18", "bw")
+  gfx.line(0, 46, W, 46)
+  gfx.text(W // 2, 300, (S and S.reason == "lost") and "LOST CONNECTION" or "THEY LEFT", "sans18", "c")
+  drawHints("THE MATCH IS OVER", "Menu", "", "", "")
+  gfx.present()
+end
+
+local function seatCards()
+  if mySeat == 0 then return { [0] = g.card[1], [1] = g.card[2] } end
+  return { [0] = g.card[2], [1] = g.card[1] }
+end
+
+local function sendLink()
+  local turnSeat = (g.turn == 0) and mySeat or (1 - mySeat)
+  S:sendState(system.millis(), wire.pack(seatCards(), g.die, g.held, g.rolls, turnSeat))
+end
+
+local function applyBlob(cards, die, held, rolls, turnSeat)
+  g.card = { cards[mySeat], cards[1 - mySeat] }
+  g.die, g.held, g.rolls = die, held, rolls
+  g.turn = (turnSeat == mySeat) and 0 or 1
+end
+
+local function leaveLink()
+  if S then S:stop(system.millis()) end
+  S = nil
+  myAgain = false
+  screen = "menu"
+  drawMenu()
+end
+
+local function startLink()
+  S = nearby.new(GAME_ID, "PUP " .. string.sub(system.mac(), 16, 17))
+  local ok, err = S:start()
+  if not ok then
+    S = nil
+    linkErr = "RADIO WILL NOT START: " .. tostring(err):sub(1, 30)
+    drawMenu()
+    return
+  end
+  linkErr = ""
+  screen = "linkwait"
+  drawLinkWait()
+end
+
+-- a fresh match or round; seat 0 opens. The caller redraws.
+local function beginMatch()
+  mySeat = S.iFirst and 0 or 1
+  newGame()
+  g.turn = (mySeat == 0) and 0 or 1
+  myAgain = false
+  screen = "card"
+end
+
+local function startRound()
+  S.iFirst = not S.iFirst
+  S:newRound()
+  beginMatch()
+end
+
+local function redraw()
+  if screen == "menu" then drawMenu()
+  elseif screen == "card" then drawCard()
+  elseif screen == "result" then drawResult()
+  elseif screen == "linkwait" then drawLinkWait()
+  elseif screen == "linkend" then drawLinkEnd()
+  end
+end
+
+-- Every pass: pump the radio, apply a match, the peer's state, a rematch, a peer
+-- leaving. Redraws only when something changed.
+local function pollLink()
+  if not S then return end
+  local now = system.millis()
+  S:pump(now)
+  S:tick(now)
+  local dirty = false
+  if S:takeMatch() then
+    beginMatch()
+    dirty = true
+  end
+  local blob = S:takeState()
+  if blob then
+    local cards, die, held, rolls, turnSeat = wire.unpack(blob)
+    if cards then
+      -- a state while I am on the result screen can only open round two (the peer
+      -- started it, which needs my PLAY AGAIN note)
+      if screen == "result" then startRound() end
+      applyBlob(cards, die, held, rolls, turnSeat)
+      if over(g) then
+        if not recorded then recordResult() end
+        screen = "result"
+      else
+        screen = "card"
+      end
+      dirty = true
+    end
+  end
+  if screen == "result" and myAgain and S.peerAgain then
+    startRound()
+    dirty = true
+  end
+  if S.phase == "ended" and screen ~= "linkend" then
+    screen = "linkend"
+    dirty = true
+  end
+  if dirty then redraw() end
+end
+
+-- My turn on the card: the same keys as the device game, and every change goes over the air.
+local function linkCardKey(ev)
+  if g.turn ~= 0 or over(g) then return end
+  if g.rolls == 0 then cursor.zone, cursor.slot = "band", 5 end
+  local stage = stageOf()
+  if ev == "up" or ev == "down" then
+    if stage ~= "fresh" then
+      if cursor.zone == "band" then
+        cursor.zone = "card"
+        cursor.cat = 0
+      else
+        cursor.cat = (cursor.cat + (ev == "up" and -1 or 1) + CATS) % CATS
+      end
+      drawCard()
+    end
+  elseif ev == "left" or ev == "right" then
+    if cursor.zone == "card" then
+      cursor.zone = "band"
+      drawCard()
+    elseif stage ~= "fresh" then
+      cursor.slot = (cursor.slot + (ev == "left" and -1 or 1) + 6) % 6
+      drawCard()
+    end
+  elseif ev == "confirm" then
+    local acted = false
+    if cursor.zone == "band" then
+      if cursor.slot < 5 then
+        acted = toggleHold(g, cursor.slot + 1)
+      elseif g.rolls < ROLLS then
+        acted = roll(g)
+      end
+    else
+      if take(g, cursor.cat) then
+        rememberYahtzee()
+        acted = true
+      end
+    end
+    if acted then
+      cursor.zone, cursor.slot = "band", 5
+      sendLink()
+      if over(g) then
+        recordResult()
+        screen = "result"
+        drawResult()
+      else
+        drawCard()
+      end
+    end
+  end
+end
+
+-- Result screen in a match: confirm asks for another game (both must), back leaves.
+local function linkResultKey(ev)
+  if ev == "confirm" then
+    if not myAgain then
+      myAgain = true
+      S:say(system.millis(), nearby.NOTE_PLAY_AGAIN)
+      if S.peerAgain then startRound() end
+      redraw()
+    end
+  elseif ev == "back" then
+    leaveLink()
+  end
+end
+
 -- ============================================================ MAIN
 local function __main()
   loadHistory()
   newGame()
   drawMenu()
   while true do
-    local ev = input.wait()
+    pollLink()
+    -- while linked, wake every 100 ms so the radio keeps moving; "none" = a quiet tick
+    local ev
+    if S then ev = input.wait(100) else ev = input.wait() end
+    ev = ev or "none"
     if screen == "menu" then
-      if ev == "up" or ev == "down" then
-        menuSel = menuSel == 1 and 2 or 1
+      if ev == "up" then
+        menuSel = (menuSel - 2) % 3 + 1
+        drawMenu()
+      elseif ev == "down" then
+        menuSel = menuSel % 3 + 1
         drawMenu()
       elseif ev == "confirm" then
         if menuSel == 1 then
           newGame()
           screen = "card"
           drawCard()
+        elseif menuSel == 2 then
+          startLink()
         else
           howtoPage = 1
           screen = "howto"
@@ -691,8 +906,14 @@ local function __main()
       end
     elseif screen == "card" then
       if ev == "back" then
-        screen = "menu"
-        drawMenu()
+        if S then
+          leaveLink()
+        else
+          screen = "menu"
+          drawMenu()
+        end
+      elseif screen == "card" and S then
+        linkCardKey(ev)
       elseif g.turn == 1 and not over(g) then
         -- The opponent moves one step per key press, so its turn is watchable.
         aiStep(g)
@@ -755,6 +976,12 @@ local function __main()
           end
         end
       end
+    elseif screen == "linkwait" then
+      if ev == "back" then leaveLink() end
+    elseif screen == "linkend" then
+      if ev == "confirm" or ev == "back" then leaveLink() end
+    elseif screen == "result" and S then
+      linkResultKey(ev)
     elseif screen == "result" then
       if ev == "confirm" then
         newGame()
