@@ -72,6 +72,7 @@
 #include "lua/LuaVm.h"
 #include "lua/PermText.h"
 #include "network/HttpDownloader.h"
+#include "network/FirmwareBoardTag.h"
 #include "network/WifiPowerSaveGuard.h"
 #include "util/QrUtils.h"
 #include "util/ScreenshotUtil.h"
@@ -445,6 +446,10 @@ class LuaAppActivity::Backend final : public crosslua::Backend {
 
   int width() override { return r_.getScreenWidth(); }
   int height() override { return r_.getScreenHeight(); }
+  const char* model() override {
+    static const std::string m(board_tag::boardName(), board_tag::boardNameLen());
+    return m.c_str();
+  }
   void clear(bool white) override { r_.clearScreen(white ? 0xFF : 0x00); }
   void pixel(int x, int y, bool black) override { r_.drawPixel(x, y, black); }
   void line(int x0, int y0, int x1, int y1, bool black) override { r_.drawLine(x0, y0, x1, y1, black); }

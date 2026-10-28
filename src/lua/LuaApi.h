@@ -20,6 +20,9 @@ class Backend {
   // --- display -------------------------------------------------------------
   virtual int width() = 0;
   virtual int height() = 0;
+  // Board identity from board_tag ("x4", "x4pro", "metalio_eink4", ...). Informational only — apps
+  // branch on caps flags, never on this string. Null-terminated; lifetime = process.
+  virtual const char* model() = 0;
   virtual void clear(bool white) = 0;
   virtual void pixel(int x, int y, bool black) = 0;
   virtual void line(int x0, int y0, int x1, int y1, bool black) = 0;

@@ -529,6 +529,8 @@ int dev_caps(lua_State* L) {
   lua_setfield(L, -2, "width");
   lua_pushinteger(L, be(L).height());
   lua_setfield(L, -2, "height");
+  lua_pushstring(L, be(L).model());
+  lua_setfield(L, -2, "model");
   return 1;
 }
 // device.haptic(ms [, strength 0..255]) -> true | false, reason | nil, err (bad arguments). One non-blocking pulse.

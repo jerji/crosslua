@@ -290,6 +290,7 @@ struct MockBackend : Backend {
   int w() { return 800; }
   int width() override { return 800; }
   int height() override { return 480; }
+  const char* model() override { return "x4"; }
   void clear(bool white) override { calls.push_back(white ? "clear:white" : "clear:black"); }
   void pixel(int x, int y, bool b) override { calls.push_back("pixel:" + std::to_string(x) + "," + std::to_string(y)); }
   void line(int a, int b, int c, int d, bool) override {
@@ -4302,11 +4303,12 @@ int main() {
         print(device.haptic(1001))
         print(device.haptic(50, 300))
         print(device.haptic(50.5))
+        print(c.model)
       )LUA";
       CHECK(vm.load("t", script, strlen(script)));
       CHECK(run(vm, be, 100000) == Status::Finished);
-      CHECK(be.logs.size() == 8);
-      if (be.logs.size() == 8) {
+      CHECK(be.logs.size() == 9);
+      if (be.logs.size() == 9) {
         CHECK(be.logs[0] == "true\tfalse\ttrue\tfalse\tfalse\ttrue\tfalse\ttrue\t800\t480");
         CHECK(be.logs[1] == (usb ? "true" : "false"));
         CHECK(be.logs[2] == "nil");  // no touch event yet
@@ -4315,6 +4317,7 @@ int main() {
               be.logs[5] == "nil\tms must be an integer 10..1000");
         CHECK(be.logs[6] == "nil\tstrength must be an integer 0..255" &&
               be.logs[7] == "nil\tms must be an integer 10..1000");
+        CHECK(be.logs[8] == "x4");  // model() surfaces the board tag
       }
       CHECK(
           be.hapticCalls.empty());  // nothing reached the motor: absent hardware and every bad argument stopped earlier
