@@ -1,0 +1,1 @@
+{"title": "Dead Drop", "description": "ESP-NOW: leave a message that repeats over the air, or collect drops heard from passing devices. Collect is saved to Drops/.", "permissions": ["network", "espnow"], "storage": {"write": ["Drops"], "read": ["Drops"]}}
