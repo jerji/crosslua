@@ -1,1 +1,1 @@
-{"title": "Go", "description": "9x9 or 13x13, area scoring, komi 7.5. Two players, or the device (Lua engine, not michi-c2)."}
+{"title": "Go", "description": "9x9 or 13x13, area scoring, komi 7.5. Two players, the device (Lua engine, not michi-c2), or PLAY NEARBY with a second device over ESP-NOW.", "permissions": ["network", "espnow"]}

@@ -1,22 +1,13 @@
 -- Go rules for the X4: area scoring (Chinese), komi 7.5, captures, suicide
--- illegal, simple ko, situational superko (a position key that includes the
--- side to move, checked against every earlier position of the game).
--- Board sizes 9 and 13. Points are 1..N*N, row-major, 0 empty / 1 black / 2 white.
+-- illegal, simple ko, and superko over the last eight positions (C++ parity:
+-- go::repeatsPosition, the same FNV position key). Board sizes 9 and 13.
+-- Points are 1..N*N, row-major, 0 empty / 1 black / 2 white.
 local M = {}
 
 M.BLACK, M.WHITE = 1, 2
 M.KOMI = 7.5
-
-local MAXP = 169
--- Zobrist keys, fixed for the life of the app: stone keys and a side key.
-local Z = { {}, {} }
-math.randomseed(96)   -- fixed: the keys must be the same on every boot
-for i = 1, MAXP do
-  Z[1][i] = math.random(1, 0x3fffffff)
-  Z[2][i] = math.random(1, 0x3fffffff)
-end
-local SIDE = math.random(1, 0x3fffffff)
-M.SIDE = SIDE
+M.RING = 8               -- positions the superko rule looks back over
+M.MOVE_LIMIT = function(n) return n * n * 5 end
 
 local function other(c) return c == 1 and 2 or 1 end
 M.other = other
@@ -66,14 +57,15 @@ local function group(b, n, i)
 end
 M.group = group
 
--- Hash of a whole board for the superko set.
-function M.hashOf(b, n)
-  local h = 0
+-- Position key, the same FNV-1a the C++ build uses (go::positionKey): every
+-- point's colour, then the side to move. The wire carries these keys, so the
+-- two builds must agree on them exactly.
+function M.positionKey(b, n, turn)
+  local h = 2166136261
   for i = 1, n * n do
-    local v = b[i]
-    if v ~= 0 then h = h ~ Z[v][i] end
+    h = ((h ~ b[i]) * 16777619) & 0xFFFFFFFF
   end
-  return h
+  return ((h ~ turn) * 16777619) & 0xFFFFFFFF
 end
 
 function M.newState(n)
@@ -84,9 +76,20 @@ function M.newState(n)
       return t
     end)(),
     turn = 1, ko = 0, passes = 0, lastPass = false,
-    hash = 0, seen = {}, moves = 0,
+    moves = 0,
+    last = nil,              -- 1-based point of the last stone, "pass", or nil
+    recent = {},             -- keys of the last RING positions, oldest first
+    captured = { [1] = 0, [2] = 0 },
   }
 end
+
+-- Remember the position about to change (C++ rememberPosition, before a move).
+local function remember(st)
+  local ring = st.recent
+  if #ring >= M.RING then table.remove(ring, 1) end
+  ring[#ring + 1] = M.positionKey(st.b, st.n, st.turn)
+end
+M.remember = remember
 
 -- Try to play colour c at i on a board copy. Returns the new board, the
 -- resulting hash, the ko point (0 if none), and the number of captures,
@@ -122,44 +125,41 @@ function M.tryPlay(b, n, i, c)
 end
 
 -- The full legality test a human move (and the root of the engine) uses:
--- basic rules, simple ko, and superko against the game's own history.
+-- basic rules, simple ko, and superko against the last RING positions.
 function M.legal(st, i, c)
   if i == st.ko then return false end
   local nb2, ko, ncap = M.tryPlay(st.b, st.n, i, c)
   if not nb2 then return false end
-  local h = st.hash
-  -- apply the hash change: new stone, captured stones removed
-  h = h ~ Z[c][i]
-  for p = 1, st.n * st.n do
-    if st.b[p] ~= nb2[p] and st.b[p] ~= 0 then h = h ~ Z[st.b[p]][p] end
+  local key = M.positionKey(nb2, st.n, other(c))
+  for _, r in ipairs(st.recent) do
+    if r == key then return false end
   end
-  local nextState = other(c)
-  local key = nextState == 1 and (h ~ SIDE) or h
-  if st.seen[key] then return false end
-  return true, nb2, h, ko, ncap
+  return true, nb2, ko, ncap
 end
 
 -- Play a legal move on the state (the caller checked legality).
 function M.apply(st, i, c)
-  local ok, nb2, h, ko = M.legal(st, i, c)
+  local ok, nb2, ko, ncap = M.legal(st, i, c)
   if not ok then return false end
+  remember(st)
   st.b = nb2
-  st.hash = h
   st.ko = ko
   st.turn = other(c)
   st.passes = 0
   st.lastPass = false
+  st.last = i
   st.moves = st.moves + 1
-  local key = st.turn == 1 and (h ~ SIDE) or h
-  st.seen[key] = true
+  st.captured[c] = st.captured[c] + ncap
   return true
 end
 
 function M.pass(st)
+  remember(st)
   st.ko = 0
   st.turn = other(st.turn)
   st.passes = st.passes + 1
   st.lastPass = true
+  st.last = "pass"
   st.moves = st.moves + 1
   return st.passes >= 2
 end

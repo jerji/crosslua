@@ -8,6 +8,9 @@
 -- self-atari). Back opens the pause menu (pass, leave, give up).
 local co = require("goco")
 local brain = require("gobrain")
+local nearby = require("nearby")
+local wire = require("wire")
+local GAME_ID = 0x0A02
 
 local W, H = 480, 800
 local HEADER, CAPSULE = 40, 48
@@ -127,11 +130,8 @@ local function load()
   st.turn = turn
   st.passes = tonumber(passes) or 0
   st.ko = tonumber(ko) or 0
-  st.hash = co.hashOf(st.b, n)
   -- The superko history does not travel in the save: a resumed game only
   -- remembers its current position. Simple ko still holds.
-  local key = st.turn == 1 and (st.hash ~ co.SIDE) or st.hash
-  st.seen[key] = true
   game = { st = st, cur = math.floor(n * n / 2) + 1, aim = nil, last = nil, finished = false, winner = nil }
 end
 
@@ -354,11 +354,13 @@ local function playLoop()
 end
 
 -- ---------------------------------------------------------------- front door
+local linkedPlay  -- defined with PLAY NEARBY below
 local function frontRows()
   local rows = {}
   if game and not game.finished then rows[#rows + 1] = "RESUME GAME" end
   rows[#rows + 1] = "PLAY VS THE DEVICE"
   rows[#rows + 1] = "TWO PLAYERS"
+  rows[#rows + 1] = "PLAY NEARBY"
   rows[#rows + 1] = "LEVEL: " .. brain.LEVELS[prefs.level].name
   rows[#rows + 1] = "YOU PLAY: " .. (prefs.you == 1 and "BLACK" or "WHITE")
   rows[#rows + 1] = "BOARD: " .. prefs.size .. "x" .. prefs.size
@@ -378,6 +380,7 @@ local function frontDoor()
     if label == "RESUME GAME" then return "resume"
     elseif label == "PLAY VS THE DEVICE" then prefs.mode = 1 return "new"
     elseif label == "TWO PLAYERS" then prefs.mode = 2 return "new"
+    elseif label == "PLAY NEARBY" then linkedPlay()
     elseif label:sub(1, 6) == "LEVEL:" then
       prefs.level = prefs.level % #brain.LEVELS + 1
       save()
@@ -390,6 +393,212 @@ local function frontDoor()
     elseif label == "HOW TO PLAY" then howTo()
     end
   end
+end
+
+-- ---------------------------------------------------------------- PLAY NEARBY
+-- Two devices over ESP-NOW (nearby.lua). The whole game travels as the 192-byte
+-- blob (wire.lua), the layout of GoCore.h. Black moves first in a round; the
+-- first mover flips each round, and both devices flip on the same rematch.
+-- The board size is the one the match opened with: a device that receives a
+-- move takes the size from it. Back asks once (Confirm then passes); Back again
+-- leaves. While linked, `game` is the match, so the board helpers draw it; the
+-- saved solo game is put back when the match ends.
+
+-- A position as the board record the helpers read.
+local function adoptPosition(ng, cur)
+  local n = ng.st.n
+  if not cur or cur > n * n then cur = math.floor(n * n / 2) + 1 end
+  local lg = { st = ng.st, cur = cur, aim = nil, last = nil, finished = ng.finished, winner = nil }
+  if lg.finished then lg.winner = co.margin(ng.st.b, n) > 0 and co.BLACK or co.WHITE end
+  return lg
+end
+
+-- One linked session, from the search screen to leaving. Returns to the menu.
+function linkedPlay()
+  local solo = game
+  local S = nearby.new(GAME_ID, "PUP " .. string.sub(system.mac(), 16, 17))
+  local ok, err = S:start()
+  if not ok then
+    gfx.clear()
+    header("GO")
+    gfx.text(16, 100, "RADIO WILL NOT START", "sans16", "b")
+    gfx.text(16, 130, tostring(err):sub(1, 60), "ui12", "b")
+    capsule("Back: menu")
+    gfx.present()
+    while input.wait() ~= "back" do end
+    return
+  end
+
+  local mode = "search"          -- search | board | result | linkend
+  local meFirst, me = false, co.BLACK
+  local size = prefs.size
+  local lg = nil
+  local leaving = false          -- Back pressed once: Confirm passes, Back leaves
+  local myAgain = false
+  local dirty = true
+
+  local function newRound()
+    me = meFirst and co.BLACK or co.WHITE
+    lg = adoptPosition({ st = co.newState(size), finished = false }, lg and lg.cur)
+    game = lg
+    layout()
+    leaving, myAgain = false, false
+    S:newRound()
+    mode = "board"
+    dirty = true
+  end
+
+  -- A position from the other device becomes the board; its size wins.
+  local function adopt(ng)
+    lg = adoptPosition(ng, lg and lg.cur)
+    size = ng.st.n
+    game = lg
+    layout()
+    mode = lg.finished and "result" or "board"
+    dirty = true
+  end
+
+  -- Our move (a point, or "pass"), then the whole position goes to them.
+  local function play(kind)
+    local st = lg.st
+    local done
+    if kind == "pass" then
+      done = co.pass(st)
+    else
+      if not co.apply(st, kind, st.turn) then return false end
+      done = st.moves >= co.MOVE_LIMIT(st.n)
+    end
+    lg.aim, leaving = nil, false
+    lg.finished = done
+    if done then lg.winner = co.margin(st.b, st.n) > 0 and co.BLACK or co.WHITE end
+    S:sendState(system.millis(), wire.pack(lg))
+    mode = done and "result" or "board"
+    dirty = true
+    return true
+  end
+
+  local function draw(status)
+    lg.last = lg.st.last
+    gfx.clear()
+    header(string.format("GO %dx%d", lg.st.n, lg.st.n), "PLAY NEARBY")
+    drawBoard(lg)
+    gfx.text(W // 2, top + (lg.st.n - 1) * pitch + 16, scoreText(), "sans12", "c")
+    capsule(status)
+    gfx.present()
+  end
+
+  local function boardStatus()
+    if leaving then return "CONFIRM = PASS    BACK AGAIN = LEAVE" end
+    if lg.st.turn ~= me then return "THEIR MOVE" end
+    if lg.aim then return warningFor(lg.aim) or "CONFIRM AGAIN TO PLAY, OR MOVE TO CHANGE" end
+    return "YOUR MOVE"
+  end
+
+  local function drawResult()
+    lg.last = lg.st.last
+    gfx.clear()
+    header("GO", "PLAY NEARBY")
+    drawBoard(lg)
+    local margin = co.margin(lg.st.b, lg.st.n)
+    local text = string.format(lg.winner == me and "YOU WIN BY %.1f" or "THEY WIN BY %.1f", math.abs(margin))
+    local tail = "Confirm: again   Back: leave"
+    if myAgain then tail = "WAITING FOR THEM"
+    elseif S.peerAgain then tail = "THEY WANT ANOTHER GAME" end
+    gfx.text(W // 2, top + (lg.st.n - 1) * pitch + 16, scoreText(), "sans12", "c")
+    capsule(text .. "   " .. tail)
+    gfx.present()
+  end
+
+  while true do
+    local now = system.millis()
+    S:pump(now)
+    S:tick(now)
+    if S:takeMatch() then
+      meFirst = S.iFirst
+      newRound()
+    end
+    local blob = S:takeState()
+    if blob and mode ~= "search" then
+      local ng = wire.unpack(blob)
+      if ng then
+        -- their first move of a new round can land before my own flip for
+        -- that round: start the round here, then take the move
+        if mode == "result" and not ng.finished then
+          meFirst = not meFirst
+          newRound()
+        end
+        adopt(ng)
+      end
+    end
+    if S.phase == "ended" and mode ~= "linkend" then
+      mode = "linkend"
+      dirty = true
+    end
+    -- both said PLAY AGAIN: start the next round, the first mover flipping
+    if mode == "result" and myAgain and S.peerAgain then
+      meFirst = not meFirst
+      newRound()
+    end
+
+    if dirty then
+      dirty = false
+      if mode == "search" then
+        gfx.clear()
+        header("GO", "PLAY NEARBY")
+        gfx.text(W // 2, 220, "LOOKING FOR A PLAYER", "sans18", "bc")
+        gfx.text(W // 2, 256, "Turn on PLAY NEARBY on the other device.", "ui12", "c")
+        capsule("Back: cancel")
+        gfx.present()
+      elseif mode == "board" then
+        draw(boardStatus())
+      elseif mode == "result" then
+        drawResult()
+      else
+        draw(S.reason == "lost" and "LOST CONNECTION   Back: menu" or "THEY LEFT   Back: menu")
+      end
+    end
+
+    local ev = input.wait(100)
+    if ev == "back" then
+      if mode == "board" and not leaving then
+        leaving = true
+        dirty = true
+      else
+        break
+      end
+    elseif ev == "up" or ev == "down" or ev == "left" or ev == "right" then
+      leaving = false
+      if mode == "board" then
+        local n = lg.st.n
+        local r, c = (lg.cur - 1) // n, (lg.cur - 1) % n
+        local moved = false
+        if ev == "up" and r > 0 then lg.cur = lg.cur - n moved = true
+        elseif ev == "down" and r < n - 1 then lg.cur = lg.cur + n moved = true
+        elseif ev == "left" and c > 0 then lg.cur = lg.cur - 1 moved = true
+        elseif ev == "right" and c < n - 1 then lg.cur = lg.cur + 1 moved = true end
+        if moved then lg.aim = nil end
+        dirty = true
+      end
+    elseif ev == "confirm" then
+      if mode == "board" and lg.st.turn == me then
+        if leaving then
+          play("pass")
+        elseif lg.st.b[lg.cur] == 0 then
+          if lg.aim == lg.cur then play(lg.cur) else lg.aim = lg.cur end
+          dirty = true
+        end
+      elseif mode == "result" and not myAgain then
+        myAgain = true
+        S:say(system.millis(), nearby.NOTE_PLAY_AGAIN)
+        dirty = true
+      elseif mode == "linkend" then
+        break
+      end
+    end
+  end
+  S:stop(system.millis())
+  game = solo
+  if game then layout() end
 end
 
 -- ---------------------------------------------------------------- entry
