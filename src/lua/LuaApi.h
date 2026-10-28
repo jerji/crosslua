@@ -258,7 +258,7 @@ class Backend {
   virtual bool bleScan(int ms, char* err, size_t errCap) = 0;  // async: the stack scans on its own task
   virtual void bleScanStop() = 0;
   virtual int bleDevices(BleDevice* out, int cap) = 0;  // snapshot of what the scan has seen, at most `cap`
-  virtual bool bleConnect(const char* addr, char* err, size_t errCap) = 0;  // async: ble.state() reports how it went
+  virtual bool bleConnect(const char* addr, int addrType, char* err, size_t errCap) = 0;  // async: ble.state() reports
   virtual void bleDisconnect() = 0;
   virtual void bleState(BleState* s) = 0;
   virtual int blePaired(BleDevice* out, int cap) = 0;  // bonded peers (kept in NVS), at most `cap`
@@ -266,7 +266,7 @@ class Backend {
   // Mode "raw": the NimBLE observer straight (no HID host). ble.start("raw") brings the stack up; scripts read every
   // advertisement (advertising data followed by the scan response, as received) and parse it themselves. EXCLUSIVE with
   // mode "keyboard".
-  enum BleMode { BLE_MODE_NONE = 0, BLE_MODE_KEYBOARD = 1, BLE_MODE_RAW = 2 };
+  enum BleMode { BLE_MODE_NONE = 0, BLE_MODE_KEYBOARD = 1, BLE_MODE_RAW = 2, BLE_MODE_GATT = 3 };
   struct BleAdvert {
     char addr[18];     // "AA:BB:CC:DD:EE:FF"
     uint8_t addrType;  // 0 public, 1 random (NimBLE's own numbering: 2 and 3 are "RPA resolved to public/random")
@@ -295,6 +295,61 @@ class Backend {
     (void)out;
     (void)cap;
     *dropped = 0;
+    return 0;
+  }
+  // Mode "gatt": a generic BLE GATT client (the bare NimBLE central, no HID host). ble.connect(addr) links a
+  // NimBLEClient; ble.state().link reports it; ble.services() lists the discovered characteristics; ble.read/write/
+  // notify act on them by characteristic UUID; subscribed notifications arrive in a small buffer read with
+  // ble.notifs(). UUIDs are the 16-bit short form (4 hex digits, e.g. "2a19") or the full 128-bit
+  // "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx" string, either case. One characteristic at a time for read/write/notify.
+  struct BleGattChar {
+    char service[37];  // the parent service's UUID, same spelling as `uuid`
+    char uuid[37];     // the characteristic's UUID
+    uint16_t handle;   // attribute handle (informational)
+    uint8_t props;     // property bitmask: 0x01 broadcast, 0x02 read, 0x04 write-no-response, 0x08 write,
+                       // 0x10 notify, 0x20 indicate, 0x40 auth-signed-write, 0x80 extended
+  };
+  static constexpr int BLE_MAX_GATT_CHARS = 64;
+  struct BleGattNotif {
+    char uuid[37];
+    uint8_t len;
+    uint8_t data[244];  // one ATT payload
+  };
+  static constexpr int BLE_MAX_GATT_NOTIFS = 32;
+  // Fills up to `cap` discovered characteristics; returns the count, or -1 when not connected (call ble.connect and
+  // wait for ble.state().link == "connected" first).
+  virtual int bleGattServices(BleGattChar* out, int cap) {
+    (void)out;
+    (void)cap;
+    return -1;
+  }
+  virtual bool bleGattRead(const char* uuid, uint8_t* data, size_t* len, size_t maxLen, char* err, size_t errCap) {
+    (void)uuid;
+    (void)data;
+    (void)len;
+    (void)maxLen;
+    if (errCap) err[0] = 0;
+    return false;
+  }
+  virtual bool bleGattWrite(const char* uuid, const uint8_t* data, size_t len, bool noResponse, char* err,
+                            size_t errCap) {
+    (void)uuid;
+    (void)data;
+    (void)len;
+    (void)noResponse;
+    if (errCap) err[0] = 0;
+    return false;
+  }
+  virtual bool bleGattNotify(const char* uuid, bool on, char* err, size_t errCap) {
+    (void)uuid;
+    (void)on;
+    if (errCap) err[0] = 0;
+    return false;
+  }
+  // Snapshot of the pending notifications (oldest first), at most `cap`; returns the count.
+  virtual int bleGattNotifs(BleGattNotif* out, int cap) {
+    (void)out;
+    (void)cap;
     return 0;
   }
   // Details of the "key" event popEvent() returned last; false for any other event.

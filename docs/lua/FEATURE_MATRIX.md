@@ -57,7 +57,7 @@ word. Order = leverage per effort, cheapest first. Everything here is NOT built 
 | 12 | `crypto.aes_gcm` (+ `x25519`, `hkdf`) | encrypted logs, app-to-app crypto | S-M | mbedtls GCM is linked |
 | 13 | `decimal.*` (decNumber) | exact Calculator (Lua floats are 32-bit) | S | |
 | 14 | **`xml.parse` (expat, already linked)** | OPDS/RSS/Atom, EPUB NCX/nav, TOC, AO3 niceties | M | **requested by 6 of the 8 audits: the most wanted primitive** |
-| 15 | BLE generic GATT client (+ a "remote" page-turner mode) | GATT browser, sensors, remotes | M | central role works with the current sdkconfig, one connection, small MTU; advertising/peripheral needs an sdkconfig change |
+| 15 | BLE generic GATT client (`ble.start("gatt")` + `services/read/write/notify/notifs`) | GATT browser, sensors, remotes | M | **done** (host-tested; on-device run pending). central role, one connection, small MTU; advertising/peripheral needs an sdkconfig change (row 22) |
 | 16 | **firmware-state bridge**: read-only `epub.progress`, recent books, reading stats, library index | AO3, reading stats, shelves, Ruby-style apps | M | **design decision**: apps cannot see the firmware's hidden folders by design, and this wall blocks the most app ideas after xml |
 | 17 | settings API: `system.setting(name [, value])` over an allowlist (sleep-screen mode, sleep timeout, orientation) | sleep-screen designer, "Live" photo, settings hub | M | needs an upstream hook; decide together with #16 |
 | 18 | `gfx.load_font(path)` (`.cpfont` everywhere, TTF only on PSRAM boards) | custom/CJK/serif fonts | M | ✔ 7 fixed fonts today |

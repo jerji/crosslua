@@ -42,6 +42,27 @@ int needMode(lua_State* L, int mode) {
                          : "this needs ble.start(\"raw\") (bluetooth is running in keyboard mode)");
 }
 
+// The connection calls work in keyboard mode (the HID host) and gatt mode (the GATT client), but never raw mode.
+int needClientMode(lua_State* L) {
+  if (!be(L).bleRunning()) return pushFail(L, "bluetooth is not running (call ble.start() first)");
+  const int m = be(L).bleMode();
+  if (m == Backend::BLE_MODE_KEYBOARD || m == Backend::BLE_MODE_GATT) return 0;
+  return pushFail(L, "this needs ble.start(\"keyboard\") or ble.start(\"gatt\") (bluetooth is running in raw mode)");
+}
+
+const char* modeName(int mode) {
+  switch (mode) {
+    case Backend::BLE_MODE_RAW:
+      return "raw";
+    case Backend::BLE_MODE_GATT:
+      return "gatt";
+    case Backend::BLE_MODE_KEYBOARD:
+      return "keyboard";
+    default:
+      return "none";
+  }
+}
+
 // "AA:BB:CC:DD:EE:FF" (hex digits, either case): the form the scan reports. Anything else never reaches the stack.
 bool validAddr(const char* s, size_t n) {
   if (n != 17) return false;
@@ -83,14 +104,14 @@ void pushDevice(lua_State* L, const Backend::BleDevice& d) {
   lua_setfield(L, -2, "hid");
 }
 
-// ble.start([mode]) -> true | nil, err. mode is "keyboard" (the default) or "raw".
+// ble.start([mode]) -> true | nil, err. mode is "keyboard" (the default), "raw" or "gatt".
 int ble_start(lua_State* L) {
   const char* mode = "keyboard";
   if (!lua_isnoneornil(L, 1)) {
-    if (lua_type(L, 1) != LUA_TSTRING) return pushFail(L, "mode must be \"keyboard\" or \"raw\"");
+    if (lua_type(L, 1) != LUA_TSTRING) return pushFail(L, "mode must be \"keyboard\", \"raw\" or \"gatt\"");
     mode = lua_tostring(L, 1);
-    if (strcmp(mode, "keyboard") != 0 && strcmp(mode, "raw") != 0)
-      return pushFail(L, "mode must be \"keyboard\" or \"raw\"");
+    if (strcmp(mode, "keyboard") != 0 && strcmp(mode, "raw") != 0 && strcmp(mode, "gatt") != 0)
+      return pushFail(L, "mode must be \"keyboard\", \"raw\" or \"gatt\"");
   }
   if (int r = gateBle(L)) return r;
   if (be(L).bleRunning()) return pushFail(L, "bluetooth is already running (ble.stop() first)");
@@ -159,23 +180,34 @@ int ble_devices(lua_State* L) {
   return 1;
 }
 
-// ble.connect(addr) -> true | nil, err. Starts pairing/connecting; ble.state() reports how it went (bonded peers
-// reconnect alone).
+// ble.connect(addr [, addr_type]) -> true | nil, err. Starts pairing/connecting; ble.state() reports how it went
+// (bonded peers reconnect alone). addr_type is 0 (public, default) or 1 (random static) — only the gatt mode uses it
+// (the scan's `addr_type` field).
 int ble_connect(lua_State* L) {
   size_t n = 0;
-  const char* addr = luaL_checklstring(L, 1, &n);
+  const char* addr = lua_tolstring(L, 1, &n);
+  if (lua_type(L, 1) != LUA_TSTRING) return pushFail(L, "addr must look like AA:BB:CC:DD:EE:FF");
+  int addrType = 0;
+  if (!lua_isnoneornil(L, 2)) {
+    if (lua_type(L, 2) != LUA_TNUMBER) return pushFail(L, "addr_type must be 0 (public) or 1 (random)");
+    addrType = static_cast<int>(lua_tointeger(L, 2));
+    if (addrType < 0 || addrType > 1) return pushFail(L, "addr_type must be 0 (public) or 1 (random)");
+  }
   if (int r = gateBle(L)) return r;
   if (!validAddr(addr, n)) return pushFail(L, "addr must look like AA:BB:CC:DD:EE:FF");
-  if (int r = needMode(L, Backend::BLE_MODE_KEYBOARD)) return r;
+  if (int r = needClientMode(L)) return r;
   char err[96] = {0};
-  if (!be(L).bleConnect(addr, err, sizeof(err))) return pushFail(L, err[0] ? err : "cannot connect");
+  if (!be(L).bleConnect(addr, addrType, err, sizeof(err))) return pushFail(L, err[0] ? err : "cannot connect");
   lua_pushboolean(L, 1);
   return 1;
 }
 
 int ble_disconnect(lua_State* L) {
   if (int r = gateBle(L)) return r;
-  if (be(L).bleRunning() && be(L).bleMode() == Backend::BLE_MODE_KEYBOARD) be(L).bleDisconnect();
+  if (be(L).bleRunning()) {
+    const int m = be(L).bleMode();
+    if (m == Backend::BLE_MODE_KEYBOARD || m == Backend::BLE_MODE_GATT) be(L).bleDisconnect();
+  }
   lua_pushboolean(L, 1);
   return 1;
 }
@@ -198,12 +230,13 @@ int ble_state(lua_State* L) {
   }
   Backend::BleState s;
   memset(&s, 0, sizeof(s));
-  const bool raw = be(L).bleMode() == Backend::BLE_MODE_RAW;
+  const int mode = be(L).bleMode();
+  const bool raw = mode == Backend::BLE_MODE_RAW;
   if (raw)
     s.scanning = be(L).bleObserving();
   else
     be(L).bleState(&s);
-  lua_pushstring(L, raw ? "raw" : "keyboard");
+  lua_pushstring(L, modeName(mode));
   lua_setfield(L, -2, "mode");
   lua_pushstring(L, linkName(s.link));
   lua_setfield(L, -2, "link");
@@ -335,6 +368,133 @@ int ble_adverts(lua_State* L) {
   return 2;
 }
 
+// --- gatt mode: a generic GATT client ---------------------------------------------------------
+
+int needGatt(lua_State* L) {
+  if (!be(L).bleRunning()) return pushFail(L, "bluetooth is not running (call ble.start() first)");
+  if (be(L).bleMode() == Backend::BLE_MODE_GATT) return 0;
+  return pushFail(L, "this needs ble.start(\"gatt\")");
+}
+
+// A characteristic UUID as the scan lists it: the 16-bit short form ("2a19") or the full 128-bit
+// "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx" / 32-hex-digit form, either case. Light check only (1..36 chars, no NUL):
+// the backend (NimBLE) does the real parse and reports an unknown UUID.
+bool okUuid(const char* s, size_t n) { return n >= 1 && n <= 36; }
+
+// ble.services() -> { {service, uuid, handle, props}, ... } | nil, err. The discovered characteristics, in
+// attribute order. props is the bitmask (0x02 read, 0x04 write-no-response, 0x08 write, 0x10 notify, 0x20 indicate).
+int ble_services(lua_State* L) {
+  if (int r = gateBle(L)) return r;
+  if (int r = needGatt(L)) return r;
+  Backend::BleGattChar c[Backend::BLE_MAX_GATT_CHARS];
+  const int n = be(L).bleGattServices(c, Backend::BLE_MAX_GATT_CHARS);
+  if (n < 0) return pushFail(L, "not connected (ble.connect then wait for ble.state().link == \"connected\")");
+  lua_createtable(L, n > 0 ? n : 0, 0);
+  for (int i = 0; i < n && i < Backend::BLE_MAX_GATT_CHARS; i++) {
+    lua_createtable(L, 0, 4);
+    lua_pushstring(L, c[i].service);
+    lua_setfield(L, -2, "service");
+    lua_pushstring(L, c[i].uuid);
+    lua_setfield(L, -2, "uuid");
+    lua_pushinteger(L, c[i].handle);
+    lua_setfield(L, -2, "handle");
+    lua_pushinteger(L, c[i].props);
+    lua_setfield(L, -2, "props");
+    lua_rawseti(L, -2, i + 1);
+  }
+  return 1;
+}
+
+// ble.read(uuid) -> data, err | nil, err. Reads the characteristic's value as a byte string.
+int ble_read(lua_State* L) {
+  if (lua_type(L, 1) != LUA_TSTRING) return pushFail(L, "uuid must be a string");
+  size_t un = 0;
+  const char* uuid = lua_tolstring(L, 1, &un);
+  if (int r = gateBle(L)) return r;
+  if (!okUuid(uuid, un)) return pushFail(L, "uuid must be a 1..36 character string");
+  if (int r = needGatt(L)) return r;
+  uint8_t buf[244];
+  size_t len = 0;
+  char err[96] = {0};
+  if (!be(L).bleGattRead(uuid, buf, &len, sizeof(buf), err, sizeof(err)))
+    return pushFail(L, err[0] ? err : "cannot read");
+  lua_pushlstring(L, reinterpret_cast<const char*>(buf), len);
+  return 1;
+}
+
+// ble.write(uuid, data [, {no_response=false}]) -> true | nil, err. Writes the value (string, max 244 bytes).
+int ble_write(lua_State* L) {
+  if (lua_type(L, 1) != LUA_TSTRING) return pushFail(L, "uuid must be a string");
+  if (lua_type(L, 2) != LUA_TSTRING) return pushFail(L, "data must be a string");
+  size_t un = 0;
+  const char* uuid = lua_tolstring(L, 1, &un);
+  size_t dlen = 0;
+  const char* data = lua_tolstring(L, 2, &dlen);
+  bool noResponse = false;
+  if (!lua_isnoneornil(L, 3)) {
+    if (lua_type(L, 3) == LUA_TBOOLEAN) {
+      noResponse = lua_toboolean(L, 3) != 0;
+    } else if (lua_type(L, 3) == LUA_TTABLE) {
+      lua_getfield(L, 3, "no_response");
+      if (!lua_isnil(L, -1)) {
+        if (lua_type(L, -1) != LUA_TBOOLEAN) {
+          lua_pop(L, 1);
+          return pushFail(L, "no_response must be a boolean");
+        }
+        noResponse = lua_toboolean(L, -1) != 0;
+      }
+      lua_pop(L, 1);
+    } else {
+      return pushFail(L, "options must be a boolean or {no_response=true}");
+    }
+  }
+  if (int r = gateBle(L)) return r;
+  if (!okUuid(uuid, un)) return pushFail(L, "uuid must be a 1..36 character string");
+  if (dlen > 244) return pushFail(L, "value too long (max 244 bytes)");
+  if (int r = needGatt(L)) return r;
+  char err[96] = {0};
+  if (!be(L).bleGattWrite(uuid, reinterpret_cast<const uint8_t*>(data), dlen, noResponse, err, sizeof(err)))
+    return pushFail(L, err[0] ? err : "cannot write");
+  lua_pushboolean(L, 1);
+  return 1;
+}
+
+// ble.notify(uuid, on) -> true | nil, err. Subscribes (on=true) or unsubscribes (on=false) to notifications /
+// indications on that characteristic; they then arrive via ble.notifs().
+int ble_notify(lua_State* L) {
+  if (lua_type(L, 1) != LUA_TSTRING) return pushFail(L, "uuid must be a string");
+  if (lua_type(L, 2) != LUA_TBOOLEAN) return pushFail(L, "on must be a boolean");
+  size_t un = 0;
+  const char* uuid = lua_tolstring(L, 1, &un);
+  const bool on = lua_toboolean(L, 2) != 0;
+  if (int r = gateBle(L)) return r;
+  if (!okUuid(uuid, un)) return pushFail(L, "uuid must be a 1..36 character string");
+  if (int r = needGatt(L)) return r;
+  char err[96] = {0};
+  if (!be(L).bleGattNotify(uuid, on, err, sizeof(err)))
+    return pushFail(L, err[0] ? err : "cannot change notify");
+  lua_pushboolean(L, 1);
+  return 1;
+}
+
+// ble.notifs() -> { {uuid, data}, ... } the pending notifications, oldest first (at most 32; drain often).
+int ble_notifs(lua_State* L) {
+  if (int r = gateBle(L)) return r;
+  if (int r = needGatt(L)) return r;
+  Backend::BleGattNotif n[Backend::BLE_MAX_GATT_NOTIFS];
+  const int cnt = be(L).bleGattNotifs(n, Backend::BLE_MAX_GATT_NOTIFS);
+  lua_createtable(L, cnt > 0 ? cnt : 0, 0);
+  for (int i = 0; i < cnt && i < Backend::BLE_MAX_GATT_NOTIFS; i++) {
+    lua_createtable(L, 0, 2);
+    lua_pushstring(L, n[i].uuid);
+    lua_setfield(L, -2, "uuid");
+    lua_pushlstring(L, reinterpret_cast<const char*>(n[i].data), n[i].len);
+    lua_setfield(L, -2, "data");
+    lua_rawseti(L, -2, i + 1);
+  }
+  return 1;
+}
+
 }  // namespace
 
 void registerBle(lua_State* L, Ctx* c) {
@@ -343,7 +503,9 @@ void registerBle(lua_State* L, Ctx* c) {
       {"scan_stop", ble_scan_stop},   {"devices", ble_devices}, {"connect", ble_connect},
       {"disconnect", ble_disconnect}, {"state", ble_state},     {"paired", ble_paired},
       {"forget", ble_forget},         {"observe", ble_observe}, {"observe_stop", ble_observe_stop},
-      {"adverts", ble_adverts},       {nullptr, nullptr}};
+      {"adverts", ble_adverts},       {"services", ble_services}, {"read", ble_read},
+      {"write", ble_write},           {"notify", ble_notify},   {"notifs", ble_notifs},
+      {nullptr, nullptr}};
   regTable(L, c, "ble", fns);
 }
 

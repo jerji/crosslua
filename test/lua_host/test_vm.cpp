@@ -561,6 +561,7 @@ struct MockBackend : Backend {
   std::string bleModeStarted, bleConnectedTo;
   std::vector<int> bleScanMsLog;
   std::vector<std::string> bleConnectLog;
+  std::vector<int> bleConnectTypeLog;
   std::deque<KeyInfo> keyQ;
   bool haveKey = false;
   KeyInfo lastKey = {};
@@ -604,7 +605,10 @@ struct MockBackend : Backend {
   bool bleObservingNow = false, bleObserveFail = false, bleObserveFailSilent = false, bleObserveActive = false;
   int bleObserveCalls = 0, bleObserveStops = 0, bleDroppedVal = 0, bleObserveMs = -1;
   int bleMode() override {
-    return !bleUp ? BLE_MODE_NONE : (bleModeStarted == "raw" ? BLE_MODE_RAW : BLE_MODE_KEYBOARD);
+    if (!bleUp) return BLE_MODE_NONE;
+    if (bleModeStarted == "raw") return BLE_MODE_RAW;
+    if (bleModeStarted == "gatt") return BLE_MODE_GATT;
+    return BLE_MODE_KEYBOARD;
   }
   bool bleObserve(int ms, bool active, char* err, size_t errCap) override {
     bleObserveCalls++;
@@ -658,8 +662,9 @@ struct MockBackend : Backend {
     }
     return n;
   }
-  bool bleConnect(const char* addr, char* err, size_t errCap) override {
+  bool bleConnect(const char* addr, int addrType, char* err, size_t errCap) override {
     bleConnectLog.push_back(addr);
+    bleConnectTypeLog.push_back(addrType);
     if (bleConnFail) {
       snprintf(err, errCap, "pairing refused (mock)");
       return false;
@@ -686,6 +691,92 @@ struct MockBackend : Backend {
         return true;
       }
     return false;
+  }
+  // --- gatt mock ---
+  static std::string lc(const char* s) {
+    std::string r(s);
+    for (auto& c : r)
+      if (c >= 'A' && c <= 'Z') c += 32;
+    return r;
+  }
+  std::vector<BleGattChar> gattChars;
+  std::map<std::string, std::string> gattValues;  // lowercased uuid -> stored value
+  std::vector<BleGattNotif> gattNotifBuf;
+  bool gattConnected = false;
+  int gattReadCalls = 0, gattWriteCalls = 0, gattNotifyCalls = 0, gattServicesCalls = 0;
+  std::vector<std::pair<std::string, bool>> gattNotifyLog;     // uuid, on
+  std::vector<std::pair<std::string, bool>> gattWriteNoRespLog;  // uuid, noResponse
+  static BleGattChar mkChar(const char* service, const char* uuid, uint16_t handle, uint8_t props) {
+    BleGattChar c = {};
+    snprintf(c.service, sizeof(c.service), "%s", service);
+    snprintf(c.uuid, sizeof(c.uuid), "%s", uuid);
+    c.handle = handle;
+    c.props = props;
+    return c;
+  }
+  int bleGattServices(BleGattChar* out, int cap) override {
+    gattServicesCalls++;
+    if (!gattConnected) return -1;
+    int n = 0;
+    for (const auto& c : gattChars)
+      if (n < cap) out[n++] = c;
+    return n;
+  }
+  bool bleGattRead(const char* uuid, uint8_t* data, size_t* len, size_t maxLen, char* err, size_t errCap) override {
+    gattReadCalls++;
+    if (!gattConnected) {
+      snprintf(err, errCap, "not connected (mock)");
+      return false;
+    }
+    auto it = gattValues.find(lc(uuid));
+    if (it == gattValues.end()) {
+      snprintf(err, errCap, "no such characteristic (mock)");
+      return false;
+    }
+    if (it->second.size() > maxLen) {
+      snprintf(err, errCap, "value too large (mock)");
+      return false;
+    }
+    if (it->second.size()) memcpy(data, it->second.data(), it->second.size());
+    *len = it->second.size();
+    return true;
+  }
+  bool bleGattWrite(const char* uuid, const uint8_t* data, size_t len, bool noResponse, char* err,
+                    size_t errCap) override {
+    gattWriteCalls++;
+    if (!gattConnected) {
+      snprintf(err, errCap, "not connected (mock)");
+      return false;
+    }
+    auto it = gattValues.find(lc(uuid));
+    if (it == gattValues.end()) {
+      snprintf(err, errCap, "no such characteristic (mock)");
+      return false;
+    }
+    gattValues[lc(uuid)] = std::string(reinterpret_cast<const char*>(data), len);
+    gattWriteNoRespLog.push_back({lc(uuid), noResponse});
+    return true;
+  }
+  bool bleGattNotify(const char* uuid, bool on, char* err, size_t errCap) override {
+    gattNotifyCalls++;
+    if (!gattConnected) {
+      snprintf(err, errCap, "not connected (mock)");
+      return false;
+    }
+    auto it = gattValues.find(lc(uuid));
+    if (it == gattValues.end()) {
+      snprintf(err, errCap, "no such characteristic (mock)");
+      return false;
+    }
+    gattNotifyLog.push_back({lc(uuid), on});
+    return true;
+  }
+  int bleGattNotifs(BleGattNotif* out, int cap) override {
+    int n = 0;
+    for (const auto& x : gattNotifBuf)
+      if (n < cap) out[n++] = x;
+    gattNotifBuf.clear();
+    return n;
   }
   bool eventKey(KeyInfo* k) override {
     if (!haveKey) return false;
@@ -7197,14 +7288,14 @@ int main() {
       be.blePermitted = true;
       const char* script = R"LUA(
         print(ble.start(5))
-        print(ble.start("gatt"))
+        print(ble.start("foo"))
         print(ble.start("keyboard"))
         print(ble.start())
         print(ble.stop())
         print(ble.start())
       )LUA";
       go(be, script);
-      const std::string M = "nil\tmode must be \"keyboard\" or \"raw\"";
+      const std::string M = "nil\tmode must be \"keyboard\", \"raw\" or \"gatt\"";
       expect(be, {M, M, "true", "nil\tbluetooth is already running (ble.stop() first)", "true", "true"}, "start");
       CHECK(be.bleStartCalls == 2 && be.bleModeStarted == "keyboard" && be.bleUp);
     }
@@ -7356,8 +7447,9 @@ int main() {
       )LUA";
       go(be, script);
       const std::string A = "nil\taddr must look like AA:BB:CC:DD:EE:FF";
-      expect(be, {NR, A, A, A, A, A, A, A, "true", "true", "false", "true"}, "connect");
+      expect(be, {NR, A, A, A, A, A, A, A, "true", "true", "true", "true"}, "connect");
       CHECK(be.bleConnectLog == (std::vector<std::string>{"aa:bb:cc:dd:ee:ff", "11:22:33:44:55:66"}));
+      CHECK(be.bleConnectTypeLog == (std::vector<int>{0, 0}));
       CHECK(be.bleDisconnects == 1);
     }
     {
@@ -8290,6 +8382,8 @@ int main() {
         "it)";
     const std::string NOTRUN = "nil\tbluetooth is not running (call ble.start() first)";
     const std::string NEEDKB = "nil\tthis needs ble.start(\"keyboard\") (bluetooth is running in raw mode)";
+    const std::string NEEDCONNECT =
+        "nil\tthis needs ble.start(\"keyboard\") or ble.start(\"gatt\") (bluetooth is running in raw mode)";
     const std::string NEEDRAW = "nil\tthis needs ble.start(\"raw\") (bluetooth is running in keyboard mode)";
     const std::string RANGE = "nil\tms must be 0 or an integer 500..600000";
     auto go = [&](MockBackend& be, const char* script) {
@@ -8326,7 +8420,7 @@ int main() {
         print(ble.scan_stop())
         print(ble.disconnect())
       )LUA");
-      expect(be, {"true", "true\traw\tidle\tfalse", NEEDKB, NEEDKB, NEEDKB, NEEDKB, NEEDKB, "true", "true"},
+      expect(be, {"true", "true\traw\tidle\tfalse", NEEDKB, NEEDKB, NEEDCONNECT, NEEDKB, NEEDKB, "true", "true"},
              "keyboard calls in raw mode");
       CHECK(be.bleModeStarted == "raw" && be.bleScanMsLog.empty() && be.bleConnectLog.empty() && be.bleScanStops == 0 &&
             be.bleDisconnects == 0);
@@ -8465,6 +8559,167 @@ int main() {
           {"nil\tno bluetooth on this device", "nil\tno bluetooth on this device", "nil\tno bluetooth on this device"},
           "unsupported");
       CHECK(be.bleObserveCalls == 0 && be.bleObserveStops == 0);
+    }
+  }
+  TEST("ble gatt mode: services / read / write / notify / notifs, gates, mode gating, validation");
+  {
+    auto go = [](MockBackend& be, const char* script) {
+      LuaVm vm;
+      CHECK(vm.open(128 * 1024));
+      registerApi(vm, be);
+      CHECK(vm.load("t", script, strlen(script)));
+      CHECK(run(vm, be, 100000) == Status::Finished);
+    };
+    auto expect = [](MockBackend& be, std::vector<std::string> want, const char* tag) {
+      if (be.logs.size() != want.size())
+        printf("    gatt %s: %zu logs, want %zu\n", tag, be.logs.size(), want.size());
+      CHECK(be.logs.size() == want.size());
+      for (size_t i = 0; i < want.size() && i < be.logs.size(); i++) {
+        CHECK(be.logs[i] == want[i]);
+        if (be.logs[i] != want[i])
+          printf("    gatt %s #%zu got '%s' want '%s'\n", tag, i + 1, be.logs[i].c_str(), want[i].c_str());
+      }
+    };
+    const std::string DENIED =
+        "nil\tbluetooth not permitted: add \"permissions\": [\"bluetooth\"] to this app's manifest.json (and approve "
+        "it)";
+    const std::string NOTRUN = "nil\tbluetooth is not running (call ble.start() first)";
+    const std::string NEEDGATT = "nil\tthis needs ble.start(\"gatt\")";
+    const std::string NOTCONN =
+        "nil\tnot connected (ble.connect then wait for ble.state().link == \"connected\")";
+    // a connected GATT device with two characteristics
+    auto setUp = [](MockBackend& be) {
+      be.blePermitted = true;
+      be.gattConnected = true;
+      be.gattChars = {MockBackend::mkChar("180a", "2a29", 3, 0x02 /* read */),
+                      MockBackend::mkChar("180f", "2a19", 5, 0x1A /* read|write|notify */)};
+      be.gattValues["2a29"] = std::string("Acme Corp");
+      be.gattValues["2a19"] = std::string("\x64\x00", 2);  // battery 100%
+    };
+    {
+      MockBackend be;  // every GATT call gates on permission, then on gatt mode
+      const char* calls = "print(ble.services()); print(ble.read(\"2a19\")); print(ble.notifs())";
+      go(be, calls);
+      expect(be, {DENIED, DENIED, DENIED}, "denied");
+      be.blePermitted = true;
+      be.logs.clear();
+      go(be, calls);
+      expect(be, {NOTRUN, NOTRUN, NOTRUN}, "not running");
+      be.logs.clear();
+      go(be, "print(ble.start(\"raw\"))");
+      be.logs.clear();
+      go(be, calls);
+      expect(be, {NEEDGATT, NEEDGATT, NEEDGATT}, "raw mode");
+    }
+    {
+      MockBackend be;  // not connected: services returns the not-connected error, read/write/notify refuse
+      setUp(be);
+      be.gattConnected = false;
+      go(be, "print(ble.start(\"gatt\")); print(ble.services()); print(ble.read(\"2a19\")); "
+             "print(ble.write(\"2a19\", \"x\")); print(ble.notify(\"2a19\", true))");
+      expect(be, {"true", NOTCONN, "nil\tnot connected (mock)", "nil\tnot connected (mock)",
+                  "nil\tnot connected (mock)"}, "not connected");
+      CHECK(be.gattReadCalls == 1 && be.gattWriteCalls == 1 && be.gattNotifyCalls == 1 && be.gattServicesCalls == 1);
+    }
+    {
+      MockBackend be;  // connect: addr_type flows to the backend (public default, random explicit, bad values rejected)
+      be.blePermitted = true;
+      go(be, R"LUA(
+        print(ble.start("gatt"))
+        print(ble.connect("11:22:33:44:55:66"))
+        print(ble.connect("11:22:33:44:55:66", 1))
+        print(ble.connect("11:22:33:44:55:66", 2))
+        print(ble.connect("11:22:33:44:55:66", "x"))
+      )LUA");
+      expect(be, {"true", "true", "true", "nil\taddr_type must be 0 (public) or 1 (random)",
+                  "nil\taddr_type must be 0 (public) or 1 (random)"}, "connect type");
+      CHECK(be.bleConnectTypeLog == (std::vector<int>{0, 1}));
+    }
+    {
+      MockBackend be;  // services: the discovered characteristics, in order, with service/uuid/handle/props
+      setUp(be);
+      go(be, R"LUA(
+        print(ble.start("gatt"))
+        local s = ble.services()
+        print(#s)
+        print(s[1].service, s[1].uuid, s[1].handle, s[1].props)
+        print(s[2].service, s[2].uuid, s[2].handle, s[2].props)
+      )LUA");
+      expect(be, {"true", "2", "180a\t2a29\t3\t2", "180f\t2a19\t5\t26"}, "services");
+      CHECK(be.gattServicesCalls == 1);
+    }
+    {
+      MockBackend be;  // read: bytes round-trip, an unknown uuid reports cleanly, case-insensitive
+      setUp(be);
+      go(be, R"LUA(
+        print(ble.start("gatt"))
+        local v = ble.read("2a29")
+        print(v, #v)
+        local b = ble.read("2A19")
+        print(b:byte(1), b:byte(2), #b)
+        print(ble.read("ffff"))
+      )LUA");
+      expect(be, {"true", "Acme Corp\t9", "100\t0\t2",
+                  "nil\tno such characteristic (mock)"}, "read");
+      CHECK(be.gattReadCalls == 3);
+    }
+    {
+      MockBackend be;  // write: the value lands and reads back, no_response reaches the backend, 244-byte cap
+      setUp(be);
+      go(be, R"LUA(
+        print(ble.start("gatt"))
+        print(ble.write("2a19", "\x50\x00"))
+        local v = ble.read("2a19")
+        print(v:byte(1), v:byte(2), #v)
+        print(ble.write("2a19", "\x01", {no_response = true}))
+        print(ble.write("2a19", string.rep("x", 245)))
+        print(ble.write("2a19", "y", 7))
+      )LUA");
+      expect(be, {"true", "true", "80\t0\t2", "true", "nil\tvalue too long (max 244 bytes)",
+                  "nil\toptions must be a boolean or {no_response=true}"}, "write");
+      CHECK(be.gattWriteCalls == 2 && be.gattWriteNoRespLog.size() == 2 && !be.gattWriteNoRespLog[0].second &&
+            be.gattWriteNoRespLog[1].second);
+    }
+    {
+      MockBackend be;  // notify: subscribe + unsubscribe flag reaches the backend; notifs drain the buffer
+      setUp(be);
+      go(be, R"LUA(
+        print(ble.start("gatt"))
+        print(ble.notify("2a19", true))
+        print(ble.notify("2a19", false))
+        print(ble.notify("2a19", 1))
+      )LUA");
+      expect(be, {"true", "true", "true", "nil\ton must be a boolean"}, "notify");
+      CHECK(be.gattNotifyCalls == 2 && be.gattNotifyLog.size() == 2 && be.gattNotifyLog[0].second &&
+            !be.gattNotifyLog[1].second);
+      // notifications arrive as {uuid, data} and are drained oldest-first
+      crosslua::Backend::BleGattNotif n;
+      memset(&n, 0, sizeof(n));
+      snprintf(n.uuid, sizeof(n.uuid), "%s", "2a19");
+      n.len = 2;
+      n.data[0] = 0x64;
+      n.data[1] = 0x00;
+      be.gattNotifBuf.push_back(n);
+      n.data[0] = 0x50;
+      be.gattNotifBuf.push_back(n);
+      be.logs.clear();
+      go(be, "local l = ble.notifs(); print(#l); print(l[1].uuid, l[1].data:byte(1), l[1].data:byte(2)); "
+             "print(l[2].uuid, l[2].data:byte(1)); print(#ble.notifs())");
+      expect(be, {"2", "2a19\t100\t0", "2a19\t80", "0"}, "notifs");
+    }
+    {
+      MockBackend be;  // argument validation never reaches the backend
+      setUp(be);
+      go(be, R"LUA(
+        print(ble.start("gatt"))
+        print(ble.read(""))
+        print(ble.read(7))
+        print(ble.write("2a19", 5))
+        print(ble.notify("2a19", "yes"))
+      )LUA");
+      expect(be, {"true", "nil\tuuid must be a 1..36 character string", "nil\tuuid must be a string",
+                  "nil\tdata must be a string", "nil\ton must be a boolean"}, "validation");
+      CHECK(be.gattReadCalls == 0 && be.gattWriteCalls == 0 && be.gattNotifyCalls == 0);
     }
   }
   if (ota_version_tests())

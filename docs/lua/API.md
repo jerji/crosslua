@@ -393,7 +393,7 @@ key and modifiers. The approval screen labels the permission `BLE`. BLE only: th
 | `ble.scan([ms])` → true \| nil, err | starts a scan that ends by itself after `ms` (500..60000, default 5000); read with `ble.devices()` |
 | `ble.scan_stop()` → true | |
 | `ble.devices()` → `{ {addr, name, rssi, connectable, hid}, ... }` | what the scan has seen (at most 24; the SDK lists HID devices and named devices, sort by `rssi` yourself) |
-| `ble.connect(addr)` → true \| nil, err | starts pairing/connecting (`addr` like `AA:BB:CC:DD:EE:FF`, either case; a bonded keyboard also reconnects on its own after `ble.start()`). Async: poll `ble.state()` |
+| `ble.connect(addr [, addr_type])` → true \| nil, err | starts pairing/connecting (`addr` like `AA:BB:CC:DD:EE:FF`, either case; a bonded keyboard also reconnects on its own after `ble.start()`). Async: poll `ble.state()`. `addr_type` is `0` public (default) or `1` random static — only the gatt mode uses it |
 | `ble.disconnect()` → true | drops the link, or **cancels an attempt in flight** (the stack is cycled for that: the SDK has no other way) |
 | `ble.state()` → `{running, mode, link, scanning, addr, name, passkey, reason}` | `link` is `idle`, `connecting`, `connected` or `failed`. `passkey` appears only while pairing waits for you to type that number **on the keyboard** (then Enter); `reason` only after a failure |
 | `ble.paired()` → `{ {addr, name}, ... }` / `ble.forget(addr)` | the bonded keyboards (kept in NVS) |
@@ -432,8 +432,35 @@ table.sort(list, function(a, b) return a.rssi > b.rssi end)
 for _, d in ipairs(list) do print(d.addr, d.rssi, #d.data) end
 ble.stop()
 ```
-Not yet: advertising/beacons and acting as a keyboard (they need the peripheral role, which upstream's NimBLE config compiles out),
-and a generic GATT client.
+### GATT mode (`ble.start("gatt")`)
+
+A generic BLE GATT client — bare NimBLE central, no HID host. Connect to any peripheral and read/write its
+characteristics or subscribe to its notifications (a GATT browser, a sensor, a remote). Same `bluetooth` permission,
+same ~50 KB stack, same exclusivity (one radio at a time). `ble.connect(addr [, addr_type])` links a client (the raw
+scan's `addr_type` field tells you whether to pass `1` for a random static address); poll `ble.state().link`
+for `connected`, then `ble.services()` triggers discovery.
+
+| call | notes |
+|---|---|
+| `ble.services()` → list \| nil, err | the discovered characteristics, one table per attribute, in order: `{service, uuid, handle, props}`. UUIDs use the canonical spelling (16-bit short `"2a19"`, 8-hex, or the 128-bit dashed form); `props` is the bitmask (0x01 broadcast, 0x02 read, 0x04 write-no-response, 0x08 write, 0x10 notify, 0x20 indicate, 0x40 signed-write, 0x80 extended). `nil, not connected` when there is no link |
+| `ble.read(uuid)` → data \| nil, err | the characteristic's value as a byte string (max 244 bytes) |
+| `ble.write(uuid, data [, {no_response=false}])` → true \| nil, err | writes `data` (string, max 244 bytes); `no_response=true` is write-without-response |
+| `ble.notify(uuid, on)` → true \| nil, err | subscribes (`true`) or unsubscribes to notifications/indications |
+| `ble.notifs()` → `{ {uuid, data}, ... }` | the pending notifications, oldest first (at most 32; each call drains them) |
+
+UUIDs are matched case-insensitively against the cached discovery — call `ble.services()` first. An unknown or missing
+characteristic reports `no such characteristic`.
+
+```lua
+ble.start("gatt"); local d = nil
+for _, x in ipairs(nearby_addrs) do d = x end       -- from a raw scan, or hardcoded
+ble.connect(d); for i = 1, 100 do if ble.state().link == "connected" then break end; app.sleep(100) end
+for _, c in ipairs(ble.services()) do print(c.service, c.uuid, c.props) end
+print(ble.read("2a19"))                              -- e.g. battery level
+```
+
+Not yet: advertising/beacons and acting as a keyboard/device (the peripheral role, which upstream's NimBLE config
+compiles out).
 
 ## epub — book metadata without opening the book
 | call | notes |

@@ -192,6 +192,89 @@ class RawObserver final : public NimBLEScanCallbacks {
   uint32_t seenAt_[crosslua::Backend::BLE_MAX_ADVERTS] = {};
   int count_ = 0, dropped_ = 0;
 };
+
+// Canonical UUID spelling that round-trips through NimBLEUUID's string constructor: the 16-bit short form "2a19",
+// the 32-bit "xxxxxxxx", or the 128-bit "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx". NimBLE's toString() prefixes the
+// short forms with "0x", which its own parser (length 6) rejects, so strip that.
+static void bleUuidStr(const NimBLEUUID& u, char* out, size_t cap) {
+  std::string s = u.toString();
+  size_t i = (s.size() >= 2 && s[0] == '0' && (s[1] == 'x' || s[1] == 'X')) ? 2 : 0;
+  size_t n = s.size() - i;
+  if (n > cap - 1) n = cap - 1;
+  memcpy(out, s.c_str() + i, n);
+  out[n] = 0;
+}
+
+// ble.start("gatt") notifications: a small ring the notify callback fills on NimBLE's host task, drained by the
+// script's thread with ble.notifs(). Dropped notifications (a full ring) are counted but not surfaced per-entry.
+class GattNotifier {
+ public:
+  void push(const char* uuid, const uint8_t* data, size_t len) {
+    if (len > 244) len = 244;
+    portENTER_CRITICAL(&mux_);
+    if (count_ < crosslua::Backend::BLE_MAX_GATT_NOTIFS) {
+      crosslua::Backend::BleGattNotif& n = ring_[(head_ + count_) % crosslua::Backend::BLE_MAX_GATT_NOTIFS];
+      snprintf(n.uuid, sizeof(n.uuid), "%s", uuid);
+      n.len = static_cast<uint8_t>(len);
+      if (len) memcpy(n.data, data, len);
+      count_++;
+    } else {
+      dropped_++;
+    }
+    portEXIT_CRITICAL(&mux_);
+  }
+  int snapshot(crosslua::Backend::BleGattNotif* out, int cap) {
+    portENTER_CRITICAL(&mux_);
+    const int n = count_ < cap ? count_ : cap;
+    for (int i = 0; i < n; i++) out[i] = ring_[(head_ + i) % crosslua::Backend::BLE_MAX_GATT_NOTIFS];
+    head_ = (head_ + n) % crosslua::Backend::BLE_MAX_GATT_NOTIFS;
+    count_ -= n;
+    portEXIT_CRITICAL(&mux_);
+    return n;
+  }
+  void clear() {
+    portENTER_CRITICAL(&mux_);
+    head_ = 0;
+    count_ = 0;
+    dropped_ = 0;
+    portEXIT_CRITICAL(&mux_);
+  }
+
+ private:
+  portMUX_TYPE mux_ = portMUX_INITIALIZER_UNLOCKED;
+  crosslua::Backend::BleGattNotif ring_[crosslua::Backend::BLE_MAX_GATT_NOTIFS];
+  int head_ = 0, count_ = 0, dropped_ = 0;
+};
+
+// Tracks the GATT link state (connected/connecting/failed) for ble.state(). NimBLE runs these on its own task, so
+// they are atomics; ble.state() reads them from the script's thread.
+class GattLinkCb final : public NimBLEClientCallbacks {
+ public:
+  void onConnect(NimBLEClient* c) override {
+    (void)c;
+    connecting = false;
+    connected = true;
+  }
+  void onConnectFail(NimBLEClient* c, int reason) override {
+    (void)c;
+    (void)reason;
+    connecting = false;
+    failed = true;
+  }
+  void onDisconnect(NimBLEClient* c, int reason) override {
+    (void)c;
+    (void)reason;
+    connecting = false;
+    connected = false;
+    failed = true;
+  }
+  void reset() {
+    connecting = false;
+    connected = false;
+    failed = false;
+  }
+  std::atomic<bool> connecting{false}, connected{false}, failed{false};
+};
 #endif
 
 class LuaAppActivity::Backend final : public crosslua::Backend {
@@ -222,6 +305,10 @@ class LuaAppActivity::Backend final : public crosslua::Backend {
   int bleMode_ = 0;     // crosslua::Backend::BleMode of the running stack
 #if FREEINK_CAP_BLE_HID_HOST
   RawObserver rawObs_;
+  NimBLEClient* gattClient_ = nullptr;  // ble.start("gatt"): the GATT client (bare NimBLE, no HID host)
+  GattNotifier gattNotifs_;
+  GattLinkCb gattLinkCb_;
+  char gattTarget_[18] = {0};  // the address a connect was started for (ble.state() reports it while connecting)
 #endif
   int touchX = 0, touchY = 0;  // last finger position seen (a release has no coordinates of its own)
   std::string openBookPath;    // set by app.open_book(); the activity hands it to the reader
@@ -879,6 +966,7 @@ class LuaAppActivity::Backend final : public crosslua::Backend {
   }
   bool bleStart(const char* mode, char* err, size_t errCap) override {
     const bool raw = mode && strcmp(mode, "raw") == 0;
+    const bool gatt = mode && strcmp(mode, "gatt") == 0;
     if (BleHid.isStopping()) {
       snprintf(err, errCap, "bluetooth is still shutting down: try again in a moment");
       return false;
@@ -903,6 +991,23 @@ class LuaAppActivity::Backend final : public crosslua::Backend {
       }
       bleMode_ = crosslua::Backend::BLE_MODE_RAW;
 #endif
+    } else if (gatt) {
+#if FREEINK_CAP_BLE_HID_HOST
+      if (!NimBLEDevice::init("CrossLua")) {
+        snprintf(err, errCap, "the Bluetooth stack did not start");
+        return false;
+      }
+      gattClient_ = NimBLEDevice::createClient();
+      if (!gattClient_) {
+        NimBLEDevice::deinit(true);
+        snprintf(err, errCap, "the Bluetooth client did not start");
+        return false;
+      }
+      gattClient_->setClientCallbacks(&gattLinkCb_, false);
+      gattLinkCb_.reset();
+      gattNotifs_.clear();
+      bleMode_ = crosslua::Backend::BLE_MODE_GATT;
+#endif
     } else {
       if (!BleHid.begin("CrossLua")) {
         snprintf(err, errCap, "the Bluetooth stack did not start");
@@ -925,6 +1030,17 @@ class LuaAppActivity::Backend final : public crosslua::Backend {
       NimBLEDevice::getScan()->clearResults();
       NimBLEDevice::deinit(true);  // the NimBLE host + controller RAM goes back to the heap
       rawObs_.release();
+#endif
+    } else if (bleMode_ == crosslua::Backend::BLE_MODE_GATT) {
+#if FREEINK_CAP_BLE_HID_HOST
+      if (gattClient_) {
+        gattClient_->disconnect();
+        NimBLEDevice::deleteClient(gattClient_);
+        gattClient_ = nullptr;
+      }
+      gattNotifs_.clear();
+      gattLinkCb_.reset();
+      NimBLEDevice::deinit(true);
 #endif
     } else {
       for (int i = 0; i < 4 && !BleHid.end(1000); i++) {
@@ -974,7 +1090,32 @@ class LuaAppActivity::Backend final : public crosslua::Backend {
       if (!strcasecmp(BleHid.paired(i).addr, addr)) return BleHid.paired(i).addr;
     return addr;
   }
-  bool bleConnect(const char* addr, char* err, size_t errCap) override {
+  bool bleConnect(const char* addr, int addrType, char* err, size_t errCap) override {
+    if (bleMode_ == crosslua::Backend::BLE_MODE_GATT) {
+#if FREEINK_CAP_BLE_HID_HOST
+      if (!gattClient_) {
+        snprintf(err, errCap, "the Bluetooth client is not up");
+        return false;
+      }
+      if (gattClient_->isConnected()) gattClient_->disconnect();
+      gattLinkCb_.reset();
+      snprintf(gattTarget_, sizeof(gattTarget_), "%s", addr);
+      // Async connect: returns at once; ble.state().link reports "connecting" then "connected"/"failed".
+      if (!gattClient_->connect(NimBLEAddress(std::string(addr), addrType ? BLE_ADDR_RANDOM : BLE_ADDR_PUBLIC),
+                                true, true, true)) {
+        gattTarget_[0] = 0;
+        snprintf(err, errCap, "the connection attempt did not start");
+        return false;
+      }
+      gattLinkCb_.connecting = true;
+      return true;
+#else
+      (void)addr;
+      (void)addrType;
+      snprintf(err, errCap, "no bluetooth on this device");
+      return false;
+#endif
+    }
     BleHid.stopScan();  // a scan and a connect share the one radio task
     bleClearLink();
     const char* spelled = bleKnownSpelling(addr);
@@ -989,6 +1130,16 @@ class LuaAppActivity::Backend final : public crosslua::Backend {
     return true;
   }
   void bleDisconnect() override {
+    if (bleMode_ == crosslua::Backend::BLE_MODE_GATT) {
+#if FREEINK_CAP_BLE_HID_HOST
+      if (gattClient_) {
+        gattClient_->disconnect();
+        gattLinkCb_.reset();
+        gattTarget_[0] = 0;
+      }
+#endif
+      return;
+    }
     if (BleHid.isConnecting() && !BleHid.isConnected()) {
       // The SDK cannot cancel an attempt in flight from outside (disconnect() only drops an established link, and a
       // connect to a device that is not there runs for tens of seconds): end() is its supported way to abandon one, so
@@ -1006,6 +1157,33 @@ class LuaAppActivity::Backend final : public crosslua::Backend {
     bleClearLink();
   }
   void bleState(crosslua::Backend::BleState* s) override {
+    if (bleMode_ == crosslua::Backend::BLE_MODE_GATT) {
+#if FREEINK_CAP_BLE_HID_HOST
+      if (gattClient_ && gattClient_->isConnected()) {
+        s->link = crosslua::Backend::BLE_CONNECTED;
+        const std::string a = gattClient_->getPeerAddress().toString();
+        snprintf(s->addr, sizeof(s->addr), "%s", a.c_str());
+        s->name[0] = 0;  // the name is not carried on a connected client; the script saw it while scanning
+        return;
+      }
+      if (gattLinkCb_.connecting) {
+        s->link = crosslua::Backend::BLE_CONNECTING;
+        snprintf(s->addr, sizeof(s->addr), "%s", gattTarget_);
+        return;
+      }
+      if (gattLinkCb_.failed) {
+        s->link = crosslua::Backend::BLE_FAILED;
+        snprintf(s->reason, sizeof(s->reason), "the connection failed");
+        snprintf(s->addr, sizeof(s->addr), "%s", gattTarget_);
+        return;
+      }
+      s->link = crosslua::Backend::BLE_IDLE;
+      return;
+#else
+      s->link = crosslua::Backend::BLE_IDLE;
+      return;
+#endif
+    }
     s->scanning = BleHid.isScanning();
     uint32_t pk = 0;
     if (BleHid.takePairingPasskey(pk)) {  // the keyboard shows no number: the user types THIS one on it, then Enter
@@ -1113,6 +1291,146 @@ class LuaAppActivity::Backend final : public crosslua::Backend {
     (void)out;
     (void)cap;
     *dropped = 0;
+    return 0;
+#endif
+  }
+  // --- gatt mode ---
+  // Resolves a characteristic UUID against the cached discovery (run ble.services() first). nullptr when absent.
+  NimBLERemoteCharacteristic* gattFind(const char* uuid) {
+#if FREEINK_CAP_BLE_HID_HOST
+    if (!gattClient_) return nullptr;
+    NimBLEUUID want(uuid);
+    for (auto* s : gattClient_->getServices(false))
+      for (auto* ch : s->getCharacteristics(false))
+        if (ch->getUUID() == want) return ch;
+#endif
+    return nullptr;
+  }
+  int bleGattServices(crosslua::Backend::BleGattChar* out, int cap) override {
+#if FREEINK_CAP_BLE_HID_HOST
+    if (!gattClient_ || !gattClient_->isConnected()) return -1;
+    int n = 0;
+    for (auto* s : gattClient_->getServices(true)) {
+      for (auto* ch : s->getCharacteristics(true)) {
+        if (n >= cap) return n;
+        bleUuidStr(s->getUUID(), out[n].service, sizeof(out[n].service));
+        bleUuidStr(ch->getUUID(), out[n].uuid, sizeof(out[n].uuid));
+        out[n].handle = ch->getHandle();
+        uint8_t props = 0;
+        if (ch->canBroadcast()) props |= 0x01;
+        if (ch->canRead()) props |= 0x02;
+        if (ch->canWriteNoResponse()) props |= 0x04;
+        if (ch->canWrite()) props |= 0x08;
+        if (ch->canNotify()) props |= 0x10;
+        if (ch->canIndicate()) props |= 0x20;
+        if (ch->canWriteSigned()) props |= 0x40;
+        if (ch->hasExtendedProps()) props |= 0x80;
+        out[n].props = props;
+        n++;
+      }
+    }
+    return n;
+#else
+    (void)out;
+    (void)cap;
+    return -1;
+#endif
+  }
+  bool bleGattRead(const char* uuid, uint8_t* data, size_t* len, size_t maxLen, char* err, size_t errCap) override {
+#if FREEINK_CAP_BLE_HID_HOST
+    if (!gattClient_ || !gattClient_->isConnected()) {
+      snprintf(err, errCap, "not connected (ble.connect then wait for ble.state().link)");
+      return false;
+    }
+    NimBLERemoteCharacteristic* ch = gattFind(uuid);
+    if (!ch) {
+      snprintf(err, errCap, "no such characteristic (call ble.services() first)");
+      return false;
+    }
+    NimBLEAttValue v = ch->readValue();
+    if (v.size() > maxLen) {
+      snprintf(err, errCap, "value is %u bytes, larger than the %u-byte limit", static_cast<unsigned>(v.size()),
+               static_cast<unsigned>(maxLen));
+      return false;
+    }
+    if (v.size()) memcpy(data, v.data(), v.size());
+    *len = v.size();
+    return true;
+#else
+    (void)uuid;
+    (void)data;
+    (void)len;
+    (void)maxLen;
+    if (errCap) err[0] = 0;
+    return false;
+#endif
+  }
+  bool bleGattWrite(const char* uuid, const uint8_t* data, size_t len, bool noResponse, char* err,
+                    size_t errCap) override {
+#if FREEINK_CAP_BLE_HID_HOST
+    if (!gattClient_ || !gattClient_->isConnected()) {
+      snprintf(err, errCap, "not connected (ble.connect then wait for ble.state().link)");
+      return false;
+    }
+    NimBLERemoteCharacteristic* ch = gattFind(uuid);
+    if (!ch) {
+      snprintf(err, errCap, "no such characteristic (call ble.services() first)");
+      return false;
+    }
+    if (!ch->writeValue(data, len, !noResponse)) {
+      snprintf(err, errCap, "the write was refused");
+      return false;
+    }
+    return true;
+#else
+    (void)uuid;
+    (void)data;
+    (void)len;
+    (void)noResponse;
+    if (errCap) err[0] = 0;
+    return false;
+#endif
+  }
+  bool bleGattNotify(const char* uuid, bool on, char* err, size_t errCap) override {
+#if FREEINK_CAP_BLE_HID_HOST
+    if (!gattClient_ || !gattClient_->isConnected()) {
+      snprintf(err, errCap, "not connected (ble.connect then wait for ble.state().link)");
+      return false;
+    }
+    NimBLERemoteCharacteristic* ch = gattFind(uuid);
+    if (!ch) {
+      snprintf(err, errCap, "no such characteristic (call ble.services() first)");
+      return false;
+    }
+    if (on) {
+      if (!ch->subscribe(true, [this](NimBLERemoteCharacteristic* c, uint8_t* d, size_t l, bool) {
+            char buf[37];
+            bleUuidStr(c->getUUID(), buf, sizeof(buf));
+            gattNotifs_.push(buf, d, l);
+          })) {
+        snprintf(err, errCap, "the subscription was refused (characteristic may not notify)");
+        return false;
+      }
+    } else {
+      if (!ch->unsubscribe()) {
+        snprintf(err, errCap, "the unsubscribe was refused");
+        return false;
+      }
+    }
+    return true;
+#else
+    (void)uuid;
+    (void)on;
+    if (errCap) err[0] = 0;
+    return false;
+#endif
+  }
+  int bleGattNotifs(crosslua::Backend::BleGattNotif* out, int cap) override {
+#if FREEINK_CAP_BLE_HID_HOST
+    return gattNotifs_.snapshot(out, cap);
+#else
+    (void)out;
+    (void)cap;
     return 0;
 #endif
   }
