@@ -117,6 +117,8 @@ struct MockBackend : Backend {
   size_t freeHeapQuick() override { return simTotal ? simTotal - simVm->usedBytes() : freeHeap(); }
   size_t minFreeHeap() override { return 100000; }
   int battery() override { return 77; }
+  BatteryStatus bat = {};  // fs.volume-style mock: .supported=false -> "no battery on this device"
+  BatteryStatus batteryStatus() override { return bat; }
   void log(const char* m) override { logs.push_back(m); }
   std::string appNameVal = "test";
   bool secretOk = true;
@@ -1603,6 +1605,40 @@ int main() {
           "print(system.millis(), f, m, system.battery(), app.name(), app.dir(), w, h, b, u > 0)");
     CHECK(run(vm, be) == Status::Finished);
     CHECK(be.logs[0] == "5000\t123456\t100000\t77\ttest\t/plugins/test\t800\t480\t98304\ttrue");
+  }
+  {
+    TEST("system.battery_info: full fields, omission of unknown, no-battery");
+    {
+      LuaVm vm;
+      MockBackend be;
+      be.bat.percent = 80;
+      be.bat.millivolts = 3850;
+      be.bat.charging = 1;
+      be.bat.externalPower = 1;
+      setup(vm, be, "local b = system.battery_info(); print(b.percent, b.millivolts, b.charging, b.external_power)");
+      CHECK(run(vm, be) == Status::Finished);
+      CHECK(be.logs.size() == 1);
+      if (be.logs.size() == 1) CHECK(be.logs[0] == "80\t3850\ttrue\ttrue");
+    }
+    {
+      LuaVm vm;
+      MockBackend be;
+      be.bat.percent = 50;      // millivolts + charging unknown -> omitted (nil)
+      be.bat.externalPower = 0;
+      setup(vm, be, "local b = system.battery_info(); print(b.percent, b.millivolts, b.charging, b.external_power)");
+      CHECK(run(vm, be) == Status::Finished);
+      CHECK(be.logs.size() == 1);
+      if (be.logs.size() == 1) CHECK(be.logs[0] == "50\tnil\tnil\tfalse");
+    }
+    {
+      LuaVm vm;
+      MockBackend be;
+      be.bat.supported = false;
+      setup(vm, be, "print(system.battery_info())");
+      CHECK(run(vm, be) == Status::Finished);
+      CHECK(be.logs.size() == 1);
+      if (be.logs.size() == 1) CHECK(be.logs[0] == "nil\tno battery on this device");
+    }
   }
   {
     TEST("error in script surfaces message, VM can still close cleanly");

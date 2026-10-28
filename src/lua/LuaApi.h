@@ -57,6 +57,15 @@ class Backend {
   virtual size_t freeHeapQuick() { return freeHeap(); }
   virtual size_t minFreeHeap() = 0;
   virtual int battery() = 0;  // percent, or -1
+  // Full battery telemetry. supported==false -> the board has no battery ("no battery on this device").
+  struct BatteryStatus {
+    bool supported = true;
+    int percent = -1;         // 0-100, -1 unknown
+    int millivolts = -1;      // -1 unknown
+    int charging = -1;        // -1 unknown, 0 not charging, 1 charging
+    int externalPower = -1;   // -1 unknown, 0 absent, 1 present (a full battery stops charging while still powered)
+  };
+  virtual BatteryStatus batteryStatus() = 0;
   // Wall clock. epochNow() = UTC seconds, or 0 when the clock is not trustworthy (never synced / no RTC).
   virtual int64_t epochNow() = 0;
   // Local broken-down time for `epoch` -> out[0..7] = year, month(1-12), day(1-31), hour, min, sec, wday(1=Sunday),

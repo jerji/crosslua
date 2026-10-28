@@ -87,7 +87,7 @@ are values (`entry must be a plain .lua file name...`, `no such entry script`); 
 
 ## system
 `system.millis()` (31-bit, wraps ~24 days — compare with subtraction) · `system.heap()` → free, min_free, largest free block (device RAM) ·
-`system.lua_mem()` → used, peak, budget (this app's Lua heap) · `system.battery()` → percent · `system.last_wake()` → `"timer" | "button" | "power-on" | "other"` — what woke the previous cycle
+`system.lua_mem()` → used, peak, budget (this app's Lua heap) · `system.battery()` → percent · `system.battery_info()` → `{percent, millivolts, charging, external_power}` (unknown fields omitted; `charging` reflects the charger IC, `external_power` stays true on a full battery; `nil, "no battery on this device"` when the board has none) · `system.last_wake()` → `"timer" | "button" | "power-on" | "other"` — what woke the previous cycle
 (`"power-on"` = a real reset; the wake is a fresh boot, so an app that schedules work on a timer checks this first) ·
 `system.sleep(seconds)` → `true` \| `nil, err` — **deep-sleeps the device** for 1..604800 s (a week): arms the timer and the
 power button, then enters the same sleep flow as the power button (sleep screen, plugin events, rails off). The call never

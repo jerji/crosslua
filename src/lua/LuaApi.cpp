@@ -332,6 +332,32 @@ static int pushErr2(lua_State* L, const char* msg) {
   return 2;
 }
 
+// system.battery_info() -> { percent=, millivolts=, charging=, external_power= } | nil, "no battery on this device".
+// Unknown fields are omitted (nil) rather than guessed. charging reflects the charger IC (a full battery reports
+// not-charging while external_power stays true).
+int sys_battery_info(lua_State* L) {
+  const Backend::BatteryStatus s = be(L).batteryStatus();
+  if (!s.supported) return pushErr2(L, "no battery on this device");
+  lua_createtable(L, 0, 4);
+  if (s.percent >= 0) {
+    lua_pushinteger(L, s.percent);
+    lua_setfield(L, -2, "percent");
+  }
+  if (s.millivolts >= 0) {
+    lua_pushinteger(L, s.millivolts);
+    lua_setfield(L, -2, "millivolts");
+  }
+  if (s.charging >= 0) {
+    lua_pushboolean(L, s.charging == 1);
+    lua_setfield(L, -2, "charging");
+  }
+  if (s.externalPower >= 0) {
+    lua_pushboolean(L, s.externalPower == 1);
+    lua_setfield(L, -2, "external_power");
+  }
+  return 1;
+}
+
 // gfx.qr(text, x, y, side) -> true | false. Draws a QR code fitted into a side x side box in the CURRENT frame.
 int gfx_qr(lua_State* L) {
   size_t len = 0;
@@ -944,6 +970,7 @@ void registerApi(LuaVm& vm, Backend& backend) {
                                  {"heap", sys_heap},
                                  {"lua_mem", sys_lua_mem},
                                  {"battery", sys_battery},
+                                {"battery_info", sys_battery_info},
                                  {"mac", sys_mac},
                                  {"usb", sys_usb},
                                  {"dev_floor", sys_dev_floor},
