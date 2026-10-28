@@ -1,0 +1,1 @@
+{"title": "OPDS Browser", "description": "Browse OPDS catalogues (Gutenberg, Calibre) and download EPUBs to Books.", "permissions": ["network"], "storage": {"write": ["Books"]}}
