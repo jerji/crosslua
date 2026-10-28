@@ -1,0 +1,1 @@
+{"title": "Network Change", "description": "Scan the air every 20 s, learn the APs, then log and alert on new BSSIDs, channel moves, security downgrades and APs going silent. Log: data:network_change.log", "permissions": ["network"]}
