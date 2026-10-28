@@ -2784,6 +2784,41 @@ int main() {
         CHECK(be.logs[6] == "nil\tcannot remove the data root");
       }
     }
+    TEST("xml.parse: element tree, text merge, whitespace, malformed/empty/too-deep/too-large");
+    {
+      MockBackend be;
+      LuaVm vm;
+      CHECK(vm.open(256 * 1024));
+      registerApi(vm, be);
+      const char* script = R"LUA(
+        local r = xml.parse('<feed><title>My Feed</title><entry id="1"><title>Post</title><link href="http://x"/></entry></feed>')
+        print(r.tag, type(r.attrs))
+        print(r[1].tag, r[1][1], r[2].tag, r[2].attrs.id)
+        print(r[2][1].tag, r[2][1][1], r[2][2].tag, r[2][2].attrs.href)
+        local m = xml.parse('<t>a<![CDATA[b]]>c</t>')
+        print(m.tag, m[1])
+        local w = xml.parse('<t>line 1<b>bold</b>line 2</t>')
+        print(w[1], w[2].tag, w[2][1], w[3])
+        print(xml.parse('<a><b></a>'))
+        print(xml.parse(''))
+        print(xml.parse(('<a>'):rep(33)))
+        print(xml.parse((' '):rep(65537)))
+      )LUA";
+      CHECK(vm.load("t", script, strlen(script)));
+      CHECK(run(vm, be, 200000) == Status::Finished);
+      CHECK(be.logs.size() == 9);
+      if (be.logs.size() == 9) {
+        CHECK(be.logs[0] == "feed\ttable");
+        CHECK(be.logs[1] == "title\tMy Feed\tentry\t1");
+        CHECK(be.logs[2] == "title\tPost\tlink\thttp://x");
+        CHECK(be.logs[3] == "t\tabc");
+        CHECK(be.logs[4] == "line 1\tb\tbold\tline 2");
+        CHECK(be.logs[5].find("nil\t") == 0 && be.logs[5].size() > 4);  // malformed: nil + some expat message
+        CHECK(be.logs[6] == "nil\tempty XML document");
+        CHECK(be.logs[7] == "nil\txml nested deeper than 32 levels");
+        CHECK(be.logs[8] == "nil\tXML too large (max 64 KB)");
+      }
+    }
     TEST("batch A: wifi.scan/time.sync+set/fs.rename/system.mac/gfx.qr/rounded/frontlight");
     MockBackend be;
     be.files["/.crosslua/data/test/a.txt"] = "one";

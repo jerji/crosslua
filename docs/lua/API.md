@@ -481,6 +481,9 @@ Arrays are tables with keys 1..n; everything else encodes as an object (string k
 Integral numbers that fit int32 decode to integers, others to floats (single precision) — don't round-trip 64-bit ids through JSON.
 Memory: the result is built in a few KB of staging chunks; budget roughly 2–3× the document size while encoding/decoding.
 
+## xml
+`xml.parse(text)` → node \| nil, err. Parses a well-formed XML document into a tree (expat; firmware-vendored, host uses system libexpat). A `node` (element) is a table `{ tag = name, attrs = {attr = value, ...} }` whose children are appended positionally: a **string** child is text (character data merged with adjacent CDATA), a **table** child is a nested element. Comments and processing instructions are dropped; namespaces are not resolved (tags keep their prefix, `dc:title`). The document's single root element is returned. Limits: input ≤ 64 KB, nesting depth ≤ 32; malformed XML returns `nil, err` (expat's message).
+
 ## Writing binding code (C++)
 `lua_error`/`luaL_check*` longjmp: never hold objects with destructors (std::string, RAII locks) across them.
 Backends: `src/lua/LuaApi.h` (`Backend` interface). Host tests: `test/lua_host/run.sh`.

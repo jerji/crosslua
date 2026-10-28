@@ -60,6 +60,7 @@ void registerRequire(lua_State* L, Ctx* c);
 void registerNet(lua_State* L, Ctx* c);
 void registerZip(lua_State* L, Ctx* c);
 void registerCrypto(lua_State* L, Ctx* c);
+void registerXml(lua_State* L, Ctx* c);
 void registerSock(lua_State* L, Ctx* c);
 void registerAudio(lua_State* L, Ctx* c);
 void registerMic(lua_State* L, Ctx* c);

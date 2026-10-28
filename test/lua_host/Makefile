@@ -15,7 +15,7 @@ CXXFLAGS  = -std=c++20 -O1 -g1 -fno-var-tracking -Wall -Wextra -Ilib/lua -I$(MBE
             -DMBEDTLS_CONFIG_FILE='"mbedtls_host_config.h"' -I. -Ilib -Ilib/InflateReader -Ilib/uzlib/src \
             -fsanitize=address,undefined -MMD -MP
 
-CXX_SRC  := test/lua_host/test_vm.cpp test/lua_host/test_ota.cpp $(addprefix src/lua/,LuaVm.cpp LuaApi.cpp LuaFs.cpp LuaJson.cpp LuaNet.cpp LuaZip.cpp LuaCrypto.cpp LuaSock.cpp LuaAudio.cpp LuaMic.cpp LuaEspNow.cpp LuaMonitor.cpp LuaTx.cpp LuaBle.cpp) lib/InflateReader/InflateReader.cpp
+CXX_SRC  := test/lua_host/test_vm.cpp test/lua_host/test_ota.cpp $(addprefix src/lua/,LuaVm.cpp LuaApi.cpp LuaFs.cpp LuaJson.cpp LuaNet.cpp LuaZip.cpp LuaCrypto.cpp LuaXml.cpp LuaSock.cpp LuaAudio.cpp LuaMic.cpp LuaEspNow.cpp LuaMonitor.cpp LuaTx.cpp LuaBle.cpp) lib/InflateReader/InflateReader.cpp
 C_SRC    := $(wildcard lib/lua/*.c) lib/uzlib/src/tinflate.c
 MBED_SRC := $(addprefix $(MBED)/library/,sha1.c sha256.c md5.c md.c aes.c platform_util.c constant_time.c gcm.c cipher.c cipher_wrap.c)
 
@@ -24,7 +24,7 @@ C_OBJ    := $(patsubst %.c,$(OUT)/obj/%.o,$(C_SRC))
 MBED_OBJ := $(patsubst $(MBED)/%.c,$(OUT)/obj/mbedtls/%.o,$(MBED_SRC))
 
 $(OUT)/test_vm: $(CXX_OBJ) $(C_OBJ) $(MBED_OBJ)
-	$(CXX) $^ -fsanitize=address,undefined -o $@
+	$(CXX) $^ -fsanitize=address,undefined -lexpat -o $@
 
 $(OUT)/obj/%.o: %.cpp
 	@mkdir -p $(dir $@)

@@ -45,18 +45,18 @@ word. Order = leverage per effort, cheapest first. Everything here is NOT built 
 |---|---|---|---|---|
 | 1 | `crypto.md5` (+ `crc32`) | KOReader sync (document id + `x-auth-key`), Calibre | S | **done**: `crypto.md5`, `crypto.hash("md5")`, `crypto.crc32` (host-tested against hashlib/zlib vectors) |
 | 2 | `wifi.join(ssid, password)` or `wifi.connect{ssid=, password=}` | network pickers, provisioning apps | S | ✔ `wifi.connect` only takes `{tls}` and auto-joins the saved network |
-| 3 | button hold: `input.held_ms()` or hold events | games (flag/hold-to-delete), long-press menus | S | ✔ button events are release-only; only touch has `"long"` |
+| 3 | button hold: `input.held_ms()` or hold events | games (flag/hold-to-delete), long-press menus | S | **done**: holding confirm/left/right/up/down >500 ms emits `<name>_hold`; Back stays the force-quit escape |
 | 4 | `led.flash(r, g, b [, n [, on_ms [, off_ms]]])` | notification patterns | S | ✔ was listed as done by mistake; `LedManager::flash` exists |
 | 5 | `system.battery()` detail: charging, millivolts, mA | power screens | S | percent only today |
-| 6 | `fs.volume()` (SD free/total), `fs.rmdir` (recursive) | disk-full warnings, cache clearing, archive/restore | S | `fs.remove` only removes empty folders |
-| 7 | `wifi.scan` fields: BSSID, channel, auth mode, hidden | scanners, pickers, heat maps | S | ✔ rows are `{ssid, rssi, encrypted}` today |
+| 6 | `fs.volume()` (SD free/total), `fs.rmdir` (recursive) | disk-full warnings, cache clearing, archive/restore | S | **`fs.rmdir` done** (recursive, guards); `fs.volume` still open |
+| 7 | `wifi.scan` fields: BSSID, channel, auth mode, hidden | scanners, pickers, heat maps | S | **done**: rows are `{ssid, rssi, encrypted, bssid, channel, auth, hidden}` |
 | 8 | `net.mdns_advertise` (+ the UDP discovery companions use) | Calibre/transfer discovery | S | ✔ only `mdns_query` exists |
 | 9 | small getters: `system.reboot`, `system.language`, `system.mem`, `device.caps().model`, `time.tz`, `system.panic_info` | diagnostics, localisation | S | |
 | 10 | `wifi.set_mac` | MAC rotation | S | |
 | 11 | `gfx.wrap` / `gfx.char_width` / hyphenation helper | every text app hand-rolls line breaking | S | |
-| 12 | `crypto.aes_gcm` (+ `x25519`, `hkdf`) | encrypted logs, app-to-app crypto | S-M | mbedtls GCM is linked |
+| 12 | `crypto.aes_gcm` (+ `x25519`, `hkdf`) | encrypted logs, app-to-app crypto | S-M | **`aes_gcm` done** (NIST-vector verified); `x25519`/`hkdf` still open |
 | 13 | `decimal.*` (decNumber) | exact Calculator (Lua floats are 32-bit) | S | |
-| 14 | **`xml.parse` (expat, already linked)** | OPDS/RSS/Atom, EPUB NCX/nav, TOC, AO3 niceties | M | **requested by 6 of the 8 audits: the most wanted primitive** |
+| 14 | **`xml.parse` (expat, already linked)** | OPDS/RSS/Atom, EPUB NCX/nav, TOC, AO3 niceties | M | **done**: `xml.parse(text)` → `{tag, attrs, [children]}` tree (text merged, CDATA, 64 KB input / depth 32); the most-wanted primitive |
 | 15 | BLE generic GATT client (`ble.start("gatt")` + `services/read/write/notify/notifs`) | GATT browser, sensors, remotes | M | **done** (host-tested; on-device run pending). central role, one connection, small MTU; advertising/peripheral needs an sdkconfig change (row 22) |
 | 16 | **firmware-state bridge**: read-only `epub.progress`, recent books, reading stats, library index | AO3, reading stats, shelves, Ruby-style apps | M | **design decision**: apps cannot see the firmware's hidden folders by design, and this wall blocks the most app ideas after xml |
 | 17 | settings API: `system.setting(name [, value])` over an allowlist (sleep-screen mode, sleep timeout, orientation) | sleep-screen designer, "Live" photo, settings hub | M | needs an upstream hook; decide together with #16 |
