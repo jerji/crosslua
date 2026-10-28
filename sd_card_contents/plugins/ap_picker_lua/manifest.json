@@ -1,0 +1,1 @@
+{"title": "AP Picker", "description": "Live scan of nearby APs: mark each one whitelist or blacklist, save to app:ap_list.json. Scan only, never transmits.", "permissions": ["network"]}
