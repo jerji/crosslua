@@ -1,0 +1,1 @@
+{"title": "Network Modes", "description": "Shows which radio mode is live and the rules for switching between them. Read-only.", "permissions": ["network", "espnow"]}
