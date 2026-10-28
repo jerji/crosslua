@@ -1,4 +1,4 @@
-// zip.* — read entries of a ZIP/EPUB without holding it in RAM. Paths use the normal fs scopes (app:/data:/sd:).
+// zip.* - read entries of a ZIP/EPUB without holding it in RAM. Paths use the normal fs scopes (app:/data:/sd:).
 //
 // Same discipline as LuaNet.cpp: arguments become plain pointers, the backend works on POD + one malloc'd buffer, and
 // the result is pushed from inside lua_pcall so an out-of-memory error can never skip the free().

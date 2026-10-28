@@ -4,8 +4,8 @@ print("== wifi")
 local ok, why = wifi.connect()
 print((ok and "PASS " or "FAIL ") .. "wifi.connect " .. tostring(why or ""))
 if not ok then return end
--- net.* on-device UDP test. Needs /root/x4/udp_server.py running on SERVER:9098.
-local SERVER, PORT = "192.168.1.67", 9098
+-- net.* on-device UDP test. Needs a UDP test server on SERVER:9098 (SERVER = the IP in data:server.txt).
+local SERVER, PORT = assert((fs.read("data:server.txt") or ""):match("^%s*([%d%.]+)%s*$"), "put the test host's IP address in data:server.txt (File Transfer: /.crosslua/data/lua_tests_lua/server.txt)"), 9098
 local BIG1400_SHA = "6c4e97a2e94daf14c26f7c3212f2d8c7e1fc14dc5a87050624f2ad70fd05fd1c"
 local fails = 0
 local function check(name, cond, extra)

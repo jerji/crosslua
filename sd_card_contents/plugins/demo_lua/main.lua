@@ -1,4 +1,4 @@
--- demo_lua — a one-screen tour of CrossLua for the README. Draws, hashes, checks the radio, times and battery.
+-- demo_lua - a one-screen tour of CrossLua for the README. Draws, hashes, checks the radio, times and battery.
 local function __main()
   local f, min = system.heap()
   local wifi = wifi.status()
@@ -7,7 +7,7 @@ local function __main()
 
   gfx.clear()
   -- header band
-  gfx.rect(0, 0, 480, 40, true)  -- filled black header band
+  gfx.rect(0, 0, 480, 40, true)
   gfx.text(16, 14, "CrossLua  ·  Lua apps on your e-reader", "ui12", "w")
 
   local y = 56

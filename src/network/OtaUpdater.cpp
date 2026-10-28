@@ -20,8 +20,8 @@
 #include "OtaVersion.h"
 
 namespace {
-// CrossLua updates from its OWN releases: pointing this at upstream would offer (and install) firmware without the Lua runtime.
-// A fork of CrossLua overrides the repository with -DCROSSLUA_RELEASE_REPO=\"owner/name\".
+// CrossLua updates from its OWN releases: pointing this at upstream would offer (and install) firmware without the Lua
+// runtime. A fork of CrossLua overrides the repository with -DCROSSLUA_RELEASE_REPO=\"owner/name\".
 #ifndef CROSSLUA_RELEASE_REPO
 #define CROSSLUA_RELEASE_REPO "jerji/crosslua"
 #endif
@@ -60,7 +60,8 @@ OtaUpdater::OtaUpdaterError OtaUpdater::checkForUpdate() {
       releaseParser.feed(reinterpret_cast<const char*>(data + offset), 1);
       offset++;
       if (releaseParser.foundTag()) {
-        snprintf(assetName, sizeof(assetName), "crosspoint-%s%s.bin", ota_version::skipV(releaseParser.getTagName()), assetSuffix);
+        snprintf(assetName, sizeof(assetName), "crosspoint-%s%s.bin", ota_version::skipV(releaseParser.getTagName()),
+                 assetSuffix);
         releaseParser.setFirmwareAssetName(assetName);
         assetNameSet = true;
       }

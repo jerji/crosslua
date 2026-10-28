@@ -1,7 +1,7 @@
 -- hub test: the body is wrapped so an early `return` or an error still goes back to the menu (app.restart("main.lua")).
--- http.request for REST/JSON: methods, content_type, headers on POST, ca pinning, response_headers. Needs the host echo server:
---   python3 tools/http_test_server.py --ip <host ip> --dir /root/x4/tlsdemo      (https :8444, http :8081)
--- and app:tls_target.txt (the host's IP), app:tls_ca.pem, app:tls_wrongca.pem on the card (same files as the tls test).
+-- http.request for REST/JSON: methods, content_type, headers on POST, ca pinning, response_headers. Needs an echo server
+-- (https :8444, http :8081) and app:tls_target.txt (the host's IP), app:tls_ca.pem, app:tls_wrongca.pem on the card
+-- (same files as the tls test).
 local function __test()
 print("== wifi")
 local ok, why = wifi.connect()

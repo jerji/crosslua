@@ -1,7 +1,7 @@
 -- hub test: the body is wrapped so an early `return` or an error still goes back to the menu (app.restart("main.lua")).
 local function __test()
 -- Pads the Lua heap until free RAM is ~90 KB (between the plain gate 80K and the TLS gate 96K), then checks both gates
--- and that plain TCP works and https fails cleanly. Needs /root/x4/echo_server.py on 192.168.1.67:9099.
+-- and that plain TCP works and https fails cleanly. Needs a TCP echo test server on port 9099 (host IP in data:server.txt).
 local fails = 0
 local function check(name, cond, extra)
   if not cond then fails = fails + 1 end
@@ -19,7 +19,8 @@ check("wifi.connect{tls=false} joins", ok == true, tostring(why))
 if not ok then print("ABORT"); return end
 local free1, min1 = system.heap()
 print(("after join: free %d KB, min-free %d KB, lua_mem %d"):format(free1 // 1024, min1 // 1024, system.lua_mem()))
-local h, err = net.connect("192.168.1.67", 9099, { timeout_ms = 3000 })
+local SERVER = assert((fs.read("data:server.txt") or ""):match("^%s*([%d%.]+)%s*$"), "put the test host's IP address in data:server.txt (File Transfer: /.crosslua/data/lua_tests_lua/server.txt)")
+local h, err = net.connect(SERVER, 9099, { timeout_ms = 3000 })
 check("plain TCP connect", h ~= nil, err)
 if h then
   local got = ""

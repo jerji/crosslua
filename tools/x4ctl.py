@@ -30,6 +30,7 @@ import os
 import re
 import subprocess
 import sys
+import tempfile
 import time
 
 try:
@@ -63,8 +64,9 @@ class Device:
         self.ser.flush()
 
     def _record(self, line):
-        # Every line any command sees is appended here, so `grep LUA /root/x4/serial.log` works after the fact.
-        path = os.environ.get("X4_LOG", "/root/x4/serial.log")
+        # Every line any command sees is appended here, so `grep LUA "$X4_LOG"` works after the fact.
+        # Default: a file in the system temp dir (set X4_LOG to keep it elsewhere).
+        path = os.environ.get("X4_LOG", os.path.join(tempfile.gettempdir(), "x4ctl-serial.log"))
         if path:
             try:
                 with open(path, "a", errors="replace") as f:

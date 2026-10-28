@@ -1,4 +1,4 @@
--- totp_lua — an authenticator (RFC 6238 one-time codes) whose secrets live in a PIN-protected vault on the card.
+-- totp_lua - an authenticator (RFC 6238 one-time codes) whose secrets live in a PIN-protected vault on the card.
 -- vault.lua: AES-256 + HMAC, key = PIN + this device's secret (crypto.device_key). totp.lua: codes, base32, otpauth:// links.
 -- No permissions: it needs no radio. The clock comes from the system (restored from flash, re-synced whenever WiFi connects).
 local function __main()

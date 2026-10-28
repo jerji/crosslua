@@ -1,4 +1,4 @@
--- run.lua — runs ONE Grimoire spell in a fresh VM (started by main.lua via app.restart), then returns to the launcher.
+-- run.lua - runs ONE Grimoire spell in a fresh VM (started by main.lua via app.restart), then returns to the launcher.
 -- The spell name comes from data:spell.txt. A spell error is stored in data:error.txt for the launcher to show.
 local function back() app.restart("main.lua") end
 

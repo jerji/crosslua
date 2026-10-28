@@ -5,7 +5,7 @@
 -- What it does:
 --   * loads fake_crosslua.lua (a pure-Lua fake of the CrossLua API)
 --   * builds a fake SD image under $TMPDIR/grimoire_shim_test: the REAL
---     Grimoire spells + libs copied from /root/x4/Grimoire/, an /os/config.lua
+--     Grimoire spells + libs copied from $GRIMOIRE_DIR, an /os/config.lua
 --     fixture, dummy images/, and harness-only fixture spells (z_*.lua) that
 --     exercise fs redirection, input mapping and credential hygiene
 --   * loads the REAL main.lua + shim.lua from the plugin folder and runs
@@ -16,8 +16,9 @@
 -- Prints a per-spell status table and 'ALL SHIM TESTS PASSED' only if every
 -- assertion held.  Exits 0 on success, 1 on failure.
 
-local PLUGIN_DIR      = "/root/x4/crosspoint-lua/sd_card_contents/plugins/grimoire_lua"
-local GRIMOIRE_SPELLS = "/root/x4/Grimoire/sd_card_contents/spells"
+local SCRIPT_DIR       = (arg and arg[0] or ""):match("^(.*)/[^/]*$") or "."
+local PLUGIN_DIR      = SCRIPT_DIR .. "/../../sd_card_contents/plugins/grimoire_lua"
+local GRIMOIRE_SPELLS = assert(os.getenv("GRIMOIRE_DIR"), "set GRIMOIRE_DIR to a Grimoire checkout") .. "/sd_card_contents/spells"
 local HOST_ROOT       = (os.getenv("TMPDIR") or "/tmp") .. "/grimoire_shim_test"
 
 local INSTRUCTION_BUDGET = 3000000   -- count hook granularity for spell runs
@@ -237,7 +238,7 @@ local function setupScenario(autoRun)
     end
     writeFile(HOST_ROOT .. "/sd/os/config.lua", CONFIG_LUA)
     do  -- the REAL test.png (800x300) so image.width/height read a genuine IHDR
-        local rf = io.open("/root/x4/Grimoire/sd_card_contents/spells/images/test.png", "rb")
+        local rf = io.open(GRIMOIRE_SPELLS .. "/images/test.png", "rb")
         writeFile(HOST_ROOT .. "/sd/spells/images/test.png", rf and rf:read("a") or "")
         local function bmp(w, h)   -- 62-byte header of a 1-bit BMP (+ pixel padding); only the header matters here
             return "BM" .. string.pack("<I4I2I2I4", 62 + 4 * math.abs(h), 0, 0, 62)

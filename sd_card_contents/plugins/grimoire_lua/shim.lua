@@ -1,4 +1,4 @@
--- shim.lua — Grimoire spell compatibility layer on top of CrossLua.
+-- shim.lua - Grimoire spell compatibility layer on top of CrossLua.
 --
 -- Grimoire (the other Lua runtime for the X4) gives spells a set of global
 -- tables (display/input/fs/zip/time/system/wifi/ble/hid/net/image/require)
@@ -30,7 +30,7 @@
 
 -- ---------------------------------------------------------------------------
 
-local S = {}                      -- module returned to the launcher/tests
+local S = {}                      -- module returned to the launcher
 
 -- Readable error for hardware APIs CrossLua doesn't have yet (see the
 -- "Hardware APIs" section below).
@@ -157,7 +157,7 @@ function EmuDisplay.line(x0, y0, x1, y1, black)
     gfx.line(x0, y0, x1, y1, black ~= false)
 end
 
--- Grimoire order: rect(x, y, w, h, black, filled) — note black is 5th!
+-- Grimoire order: rect(x, y, w, h, black, filled) - note black is 5th!
 function EmuDisplay.rect(x, y, w, h, black, filled)
     gfx.rect(x, y, w, h, filled or false, black ~= false)
 end

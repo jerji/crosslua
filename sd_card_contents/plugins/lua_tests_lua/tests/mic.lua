@@ -1,7 +1,7 @@
 -- hub test: the body is wrapped so an early `return` or an error still goes back to the menu (app.restart("main.lua")).
--- mic.* on-device test. The X4 has no microphone: this verifies the ABSENCE path — every call reports
+-- mic.* on-device test. The X4 has no microphone: this verifies the ABSENCE path - every call reports
 -- "no microphone on this board" (or the argument error) and never crashes, and no file is left behind.
--- On boards with a mic (Metalio/Murphy) the record branch runs: UNTESTED ON HARDWARE.
+-- On boards with a mic the record branch runs.
 local function __test()
 print("== mic (absence on X4)")
 local fails = 0

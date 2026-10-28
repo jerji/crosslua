@@ -1,6 +1,5 @@
--- FSRS-5 (the scheduler Anki uses when "FSRS" is on). Port of crossplay's StudyFsrs.cpp (MIT), whose semantics were
--- recovered by replaying real Anki review histories. Pure math: no device APIs, so it is unit-tested on the host
--- against golden output from the original C++ (test/lua_host/golden).
+-- FSRS-5 (the scheduler Anki uses when "FSRS" is on). Port of crossplay's StudyFsrs.cpp (MIT).
+-- Pure math: no device APIs, so it is unit-tested on the host against golden output from the original C++.
 --
 --   memory = { s = stability (days to 90% recall), d = difficulty (1..10), learned = bool }
 local M = {}

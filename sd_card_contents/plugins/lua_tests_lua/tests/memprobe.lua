@@ -1,7 +1,7 @@
 -- hub test: the body is wrapped so an early `return` or an error still goes back to the menu (app.restart("main.lua")).
 local function __test()
 -- Heap cost of OPEN but idle sockets, and of one active conversation. DEVELOPMENT BUILD ONLY (system.dev_floor).
-local SERVER = "192.168.1.67"
+local SERVER = assert((fs.read("data:server.txt") or ""):match("^%s*([%d%.]+)%s*$"), "put the test host's IP address in data:server.txt (File Transfer: /.crosslua/data/lua_tests_lua/server.txt)")
 if not wifi.connect() then print("no wifi"); return end
 system.dev_floor(12)
 local function free() collectgarbage(); local f, m = system.heap(); return f, m end

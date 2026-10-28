@@ -20,7 +20,7 @@ check("sha1(abc)", hex(crypto.sha1("abc")) == "a9993e364706816aba3e25717850c26c9
 check("hmac_sha256 RFC4231 #1", hex(crypto.hmac_sha256(("\11"):rep(20), "Hi There")) == "b0344c61d8db38535ca8afceaf0bf12b881dc200c9833da726e9376c2e32cff7")
 check("hmac_sha1 quick fox", hex(crypto.hmac_sha1("key", "The quick brown fox jumps over the lazy dog")) == "de7c9b85b8b78aa6bc8a7a36f70a90701c9db4d9")
 
--- TOTP (RFC 6238, SHA1, 8 digits) built from hmac_sha1: what biscuit's authenticator does
+-- TOTP (RFC 6238, SHA1, 8 digits) built from hmac_sha1: the same construction the authenticator app uses
 local function totp(secret, counter, digits)
   local h = crypto.hmac_sha1(secret, string.pack(">I4I4", 0, counter))
   local o = h:byte(20) & 15

@@ -12,11 +12,11 @@
 namespace crosslua {
 namespace {
 
-// The WiFi radio itself (~57 KB) is already up when a socket is opened. Measured on the X4 (WiFi up, 44.7 KB free): an
-// open idle socket costs 3.4-3.8 KB, one after a ping/echo 6.8 KB, one with a full receive window ~16 KB, and a 64 KB
-// burst dips free heap to ~16.7 KB. Refuse a new connection below 16 KB free rather than starve the stack.
+// The WiFi radio itself (~57 KB) is already up when a socket is opened. An open idle socket costs
+// 3.4-3.8 KB, one after a ping/echo 6.8 KB, one with a full receive window ~16 KB, a 64 KB burst
+// dips free heap to ~16.7 KB; refuse a new connection below 16 KB free (don't starve the stack).
 constexpr size_t SOCK_MIN_FREE_BYTES = 16 * 1024;
-// A TLS session needs real, contiguous RAM (measured on the X4, same floors as HttpDownloader::MIN_TLS_FREE_HEAP /
+// A TLS session needs real, contiguous RAM (same floors as HttpDownloader::MIN_TLS_FREE_HEAP /
 // MIN_TLS_MAX_ALLOC).
 constexpr size_t TLS_MIN_FREE_BYTES = 40000, TLS_MIN_BLOCK_BYTES = 20000;
 constexpr int64_t CA_MIN_BYTES = 32, CA_MAX_BYTES = 8192;

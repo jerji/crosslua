@@ -53,8 +53,7 @@ bool validRel(const char* rel, const char** err) {
 bool resolveIn(Backend& b, Scope scope, const char* rel, char* out, size_t cap, const char** err) {
   if (scope == Scope::Sd) {
     // The user's SD card outside the app sandbox: read-only (callers enforce), permission-gated, and never anything
-    // hidden
-    // (.crosspoint = settings/credentials, .crosslua = other apps' data, any dot-name).
+    // hidden (.crosspoint = settings/credentials, .crosslua = other apps' data, any dot-name).
     const bool lib = b.libraryAllowed();
     if (!lib && b.grantCount() == 0) {
       *err = "library access not permitted: add \"library\" to \"permissions\" in manifest.json";
@@ -417,8 +416,7 @@ constexpr int LIST_MAX_NAMES = 512, LIST_MAX_DETAIL = 64, LIST_DEFAULT_DETAIL = 
 
 // fs.list(path [, {detail=false, offset=0, limit=N}]) -> array [, total]
 //   plain:  sorted names, folders end in "/" (unchanged). With an options table it also returns the total entry count
-//   and
-//           only the window offset..offset+limit (limit 1..512, default all).
+//           and only the window offset..offset+limit (limit 1..512, default all).
 //   detail: the same window as tables {name=, dir=, size=, mtime=} (name has no trailing "/"); limit 1..64, default 32,
 //           because a table per entry is ~100 bytes of the ~96 KB Lua heap: page through big folders.
 int fs_list(lua_State* L) {

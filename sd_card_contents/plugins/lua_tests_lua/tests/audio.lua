@@ -1,7 +1,7 @@
 -- hub test: the body is wrapped so an early `return` or an error still goes back to the menu (app.restart("main.lua")).
--- audio.* on-device test. The X4 has no speaker: everything here verifies the ABSENCE path — every call must return a
--- readable "no audio on this board" (or the argument error) and never crash. On a board with audio (Metalio/Murphy/M5)
--- the play branch actually runs and this test is UNTESTED ON HARDWARE there.
+-- audio.* on-device test. The X4 has no speaker: everything here verifies the ABSENCE path - every call must return a
+-- readable "no audio on this board" (or the argument error) and never crash. On a board that has audio, the play
+-- branch actually runs.
 local function __test()
 print("== audio (absence on X4)")
 local fails = 0

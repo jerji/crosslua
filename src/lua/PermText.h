@@ -1,6 +1,6 @@
 // Packs permission labels into the few lines the native confirmation dialog can show (it fits ~3 lines of ~25
-// characters and clips the rest with "…", which for a recording device is not acceptable). Pure and header-only so the
-// host tests cover it.
+// characters and clips the rest with "...", which for a recording device is not acceptable). Pure and header-only so
+// the host tests cover it.
 #pragma once
 
 #include <cstddef>

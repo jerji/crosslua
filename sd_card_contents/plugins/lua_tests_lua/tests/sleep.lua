@@ -32,7 +32,7 @@ gfx.present("full")
 app.sleep(2000)
 print("PASS sleeping now")
 system.sleep(12)
--- unreachable on the device; the host aborts here
+-- unreachable on the device (deep sleep reboots first)
 print("FAIL sleep did not enter deep sleep")
 app.exit()
 end

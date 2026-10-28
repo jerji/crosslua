@@ -1,8 +1,8 @@
 -- hub test: the body is wrapped so an early `return` or an error still goes back to the menu (app.restart("main.lua")).
--- TLS client sockets. Needs a host-side server (python3 /root/x4/tls_server.py, a TLS echo on :8443 that answers "TLS_PONG <line>")
--- and three files next to this plugin: app:tls_target.txt (the host's IP), app:tls_ca.pem (the CA that signed the server)
--- and app:tls_wrongca.pem (an unrelated CA). Without them the LAN part is skipped and only the argument checks and the
--- internet insecure check run. Heap is printed at every stage: it is the point of this test.
+-- TLS client sockets. Needs a TLS echo server on :8443 that answers "TLS_PONG <line>" and three files next to this
+-- plugin: app:tls_target.txt (the host's IP), app:tls_ca.pem (the CA that signed the server) and app:tls_wrongca.pem
+-- (an unrelated CA). Without them the LAN part is skipped and only the argument checks and the internet insecure check
+-- run. Heap is printed at every stage: it is the point of this test.
 local function __test()
 print("== wifi")
 local ok, why = wifi.connect()

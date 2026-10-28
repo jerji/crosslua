@@ -1,4 +1,4 @@
--- main.lua — Grimoire spells launcher (CrossLua app).
+-- main.lua - Grimoire spells launcher (CrossLua app).
 --
 -- Lists every top-level *.lua in sd:spells/ (the Grimoire spell folder on
 -- the SD card), lets the user pick one with up/down, and runs it through
@@ -11,7 +11,7 @@
 
 -- Memory: the launcher itself stays small. When the firmware has app.restart, a chosen spell runs in a FRESH VM
 -- (run.lua: shim + spell only), so the launcher's code and tables are not resident while a spell needs RAM (the PNG
--- decoder needs a 46 KB block). Without app.restart (or under the test harness) the spell runs in this VM.
+-- decoder needs a 46 KB block). Without app.restart the spell runs in this VM.
 local HAS_RESTART = type(app.restart) == "function"
 
 local FONT_HDR = "sans16"
@@ -19,7 +19,7 @@ local FONT_ROW = "ui"
 
 -- ---------------------------------------------------------------------------
 -- Spell list: top-level *.lua files in sd:spells/, sorted.  Subfolders are
--- excluded (spell libs live under sd:spells/lib/ — they never match *.lua at
+-- excluded (spell libs live under sd:spells/lib/ - they never match *.lua at
 -- top level, and any directory-looking name with a trailing '/' is skipped).
 -- ---------------------------------------------------------------------------
 
@@ -81,7 +81,7 @@ local function showError(name, msg)
 
     gfx.text(10, h - 16, "Press any key to return", font, "")
     gfx.present("full")
-    input.wait()   -- any short press dismisses; on the fake it never blocks
+    input.wait()   -- any short press dismisses
 end
 
 -- ---------------------------------------------------------------------------
@@ -171,7 +171,7 @@ local function main()
         gfx.text(12, h - 16, "confirm: run    up/down: move    back: exit", "small")
         gfx.present("fast")
 
-        local ev = input.wait()   -- blocks; fake returns nil immediately
+        local ev = input.wait()   -- blocks
         if ev == "up" then
             sel = sel - 1
             if sel < 1 then sel = #spells end
@@ -193,10 +193,7 @@ local function main()
     end
 end
 
--- Run as the app entry unless the test harness asks for the module only.
 if _G and _G.__GRIMOIRE_SHIM_TEST then
-    -- headless tests load this file with that flag set and call
-    -- launcher.runSpell / launcher.main themselves
 else
     main()
 end

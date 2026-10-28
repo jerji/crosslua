@@ -1,6 +1,6 @@
 -- hub test: the body is wrapped so an early `return` or an error still goes back to the menu (app.restart("main.lua")).
 -- espnow.*: start the radio on channel 1, broadcast a numbered frame every 500 ms for 25 s, and report every frame that arrives.
--- Host side (tools/espnow_peer.py, a monitor-mode adapter on channel 1) captures the X4's frames and injects frames at it.
+-- A monitor-mode adapter on channel 1 can capture the X4's frames and inject frames at it.
 local function __test()
 print("== espnow")
 local fails = 0

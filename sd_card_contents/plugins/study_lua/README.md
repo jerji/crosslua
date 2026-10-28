@@ -2,8 +2,7 @@
 
 FSRS-5 scheduling (the algorithm modern Anki uses) plus Anki-style learning steps (1 m, 10 m; relearn 10 m).
 The scheduler is a line-for-line Lua port of [crossplay](https://github.com/ma-r-s/crossplay)'s `StudyFsrs.cpp` /
-`StudyScheduler.cpp` (MIT) and is checked against the original C++ on 9,179 answers
-(`test/lua_host/golden/`, run by `test/lua_host/run.sh`).
+`StudyScheduler.cpp` (MIT).
 
 ## Using it
 * Home → Plugins → **Study**. Pick a deck, **Confirm** opens it.

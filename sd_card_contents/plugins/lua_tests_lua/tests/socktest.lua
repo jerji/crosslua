@@ -5,8 +5,8 @@ local ok, why = wifi.connect()
 print((ok and "PASS " or "FAIL ") .. "wifi.connect " .. tostring(why or ""))
 if not ok then return end
 src = nil
--- net.* on-device test (loaded by main.lua after WiFi is up). Needs /root/x4/echo_server.py running on SERVER:9099.
-local SERVER, PORT = "192.168.1.67", 9099
+-- net.* on-device test. Needs a TCP echo test server on SERVER:9099 (SERVER = the IP in data:server.txt).
+local SERVER, PORT = assert((fs.read("data:server.txt") or ""):match("^%s*([%d%.]+)%s*$"), "put the test host's IP address in data:server.txt (File Transfer: /.crosslua/data/lua_tests_lua/server.txt)"), 9099
 local BIG_SHA = "510b126e1d4ced49107fe4ab03ee54cb1c8e4caf6064e1dd29c48d4a3e74c38b"
 local fails = 0
 local function check(name, cond, extra)

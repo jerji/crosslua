@@ -1,6 +1,6 @@
 -- hub test: the body is wrapped so an early `return` or an error still goes back to the menu (app.restart("main.lua")).
 -- Back-cancel test for the blocking net.connect: connects to a blackhole IP (SYN never answered), and the OPERATOR
--- presses Back on the device during the 15 s wait (x4ctl arms `btn back:150:1500` once the test reaches the connect).
+-- presses Back on the device during the 15 s wait.
 -- Expected: nil, "cancelled"  (without the interrupt the call would end with "timed out" after the full 15 s).
 local function __test()
 print("== wifi")

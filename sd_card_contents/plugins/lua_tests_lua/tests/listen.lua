@@ -1,11 +1,11 @@
 -- hub test: the body is wrapped so an early `return` or an error still goes back to the menu (app.restart("main.lua")).
 -- TEST ARCHITECTURE:
 --   1. X4 calls net.listen(9100) then loops polling net.accept().
---   2. A TCP client on the LAN (Hermes box, connect_to_x4.py) connects to X4:9100,
+--   2. A TCP client on the LAN connects to X4:9100,
 --      sends "SAMSON_PING\n", expects "X4_PONG\n" back.
 --   3. The X4 accepts, verifies "SAMSON_PING\n", sends "X4_PONG\n", closes.
--- Run with: python3 /root/x4/connect_to_x4.py <X4_IP> 9100
--- (Look at the serial log or X4 screen for Ready at ... message.)
+-- Run with: a TCP client pointed at <X4_IP> port 9100
+-- (Look at the serial log or X4 screen for "Ready at ..." message.)
 local function __test()
 print("== wifi")
 local ok, why = wifi.connect()
@@ -55,11 +55,9 @@ while #got < 12 and now() - t0 < 3000 do
 end
 check("received SAMSON_PING from host", got == "SAMSON_PING\n", ("%q"):format(got))
 
--- Send response
 local w = net.write(peer, "X4_PONG\n")
 check("sent X4_PONG response", w == 8, tostring(w))
 
--- Close the external client
 net.close(peer)
 
 print("== self-connect (informational: ESP32 lwIP does not loop back to the device's own IP)")

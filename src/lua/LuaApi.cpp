@@ -835,8 +835,7 @@ void regTable(lua_State* L, Ctx* c, const char* name, const luaL_Reg* funcs) {
 
 namespace {
 // ---- Lazy namespaces
-// ----------------------------------------------------------------------------------------------------- Measured on the
-// X4: registering every namespace at start costs ~8 KB of Lua heap. Only gfx/input/app/system/print/require/load are
+// Registering every namespace at start costs ~8 KB of Lua heap. Only gfx/input/app/system/print/require/load are
 // always present; the rest are built the first time a script reads the global. The globals table gets a protected
 // metatable whose __index does that. Consequences: pairs(_G) does not list namespaces nobody has touched yet, and a
 // script cannot install its own metatable on _G ("cannot change a protected metatable").

@@ -13,8 +13,8 @@
 namespace crosslua {
 namespace {
 
-// WiFi radio ~56 KB + TLS floor 40 KB (see HttpDownloader::MIN_TLS_FREE_HEAP), measured on hardware.
-constexpr size_t NET_MIN_FREE_BYTES = 96 * 1024;  // WiFi (~57 KB measured) + the 40 KB a TLS session wants
+// WiFi radio ~56 KB + TLS floor 40 KB (see HttpDownloader::MIN_TLS_FREE_HEAP).
+constexpr size_t NET_MIN_FREE_BYTES = 96 * 1024;  // WiFi (~57 KB) + the 40 KB a TLS session wants
 // wifi.connect{tls=false}: apps that only use plain TCP/UDP never open a TLS session. Radio ~57 KB + the 16 KB the
 // socket layer refuses to go below (SOCK_MIN_FREE_BYTES in LuaSock.cpp) + ~7 KB margin. https then fails at request
 // time with its own message.
@@ -78,8 +78,8 @@ int wifi_connect(lua_State* L) {
   if (be(L).espnowRunning()) return pushNo(L, "espnow is running: call espnow.stop() before joining WiFi");
   if (be(L).monitorRunning()) return pushNo(L, "the WiFi sniffer is running: call wifi.monitor_stop() first");
   if (be(L).txRunning()) return pushNo(L, "the injector is running: call wifi.tx_stop() first");
-  // Measured on the X4: bringing WiFi up costs ~56 KB of RAM and a TLS session wants >= 40 KB free on top of that.
-  // Fail NOW with a clear reason rather than half-way through a request.
+  // Bringing WiFi up costs ~56 KB; a TLS session wants >= 40 KB free on top. Fail NOW with a clear
+  // reason rather than half-way through a request.
   const size_t freeNow = be(L).freeHeap();
   const size_t need = needTls ? NET_MIN_FREE_BYTES : NET_MIN_FREE_BYTES_PLAIN;
   if (freeNow < need) {
@@ -141,7 +141,7 @@ int wifi_scan(lua_State* L) {
 }
 
 constexpr size_t SOFTAP_MIN_FREE_BYTES =
-    80 * 1024;  // measured on the X4: the hotspot costs ~60 KB, and net.listen then needs its own 16 KB floor
+    80 * 1024;  // the hotspot costs ~60 KB, and net.listen then needs its own 16 KB floor
 constexpr int SOFTAP_MAX_CLIENTS = 4;
 
 bool printableAscii(const char* s, size_t n) {

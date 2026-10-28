@@ -1,6 +1,6 @@
 -- hub test: the body is wrapped so an early `return` or an error still goes back to the menu (app.restart("main.lua")).
--- wifi.monitor: capture on channel 1 for 12 s while the host adapter injects frames (live polling), then capture ~10 s into a
--- PCAP file and check it grew. The host verifies the PCAP's bytes by downloading it afterwards.
+-- wifi.monitor: capture on channel 1 for 12 s (live polling), then capture ~10 s into a
+-- PCAP file and check it grew.
 local function __test()
 print("== monitor")
 local fails = 0
@@ -77,13 +77,13 @@ local bytes = wifi.monitor_stop()
 check("stop returns at least header + records", bytes >= 24 + got2 * 16, bytes)
 local st = fs.stat("data:cap.pcap")
 check("pcap exists on the card", st ~= nil and st.size == bytes, st and st.size)
--- the capture is left on the card (overwritten by the next run) so the host can download it and parse it with a real PCAP reader
+-- the capture is left on the card (overwritten by the next run) so it can be pulled off and parsed with a real PCAP reader
 
--- channel hopping: the host injects on channel 1 the whole time; frames must stop on ch6 and resume on ch1
+-- channel hopping: frames must stop on ch6 and resume on ch1
 local okh, eh = wifi.monitor_start({channel = 1})
 check("monitor restart for hop phase", okh == true, tostring(eh))
 if okh then
-  -- count only the host's injected frames (they carry a "HOST-FRAME" marker in the body); ambient WiFi is ignored
+  -- count only frames carrying a "HOST-FRAME" marker in the body; ambient WiFi is ignored
   local function marker()
     local f = wifi.monitor_recv()
     while f do

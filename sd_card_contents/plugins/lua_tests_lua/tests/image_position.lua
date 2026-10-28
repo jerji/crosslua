@@ -1,6 +1,6 @@
 -- hub test: the body is wrapped so an early `return` or an error still goes back to the menu (app.restart("main.lua")).
 local function __test()
--- Experiment: does gfx.image draw when offset down the screen and presented with "fast"?
+-- Does gfx.image draw when offset down the screen and presented with "fast"?
 local W, H = gfx.size()
 gfx.clear()
 local w, h, err = gfx.image("sd:spells/images/test.png", 0, 310, 480, 180)

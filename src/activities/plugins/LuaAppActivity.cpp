@@ -91,13 +91,13 @@ constexpr size_t LUA_MAX_BUDGET = 160 * 1024;
 // measurement: without it a table-growth stress test drove lifetime min-free heap down to 7 KB.
 constexpr size_t LUA_HEAP_FLOOR = 40 * 1024;
 // Once wifi.connect() has succeeded the radio owns ~57 KB and only ~44 KB remain free, so the 40 KB floor would leave
-// Lua about 1 KB. Measured on the X4 (memprobe_lua, development knob system.dev_floor): any floor above ~16 KB makes
+// Lua about 1 KB. Measured on the device with the dev_floor knob: any floor above ~16 KB makes
 // ordinary reads fail mid-stream because TCP buffering alone drives free heap down to ~16.7 KB during a 64 KB burst;
 // 16, 12 and 8 KB all completed with a matching hash. 12 KB leaves Lua ~32 KB to work with. One-way for the app's
 // lifetime: apps that touched WiFi restart the device on exit (heap defrag), so the framework is not left starved.
 constexpr size_t LUA_HEAP_FLOOR_ONLINE = 12 * 1024;
-// Characters per line the native confirmation dialog shows before it wraps (measured on the X4 with upper-case labels:
-// "HOTSPOT, SERVER," fit, "HOTSPOT, SERVER, SPEAKER" wrapped; 22 keeps our line count equal to the real one).
+// Characters per line the native confirmation dialog shows before it wraps (measured on the device with upper-case
+// labels: "HOTSPOT, SERVER," fit, "HOTSPOT, SERVER, SPEAKER" wrapped; 22 keeps our line count equal to the real one).
 constexpr size_t PERMISSION_LINE_WIDTH = 22;
 // net.read may go this low for the single allocation that copies data OUT of the network stack (which relieves the
 // pressure).
@@ -1259,9 +1259,8 @@ class LuaAppActivity::Backend final : public crosslua::Backend {
   static constexpr size_t PNG_MIN_BLOCK =
       62 * 1024;  // sizeof(PNG) = 59.5 KB: PNGdec 45.7 KB + the build raises PNG_MAX_BUFFERED_PIXELS to 16416
   static constexpr size_t JPEG_MIN_BLOCK = 24 * 1024;
-  static constexpr size_t EPUB_META_MIN_FREE =
-      64 * 1024;  // measured on the X4: the metadata parse peaks at ~55 KB (epubtest_lua PEAK line)
-  static constexpr size_t BMP_MIN_BLOCK = 16 * 1024;  // Bitmap row buffers (<= 2048 px wide) + dither state
+  static constexpr size_t EPUB_META_MIN_FREE = 64 * 1024;  // the metadata parse peaks at ~55 KB
+  static constexpr size_t BMP_MIN_BLOCK = 16 * 1024;       // Bitmap row buffers (<= 2048 px wide) + dither state
   // --- raw TCP client sockets (net.*): Arduino WiFiClient (NetworkClient over lwIP), already linked for the web server
   // ---
   WiFiClient socks_[crosslua::Backend::MAX_SOCKETS];
@@ -1342,7 +1341,7 @@ class LuaAppActivity::Backend final : public crosslua::Backend {
       FD_SET(fd, &wset);
       timeval tv = {0, 40 * 1000};
       const int sel = select(fd + 1, nullptr, &wset, nullptr, &tv);
-      devcapture::pollSerial();  // serial-injected buttons (x4ctl) stay alive while the loop is blocked here
+      devcapture::pollSerial();  // serial-injected buttons stay alive while the loop is blocked here
       in_.update(true);
       if (in_.wasPressed(MappedInputManager::Button::Back) || in_.isPressed(MappedInputManager::Button::Back)) {
         for (int i = 0; i < 200 && in_.isPressed(MappedInputManager::Button::Back);
@@ -2238,7 +2237,7 @@ class LuaAppActivity::Backend final : public crosslua::Backend {
   }
   bool audioPlaying() override { return audioBegun_ && audio_.isPlaying(); }
   // --- microphone: begun on first use, released in ~Backend. 16 kHz mono PCM; the WAV is streamed to the card in
-  // 512-byte blocks (no heap buffer), the header sizes are patched at the end. Back (physical or x4ctl-injected)
+  // 512-byte blocks (no heap buffer), the header sizes are patched at the end. Back (physical or serial-injected)
   // cancels.
   freeink::Microphone mic_;
   bool micAllowed() override { return micReq_ && approved_; }

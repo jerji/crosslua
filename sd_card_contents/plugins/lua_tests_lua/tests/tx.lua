@@ -1,6 +1,6 @@
 -- hub test: the body is wrapped so an early `return` or an error still goes back to the menu (app.restart("main.lua")).
--- wifi.tx: inject raw 802.11 frames on channel 1; the host adapter (monitor mode, tools/espnow_peer.py with --no-inject) verifies
--- them on the air. Also checks monitor coexistence: the injector adopts the sniffer's channel, and frames sent while the sniffer
+-- wifi.tx: inject raw 802.11 frames on channel 1; a monitor-mode adapter on the LAN can verify them on the air.
+-- Also checks monitor coexistence: the injector adopts the sniffer's channel, and frames sent while the sniffer
 -- runs are captured by our own monitor_recv (the radio hears its own transmissions).
 local function __test()
 print("== tx")
@@ -23,13 +23,13 @@ if not ok then return end
 local c, ec = wifi.connect{tls = false}
 check("wifi.connect refused while tx runs", c == false and ec:find("injector") ~= nil, tostring(ec))
 
--- raw 802.11 management action frame (subtype 13), category 127 + Espressif OUI + vendor type 4: the same shape the
--- host-side peer tool (tools/espnow_peer.py) parses, so it can verify our frames byte for byte.
+-- raw 802.11 management action frame (subtype 13), category 127 + Espressif OUI + vendor type 4: the same shape a
+-- host-side peer tool expects, so frames can be verified byte for byte.
 local function espnowish(payload, seq)
   local fc = "\xd0\x00"
   local dur = "\x00\x00"
   local a1 = "\xff\xff\xff\xff\xff\xff"
-  local a2 = "\xf8\x5b\x1b\x5b\xa6\xa8"  -- this device's MAC (the host tool reports it)
+  local a2 = "\xf8\x5b\x1b\x5b\xa6\xa8"  -- this device's MAC
   local a3 = "\xff\xff\xff\xff\xff\xff"
   local seqc = string.char(seq % 256, math.floor(seq / 256) % 256)
   local body = "\x7f\x18\xfe\x34\x00\x00\x00\x00\xdd" .. string.char(#payload + 5) .. "\x18\xfe\x34\x04\x01" .. payload

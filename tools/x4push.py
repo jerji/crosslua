@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """x4push — copy a local folder (e.g. an app) onto the X4's SD card over WiFi (CrossPoint file-transfer server).
 
-  python3 tools/x4push.py sd_card_contents/plugins/hello_lua /plugins/hello_lua [--host 192.168.1.87]
+  python3 tools/x4push.py sd_card_contents/plugins/demo_lua /plugins/demo_lua [--host <ip shown on the device's File Transfer screen>]
   python3 tools/x4push.py --ls /plugins [--host ...]
-  python3 tools/x4push.py --rm /plugins/hello_lua [--host ...]
+  python3 tools/x4push.py --rm /plugins/demo_lua [--host ...]
 
 On the device: Home -> File Transfer -> Join a Network (shows the IP). Pure stdlib, no dependencies.
 """
@@ -56,12 +56,14 @@ def listing(host, path):
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--host", default="192.168.1.87")
+    ap.add_argument("--host", default=os.environ.get("X4_HOST"), help="device IP (shown on its File Transfer screen); or set X4_HOST")
     ap.add_argument("--ls")
     ap.add_argument("--rm")
     ap.add_argument("local", nargs="?")
     ap.add_argument("remote", nargs="?")
     a = ap.parse_args()
+    if not a.host:
+        ap.error("no device IP: pass --host <ip> (shown on the device's File Transfer screen) or set X4_HOST")
     if a.ls:
         for e in listing(a.host, a.ls):
             print(("d " if e.get("isDirectory") else "f ") + e.get("name", "?") + (f"  {e['size']}" if "size" in e else ""))

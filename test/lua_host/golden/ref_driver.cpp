@@ -1,7 +1,8 @@
-// Reference driver: runs review scenarios through crossplay's real C++ FSRS-5 + learning-step scheduler
-// (src/apps_local/study/, MIT, by ma-r-s) and prints the card state after every answer.
-// The Lua port (sd_card_contents/plugins/study_lua) must reproduce golden.txt.
-// Build:  g++ -std=c++17 -I<crossplay>/src/apps_local/study ref_driver.cpp StudyFsrs.cpp StudyScheduler.cpp -o ref
+// Reference driver: runs review scenarios through crossplay's real C++ FSRS-5 + learning-step
+// scheduler (src/apps_local/study/, MIT, by ma-r-s) and prints the card state after every
+// answer. The Lua port (sd_card_contents/plugins/study_lua) must reproduce golden.txt.
+// Build: g++ -std=c++17 -I<crossplay>/src/apps_local/study ref_driver.cpp
+//   StudyFsrs.cpp StudyScheduler.cpp -o ref
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>

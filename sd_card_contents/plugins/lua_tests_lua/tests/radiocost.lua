@@ -1,8 +1,7 @@
 -- hub test: the body is wrapped so an early `return` or an error still goes back to the menu (app.restart("main.lua")).
 local function __test()
--- Measures the WiFi driver's RAM cost and one 64 KB transfer for the wifi-tune candidate index this boot used
--- (the dev build auto-advances /.crosslua/data/wifi_tune/idx on every wifi init). Tiny on purpose.
-local SERVER, BIG_SHA = "192.168.1.67", "510b126e1d4ced49107fe4ab03ee54cb1c8e4caf6064e1dd29c48d4a3e74c38b"
+-- Measures the WiFi driver's RAM cost and one 64 KB transfer. Tiny on purpose.
+local SERVER, BIG_SHA = assert((fs.read("data:server.txt") or ""):match("^%s*([%d%.]+)%s*$"), "put the test host's IP address in data:server.txt (File Transfer: /.crosslua/data/lua_tests_lua/server.txt)"), "510b126e1d4ced49107fe4ab03ee54cb1c8e4caf6064e1dd29c48d4a3e74c38b"
 local f0, m0 = system.heap()
 print(("RADIO before: free %d min %d"):format(f0, m0))
 local ok, why = wifi.connect({ tls = false })

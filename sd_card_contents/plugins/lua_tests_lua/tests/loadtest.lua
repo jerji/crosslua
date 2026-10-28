@@ -27,7 +27,7 @@ local f, err = load("x = = 1", "=bad"); check("syntax error is nil,err", f == ni
 f, err = load(string.dump(function() return 1 end)); check("bytecode refused", f == nil and err:find("precompiled", 1, true) ~= nil)
 f, err = load("return 1", "=c", "b"); check("binary mode refused", f == nil)
 f, err = load(function() return nil end); check("reader fn refused", f == nil)
--- (the 64 KB limit needs a >130 KB heap just to build the string: covered by the host suite)
+-- (testing the 64 KB limit itself needs a >130 KB heap just to build the string)
 check("chunk can call fs/require when env allows", load("return type(fs.exists)", "=c", "t", {fs = fs, type = type})() == "function")
 -- heap: compiling a big chunk fails cleanly or works, never crashes the device
 local okb, big = pcall(string.rep, "x=1\n", 5000)
