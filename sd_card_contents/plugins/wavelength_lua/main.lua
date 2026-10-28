@@ -61,7 +61,12 @@ local function draw(state, note)
     gfx.text(W // 2, 70, pr.l, "sans18", "c")
     gfx.text(W // 2, 720, pr.r, "sans18", "c")
   end
-  if state.stage == "peek" then
+  if state.stage == "mode" then
+    gfx.text(W // 2, 200, "CHOOSE A MODE", "ui12", "c")
+    gfx.text(W // 2, 260, (state.mode_sel == 1 and "> " or "  ") .. "CO-OP  (score the distance only)", "ui12", "c")
+    gfx.text(W // 2, 300, (state.mode_sel == 2 and "> " or "  ") .. "TEAMS (other team bets the end-call, +1)", "ui12", "c")
+    gfx.text(W // 2, 360, "Up/Down choose, Confirm starts", "small", "c")
+  elseif state.stage == "peek" then
     gfx.text(W // 2, 300, "Clue-giver: press Confirm to peek", "ui12", "c")
   elseif state.stage == "peek_show" then
     strip(0, 400, nil, state.target, "")
@@ -76,7 +81,11 @@ local function draw(state, note)
   elseif state.stage == "reveal" then
     strip(0, 400, state.guess, state.target, "")
     gfx.text(W // 2, 330, string.format("Target %d, guess %d", state.target, state.guess), "ui12", "c")
-    gfx.text(W // 2, 360, string.format("Round points: %d  (end-call %s)", state.round_points, state.call_ok and "correct +1" or "wrong"), "ui12", "c")
+    if state.mode == "teams" then
+      gfx.text(W // 2, 360, string.format("Round points: %d  (end-call %s)", state.round_points, state.call_ok and "correct +1" or "wrong"), "ui12", "c")
+    else
+      gfx.text(W // 2, 360, string.format("Round points: %d  (co-op: no end-call)", state.round_points), "ui12", "c")
+    end
   end
   gfx.text(14, H - 60, note or "", "small")
   gfx.text(14, H - 34, state.round_label or "", "small")
@@ -93,7 +102,18 @@ local ok, err = pcall(function()
     while input.wait() ~= "back" do end
     return
   end
-  local state = { score = 0, round = 0 }
+  local state = { score = 0, round = 0, mode = "coop", mode_sel = 1, stage = "mode" }
+  -- resolve one round. said = "LEFT"/"RIGHT" (teams end-call) or nil (co-op: no call).
+  -- Co-op scores the distance only; teams adds one point for a correct end-call. Round one is practice.
+  local function resolve_round(st, said)
+    local base = score_guess(st.target, st.guess)
+    local true_side = (st.target < st.guess) and "LEFT" or ((st.target > st.guess) and "RIGHT" or nil)
+    st.call_ok = (said ~= nil) and (true_side == nil or said == true_side) or nil
+    local bonus = (st.mode == "teams" and st.call_ok and true_side ~= nil) and 1 or 0
+    st.round_points = base + bonus
+    if st.round > 1 then st.score = st.score + st.round_points end
+    st.stage = "reveal"
+  end
   local function new_round()
     state.round = state.round + 1
     state.pair = pairs_list[rnd(#pairs_list)]
@@ -103,12 +123,18 @@ local ok, err = pcall(function()
     state.round_points = 0
     state.round_label = (state.round == 1) and "Round 1: practice, not scored. Confirm to peek." or ("Round " .. state.round .. ". Confirm to peek.")
   end
-  new_round()
   draw(state, "")
   while true do
     local e = input.wait()
     if e == "back" then break end
-    if state.stage == "peek" then
+    if state.stage == "mode" then
+      if e == "up" then state.mode_sel = 1
+      elseif e == "down" then state.mode_sel = 2
+      elseif e == "confirm" then
+        state.mode = (state.mode_sel == 2) and "teams" or "coop"
+        new_round()
+      end
+    elseif state.stage == "peek" then
       if e == "confirm" then
         state.stage = "peek_show"
         draw(state, "")
@@ -121,19 +147,15 @@ local ok, err = pcall(function()
       elseif e == "left" then state.guess = math.max(1, state.guess - 5)
       elseif e == "right" then state.guess = math.min(SLOTS, state.guess + 5)
       elseif e == "confirm" then
-        state.stage = "call"
+        if state.mode == "teams" then
+          state.stage = "call"
+        else
+          resolve_round(state, nil)
+        end
       end
     elseif state.stage == "call" then
       if e == "left" or e == "right" then
-        local said = (e == "left") and "LEFT" or "RIGHT"
-        local true_side = (state.target < state.guess) and "LEFT" or ((state.target > state.guess) and "RIGHT" or nil)
-        state.call_ok = (true_side == nil) or (said == true_side)
-        -- scoring applies to this round: exact/offset points + bonus for a correct call
-        local base = score_guess(state.target, state.guess)
-        local bonus = (state.call_ok and true_side ~= nil) and 1 or 0
-        state.round_points = base + bonus
-        if state.round > 1 then state.score = state.score + state.round_points end
-        state.stage = "reveal"
+        resolve_round(state, (e == "left") and "LEFT" or "RIGHT")
       end
     elseif state.stage == "reveal" then
       if e == "confirm" then new_round() end
