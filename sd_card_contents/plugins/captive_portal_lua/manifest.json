@@ -1,0 +1,1 @@
+{"title": "Captive Portal", "description": "ACTIVE: open or WPA2 hotspot with DNS redirect and a sign-in page; logs submitted credentials to Captures/. Needs hotspot + listen approval.", "permissions": ["network", "hotspot", "listen"], "storage": {"write": ["Captures"]}}
