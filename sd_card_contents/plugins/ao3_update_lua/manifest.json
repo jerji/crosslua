@@ -1,0 +1,1 @@
+{"title": "AO3 Updates", "description": "Check your tracked AO3 works for new chapters and download them as EPUBs to Books/AO3.", "permissions": ["network"], "storage": {"read": ["Books/AO3"], "write": ["Books/AO3"]}}
