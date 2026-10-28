@@ -65,39 +65,39 @@ end
 local function propagate_solves(k, clues)
   local SW, SL = {}, {}
   for s = 1, k do SW[s], SL[s] = {}, {} end
-  local function set(M, s, x, v)
-    if M[s][x] ~= nil and M[s][x] ~= v then return false end
-    M[s][x] = v; return true
+  local function set(grid, s, x, v)
+    if grid[s][x] ~= nil and grid[s][x] ~= v then return false end
+    grid[s][x] = v; return true
   end
   for _, c in ipairs(clues) do
-    local M = (c.kind == "SW") and SW or SL
-    if not set(M, c.s, c.x, c.yes) then return false end
+    local grid = (c.kind == "SW") and SW or SL
+    if not set(grid, c.s, c.x, c.yes) then return false end
   end
   local changed = true
   while changed do
     changed = false
-    for _, M in ipairs({ SW, SL }) do
+    for _, grid in ipairs({ SW, SL }) do
       -- row rule: a row with one candidate left is that candidate; a true cell clears its row and column
       for s = 1, k do
         local trues, cands = 0, {}
         for x = 1, k do
-          if M[s][x] == true then trues = trues + 1
-          elseif M[s][x] == nil then cands[#cands + 1] = x end
+          if grid[s][x] == true then trues = trues + 1
+          elseif grid[s][x] == nil then cands[#cands + 1] = x end
         end
-        if trues == 0 and #cands == 1 then M[s][cands[1]] = true; changed = true end
+        if trues == 0 and #cands == 1 then grid[s][cands[1]] = true; changed = true end
         if trues > 0 then
-          for x = 1, k do if M[s][x] == nil then M[s][x] = false; changed = true end end
+          for x = 1, k do if grid[s][x] == nil then grid[s][x] = false; changed = true end end
         end
       end
       for x = 1, k do
         local trues, cands = 0, {}
         for s = 1, k do
-          if M[s][x] == true then trues = trues + 1
-          elseif M[s][x] == nil then cands[#cands + 1] = s end
+          if grid[s][x] == true then trues = trues + 1
+          elseif grid[s][x] == nil then cands[#cands + 1] = s end
         end
-        if trues == 0 and #cands == 1 then M[cands[1]][x] = true; changed = true end
+        if trues == 0 and #cands == 1 then grid[cands[1]][x] = true; changed = true end
         if trues > 0 then
-          for s = 1, k do if M[s][x] == nil then M[s][x] = false; changed = true end end
+          for s = 1, k do if grid[s][x] == nil then grid[s][x] = false; changed = true end end
         end
       end
     end
