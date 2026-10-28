@@ -1,0 +1,1 @@
+{"title": "Perimeter Watch", "description": "Learn the APs around you, then alert when a new one appears or a known one disappears. Receive only.", "permissions": ["network", "monitor"]}
