@@ -188,9 +188,7 @@ local function roll(g)
   if not canRoll(g) then return false end
   local first = g.rolls == 0
   for i = 1, 5 do
-    if not first and (g.held & (1 << (i - 1))) ~= 0 then
-      -- kept as is
-    else
+    if first or (g.held & (1 << (i - 1))) == 0 then
       g.die[i] = crypto.random(1):byte() % 6 + 1
     end
   end
