@@ -1,0 +1,1 @@
+{"title": "Deauth Detector", "description": "Watch 2.4 GHz for deauth and disassoc frames; alert on bursts. Receive only.", "permissions": ["network", "monitor"]}
