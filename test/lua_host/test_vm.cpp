@@ -1283,6 +1283,8 @@ struct MockBackend : Backend {
   bool libraryAllowed() override { return library; }
   std::map<std::string, std::pair<std::string, std::string>> epubs;  // abs path -> {title, author}
   std::vector<std::string> epubAsked;
+  std::map<std::string, int> progress;            // abs path -> saved percent (0-100)
+  std::vector<std::string> progressAsked;
   bool epubMeta(const char* path, char* title, size_t titleCap, char* author, size_t authorCap, char* err,
                 size_t errCap) override {
     epubAsked.push_back(path);
@@ -1294,6 +1296,11 @@ struct MockBackend : Backend {
     snprintf(title, titleCap, "%s", it->second.first.c_str());  // truncates like the firmware (may cut mid-character)
     snprintf(author, authorCap, "%s", it->second.second.c_str());
     return true;
+  }
+  int epubProgress(const char* path) override {
+    progressAsked.push_back(path);
+    auto it = progress.find(path);
+    return it == progress.end() ? -1 : it->second;
   }
   int zipList(const char* path, ZipEntryInfo* out, int maxEntries, int* total, char* err, size_t errCap) override {
     auto it = zips.find(path);
@@ -4635,6 +4642,41 @@ int main() {
     CHECK(run(vm, be, 100000) == Status::Finished);
     CHECK(be.logs.size() == 1 && be.logs[0].rfind("nil\t", 0) == 0);
     CHECK(be.epubAsked.empty());
+  }
+  {
+    TEST("epub.progress: saved percent (.epub + .xtc), extension gate, no-progress vs bad-path, backend passthrough");
+    MockBackend be;
+    be.library = true;
+    be.progress["/Books/a.epub"] = 42;
+    be.progress["/Books/b.xtc"] = 7;
+    be.progress["/Books/c.epub"] = 100;
+    be.files["/Books/notes.txt"] = "x";
+    LuaVm vm;
+    CHECK(vm.open(128 * 1024));
+    registerApi(vm, be);
+    const char* script = R"LUA(
+      print(epub.progress("sd:Books/a.epub"))
+      print(epub.progress("sd:Books/b.xtc"))
+      print(epub.progress("sd:Books/c.epub"))
+      print(epub.progress("sd:Books/notes.txt"))
+      print(epub.progress("sd:Books/missing.epub"))
+      print(epub.progress("app:../x.epub"))
+      print(pcall(epub.progress))
+    )LUA";
+    CHECK(vm.load("t", script, strlen(script)));
+    CHECK(run(vm, be, 100000) == Status::Finished);
+    CHECK(be.logs.size() == 7);
+    if (be.logs.size() == 7) {
+      CHECK(be.logs[0] == "42");
+      CHECK(be.logs[1] == "7");
+      CHECK(be.logs[2] == "100");
+      CHECK(be.logs[3] == "nil\tnot a .epub or .xtc book");
+      CHECK(be.logs[4] == "nil\tno saved progress for this book");
+      CHECK(be.logs[5].rfind("nil\t", 0) == 0);  // sandbox '..' refused before the backend is asked
+      CHECK(be.logs[6].rfind("false\t", 0) == 0);
+    }
+    const std::vector<std::string> asked = {"/Books/a.epub", "/Books/b.xtc", "/Books/c.epub", "/Books/missing.epub"};
+    CHECK(be.progressAsked == asked);  // notes.txt and the '..' path never reached the backend
   }
   {
     TEST(

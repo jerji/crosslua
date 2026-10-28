@@ -75,6 +75,7 @@
 #include "network/FirmwareBoardTag.h"
 #include "network/WifiPowerSaveGuard.h"
 #include "util/QrUtils.h"
+#include "util/BookProgress.h"
 #include "util/ScreenshotUtil.h"
 
 static bool g_inDeepSleepCall = false;  // true while system.sleep() is inside upstream enterDeepSleep()
@@ -1985,6 +1986,7 @@ class LuaAppActivity::Backend final : public crosslua::Backend {
     snprintf(author, authorCap, "%s", a.c_str());
     return true;
   }
+  int epubProgress(const char* path) override { return loadBookProgress(path); }
   int zipList(const char* path, crosslua::Backend::ZipEntryInfo* out, int maxEntries, int* total, char* err,
               size_t errCap) override {
     const std::string p(path);

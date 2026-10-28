@@ -118,6 +118,20 @@ int epub_meta(lua_State* L) {
   return 1;
 }
 
+// epub.progress(path) -> percent (0..100) | nil, err (no saved progress / not a book)
+int epub_progress(lua_State* L) {
+  char path[MAX_PATH_LEN + 80];
+  if (!resolveArg(L, 1, path, sizeof(path))) return 2;
+  const size_t n = strlen(path);
+  const bool epub = n >= 5 && strcasecmp(path + n - 5, ".epub") == 0;
+  const bool xtc = n >= 4 && strcasecmp(path + n - 4, ".xtc") == 0;
+  if (!epub && !xtc) return pushFail(L, "not a .epub or .xtc book");
+  const int p = be(L).epubProgress(path);
+  if (p < 0) return pushFail(L, "no saved progress for this book");
+  lua_pushinteger(L, p);
+  return 1;
+}
+
 struct PushData {
   const char* data;
   size_t len;
@@ -269,7 +283,7 @@ void registerZip(lua_State* L, Ctx* c) {
   static const luaL_Reg fns[] = {{"list", zip_list},     {"read", zip_read},   {"inflate", zip_inflate},
                                {"zstd", zip_zstd},     {nullptr, nullptr}};
   regTable(L, c, "zip", fns);
-  static const luaL_Reg epubFns[] = {{"meta", epub_meta}, {nullptr, nullptr}};
+  static const luaL_Reg epubFns[] = {{"meta", epub_meta}, {"progress", epub_progress}, {nullptr, nullptr}};
   regTable(L, c, "epub", epubFns);
 }
 

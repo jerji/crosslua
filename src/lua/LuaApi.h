@@ -426,6 +426,8 @@ class Backend {
   // cap.
   virtual bool epubMeta(const char* path, char* title, size_t titleCap, char* author, size_t authorCap, char* err,
                         size_t errCap) = 0;
+  // Saved reading progress (0-100) for a book, or -1 when there is none / the file can't be opened.
+  virtual int epubProgress(const char* path) = 0;
   virtual int zipList(const char* path, ZipEntryInfo* out, int maxEntries, int* total, char* err, size_t errCap) = 0;
   // Inflates one entry into a malloc'd buffer (caller free()s). Refuses entries over maxBytes.
   virtual bool zipRead(const char* path, const char* name, size_t maxBytes, char** data, size_t* len, char* err,
