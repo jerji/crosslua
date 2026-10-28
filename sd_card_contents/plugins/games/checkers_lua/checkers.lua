@@ -97,9 +97,9 @@ local function moves(g)
   -- whose branch extended nothing is a finished chain (the seed itself is
   -- never a move), and the `before` count is read per branch so a node with
   -- several jumps records each of its finished chains once.
-  local function collectJumps(cell, index, sofar)
+  local function collectJumps(board, index, sofar)
     local f0, r0 = fileOf(index), rankOf(index)
-    local me = cell[index]
+    local me = board[index]
     local owner = ownerOf(me)
     local fwd = owner == LIGHT and -1 or 1
     for d = 1, (isKing(me) and 2 or 1) do
@@ -109,12 +109,12 @@ local function moves(g)
         if inside(lf, lr) then
           local over = indexOf(f0 + df, r0 + dr)
           local land = indexOf(lf, lr)
-          local oc = cell[over]
+          local oc = board[over]
           -- No "already taken" check: the scratch board below lifts each
           -- captured man, so the occupancy test has already rejected it.
-          if oc ~= EMPTY and ownerOf(oc) ~= owner and cell[land] == EMPTY then
+          if oc ~= EMPTY and ownerOf(oc) ~= owner and board[land] == EMPTY then
             local before = #out
-            local child = copyCells(cell)
+            local child = copyCells(board)
             child[land] = child[index]
             child[index] = EMPTY
             child[over] = EMPTY
