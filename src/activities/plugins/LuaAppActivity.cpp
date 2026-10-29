@@ -2157,30 +2157,36 @@ class LuaAppActivity::Backend final : public crosslua::Backend {
       snprintf(err, errCap, "cannot open zip (missing, not a zip, or damaged)");
       return -1;
     }
-    std::vector<std::string> entries;
-    const bool ok = zip.enumerateFileEntries([&](std::string_view name, uint32_t, uint32_t) { entries.emplace_back(name); });
-    zip.close();
-    if (!ok || entries.empty()) {
+    // Pass 1: validate every entry name before writing anything (a hostile zip must not touch the card). No names are
+    // kept here: storing every path cost ~24 KB of heap on top of the fresh download, which is what starved the
+    // per-file allocations in the extraction below.
+    char badName[96] = {0};
+    const bool ok = zip.enumerateFileEntries([&](std::string_view name, uint32_t, uint32_t) {
+      if (badName[0]) return;  // already failing
+      const bool infoFile = name == "CROSSLUA-INSTALL.txt";
+      if (!infoFile && (name.size() < 8 || name.rfind("plugins/", 0) != 0 || name.find("..") != std::string_view::npos))
+        snprintf(badName, sizeof(badName), "%.*s", static_cast<int>(name.size()), name.data());
+    });
+    if (!ok) {
+      zip.close();
       snprintf(err, errCap, "cannot read zip entries");
       return -1;
     }
-    // Validate the whole archive before writing anything: every entry is a file under "plugins/", none absolute, none
-    // with ".." (a hostile zip must not write outside the plugin tree).
-    for (const std::string& e : entries) {
-      if (e.size() < 8 || e.rfind("plugins/", 0) != 0 || e.find("..") != std::string::npos) {
-        snprintf(err, errCap, "invalid entry path: %s", e.c_str());
-        return -1;
-      }
-    }
-    if (!zip.open()) {
-      snprintf(err, errCap, "cannot reopen zip");
+    if (badName[0]) {
+      zip.close();
+      snprintf(err, errCap, "invalid entry path: %s", badName);
       return -1;
     }
+    // Pass 2: extract from a second enumeration, streaming each entry straight to the card with readFileToStream
+    // (one small chunk buffer + the inflate state instead of a full malloc'd copy of every file). The extraction runs
+    // on a SEPARATE ZipFile handle: reading through the shared handle would move the enumeration cursor and silently
+    // end the loop after the first entry (it broke at one file before this fix).
     int written = 0;
     std::string currentAppDir;
-    for (const std::string& e : entries) {
-      if (e.size() > 1 && e.back() == '/') continue;  // a directory entry; mkdir creates dirs as needed
-      const std::string target = "/" + e;             // "plugins/games/foo/main.lua" -> "/plugins/games/foo/main.lua"
+    zip.enumerateFileEntries([&](std::string_view name, uint32_t, uint32_t) {
+      if (name.rfind("plugins/", 0) != 0) return;         // informational top-level file (CROSSLUA-INSTALL.txt)
+      if (name.size() > 1 && name.back() == '/') return;  // directory entry; mkdir creates dirs as needed
+      const std::string target = "/" + std::string(name); // "plugins/games/foo/main.lua" -> "/plugins/games/foo/main.lua"
       const std::string appDir = target.substr(0, target.rfind('/'));
       if (appDir != currentAppDir) {  // entering a new app: close the previous marker, open this one
         if (!currentAppDir.empty()) Storage.remove((currentAppDir + "/" + PluginLocations::INSTALL_MARKER).c_str());
@@ -2188,17 +2194,14 @@ class LuaAppActivity::Backend final : public crosslua::Backend {
         Storage.mkdir(appDir.c_str(), true);
         Storage.writeFile((appDir + "/" + PluginLocations::INSTALL_MARKER).c_str(), String("installing"));
       }
-      size_t got = 0;
-      uint8_t* d = zip.readFileToMemory(e.c_str(), &got, false);
-      if (!d) continue;
-      HalFile f;
+      HalFile f;  // HalFile is a Print: readFileToStream writes each chunk straight into the card file
       if (Storage.openFileForWrite("LUA", target.c_str(), f)) {
-        f.write(d, got);
+        ZipFile reader(zipPath);  // independent handle: the enumeration's `zip` must not be seeked mid-loop
+        const bool done = reader.open() && reader.readFileToStream(name.data(), f, 1024, false);
+        if (done) written++;
         f.close();
-        written++;
       }
-      free(d);
-    }
+    });
     if (!currentAppDir.empty()) Storage.remove((currentAppDir + "/" + PluginLocations::INSTALL_MARKER).c_str());
     zip.close();
     return written;
