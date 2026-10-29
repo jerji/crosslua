@@ -1018,12 +1018,12 @@ struct LazyNs {
   void (*load)(lua_State*, Ctx*);
 };
 // Several names share a loader (wifi+http, zip+epub): the loader defines all of its globals at once.
-const LazyNs LAZY[] = {{"time", loadTime},           {"device", loadDevice},     {"led", loadLed},
-                       {"fs", registerFs},           {"json", registerJson},     {"wifi", registerNet},
-                       {"http", registerNet},        {"net", registerSock},      {"zip", registerZip},
-                       {"epub", registerZip},        {"crypto", registerCrypto}, {"xml", registerXml},
-                       {"audio", registerAudio},     {"mic", registerMic},       {"espnow", registerEspNow},
-                       {"ble", registerBle},         {"coroutine", loadCoroutine}, {"utf8", loadUtf8}};
+const LazyNs LAZY[] = {{"time", loadTime},       {"device", loadDevice},       {"led", loadLed},
+                       {"fs", registerFs},       {"json", registerJson},       {"wifi", registerNet},
+                       {"http", registerNet},    {"net", registerSock},        {"zip", registerZip},
+                       {"epub", registerZip},    {"crypto", registerCrypto},   {"xml", registerXml},
+                       {"audio", registerAudio}, {"mic", registerMic},         {"espnow", registerEspNow},
+                       {"ble", registerBle},     {"coroutine", loadCoroutine}, {"utf8", loadUtf8}};
 
 // _G.__index(G, key): runs only for globals that do not exist yet.
 int lazy_index(lua_State* L) {
@@ -1079,16 +1079,21 @@ void registerApi(LuaVm& vm, Backend& backend) {
                                  {nullptr, nullptr}};
   static const luaL_Reg input[] = {{"poll", input_poll}, {"wait", input_wait}, {"pos", input_pos},
                                    {"key", input_key},   {"text", input_text}, {nullptr, nullptr}};
-  static const luaL_Reg app[] = {
-      {"sleep", app_sleep},         {"exit", app_exit},       {"name", app_name},   {"dir", app_dir},
-      {"open_book", app_open_book}, {"restart", app_restart}, {"entry", app_entry},
-      {"install_plugin", app_install_plugin}, {nullptr, nullptr}};
+  static const luaL_Reg app[] = {{"sleep", app_sleep},
+                                 {"exit", app_exit},
+                                 {"name", app_name},
+                                 {"dir", app_dir},
+                                 {"open_book", app_open_book},
+                                 {"restart", app_restart},
+                                 {"entry", app_entry},
+                                 {"install_plugin", app_install_plugin},
+                                 {nullptr, nullptr}};
   static const luaL_Reg sys[] = {{"millis", sys_millis},
                                  {"heap", sys_heap},
                                  {"lua_mem", sys_lua_mem},
                                  {"battery", sys_battery},
-                                {"battery_info", sys_battery_info},
-                                {"language", sys_language},
+                                 {"battery_info", sys_battery_info},
+                                 {"language", sys_language},
                                  {"mac", sys_mac},
                                  {"usb", sys_usb},
                                  {"dev_floor", sys_dev_floor},

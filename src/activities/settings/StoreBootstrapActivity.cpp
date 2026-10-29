@@ -5,6 +5,7 @@
 #include <Memory.h>
 #include <WiFi.h>
 
+#include <algorithm>
 #include <utility>
 
 #include "activities/util/ConfirmationActivity.h"
@@ -18,9 +19,9 @@ namespace {
 #ifndef CROSSLUA_RELEASE_REPO
 #define CROSSLUA_RELEASE_REPO "jerji/crosslua"
 #endif
-constexpr const char* STORE_BASE_URL =
-    "https://raw.githubusercontent.com/" CROSSLUA_RELEASE_REPO "/lua-runtime/sd_card_contents/plugins/tools/"
-    "app_store_lua/";
+constexpr const char* STORE_BASE_URL = "https://raw.githubusercontent.com/" CROSSLUA_RELEASE_REPO
+                                       "/lua-runtime/sd_card_contents/plugins/tools/"
+                                       "app_store_lua/";
 constexpr const char* STORE_DIR = "/plugins/tools/app_store_lua";
 constexpr const char* STORE_INSTALL_MARKER = "/plugins/tools/app_store_lua/.installing";
 // The minimum a store needs to become a listed app: manifest for discovery/title, main.lua to run.
@@ -37,10 +38,7 @@ bool StoreBootstrapActivity::isAvailable() {
   // stub (files wiped, empty dir) from a plugin clean-up would return the flat stub with no main.lua.  Check the
   // actual marker file on both paths instead.
   static constexpr const char* PATHS[] = {"/plugins/app_store_lua/main.lua", "/plugins/tools/app_store_lua/main.lua"};
-  for (const auto* p : PATHS) {
-    if (Storage.exists(p)) return true;
-  }
-  return false;
+  return std::any_of(std::begin(PATHS), std::end(PATHS), [](const char* p) { return Storage.exists(p); });
 }
 
 void StoreBootstrapActivity::onEnter() {

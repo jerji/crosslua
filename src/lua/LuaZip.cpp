@@ -3,14 +3,13 @@
 // Same discipline as LuaNet.cpp: arguments become plain pointers, the backend works on POD + one malloc'd buffer, and
 // the result is pushed from inside lua_pcall so an out-of-memory error can never skip the free().
 #include <strings.h>
+#include <zstd.h>
 
 #include <cctype>
 #include <cstdlib>
 #include <cstring>
 
 #include "LuaInternal.h"
-
-#include <zstd.h>
 
 namespace crosslua {
 namespace {
@@ -157,8 +156,8 @@ int epub_library(lua_State* L) {
   const int limit = lua_isnoneornil(L, 2) ? 64 : static_cast<int>(luaL_checkinteger(L, 2));
   if (offset < 0) return pushFail(L, "offset must be >= 0");
   if (limit < 1 || limit > 64) return pushFail(L, "limit must be 1..64");
-  auto* buf = static_cast<Backend::RecentBookInfo*>(
-      malloc(static_cast<size_t>(limit) * sizeof(Backend::RecentBookInfo)));
+  auto* buf =
+      static_cast<Backend::RecentBookInfo*>(malloc(static_cast<size_t>(limit) * sizeof(Backend::RecentBookInfo)));
   if (!buf) return pushFail(L, "out of memory");
   int total = 0;
   char err[96] = {0};
@@ -266,7 +265,8 @@ int zip_zstd(lua_State* L) {
   const unsigned long long sz = ZSTD_getFrameContentSize(frame, fl);
   size_t dstCap;
   if (sz == ZSTD_CONTENTSIZE_ERROR) return pushFail(L, "not a valid zstd frame");
-  if (sz == ZSTD_CONTENTSIZE_UNKNOWN) dstCap = 96 * 1024;  // streamed: bounded by the cap
+  if (sz == ZSTD_CONTENTSIZE_UNKNOWN)
+    dstCap = 96 * 1024;  // streamed: bounded by the cap
   else {
     if (sz > 96 * 1024) return pushFail(L, "decompressed size too large (over 96 KB)");
     dstCap = static_cast<size_t>(sz);
@@ -331,11 +331,14 @@ static int gfx_image(lua_State* L) {
 }
 
 void registerZip(lua_State* L, Ctx* c) {
-  static const luaL_Reg fns[] = {{"list", zip_list},     {"read", zip_read},   {"inflate", zip_inflate},
-                               {"zstd", zip_zstd},     {nullptr, nullptr}};
+  static const luaL_Reg fns[] = {
+      {"list", zip_list}, {"read", zip_read}, {"inflate", zip_inflate}, {"zstd", zip_zstd}, {nullptr, nullptr}};
   regTable(L, c, "zip", fns);
-  static const luaL_Reg epubFns[] = {{"meta", epub_meta}, {"progress", epub_progress}, {"recent", epub_recent},
-                               {"library", epub_library}, {nullptr, nullptr}};
+  static const luaL_Reg epubFns[] = {{"meta", epub_meta},
+                                     {"progress", epub_progress},
+                                     {"recent", epub_recent},
+                                     {"library", epub_library},
+                                     {nullptr, nullptr}};
   regTable(L, c, "epub", epubFns);
 }
 

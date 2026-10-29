@@ -2820,7 +2820,7 @@ class LuaAppActivity::Backend final : public crosslua::Backend {
   }
   int netAccept(int serverSlot) override {
     if (!sockUsed_[serverSlot] || sockKind_[serverSlot] != 3 || !sockServers_[serverSlot]) return -2;
-    WiFiClient cl = sockServers_[serverSlot]->available();
+    WiFiClient cl = sockServers_[serverSlot]->accept();
     if (!cl) return -1;
     for (int i = 0; i < Backend::MAX_SOCKETS; i++) {
       if (sockUsed_[i]) continue;

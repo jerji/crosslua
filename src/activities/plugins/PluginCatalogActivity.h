@@ -138,7 +138,7 @@ class PluginCatalogActivity final : public CatalogActivity {
   std::vector<PluginRef> installedPlugins;
   bool pluginHubAvailable = false;
   bool showPluginHubInstallRow = false;
-  bool storeAvailable = false;  // the CrossLua App Store app is on the card
+  bool storeAvailable = false;       // the CrossLua App Store app is on the card
   bool showStoreInstallRow = false;  // no store on the card: offer to bootstrap it from the repo
   bool ignoreHubInstallerBackRelease = false;
   OptionPopup pluginHubPopup;

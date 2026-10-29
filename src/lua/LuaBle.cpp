@@ -471,8 +471,7 @@ int ble_notify(lua_State* L) {
   if (!okUuid(uuid, un)) return pushFail(L, "uuid must be a 1..36 character string");
   if (int r = needGatt(L)) return r;
   char err[96] = {0};
-  if (!be(L).bleGattNotify(uuid, on, err, sizeof(err)))
-    return pushFail(L, err[0] ? err : "cannot change notify");
+  if (!be(L).bleGattNotify(uuid, on, err, sizeof(err))) return pushFail(L, err[0] ? err : "cannot change notify");
   lua_pushboolean(L, 1);
   return 1;
 }
@@ -502,15 +501,28 @@ int ble_advertise_stop(lua_State* L);
 int ble_advertising(lua_State* L);
 
 void registerBle(lua_State* L, Ctx* c) {
-  static const luaL_Reg fns[] = {
-      {"start", ble_start},           {"stop", ble_stop},       {"scan", ble_scan},
-      {"scan_stop", ble_scan_stop},   {"devices", ble_devices}, {"connect", ble_connect},
-      {"disconnect", ble_disconnect}, {"state", ble_state},     {"paired", ble_paired},
-      {"forget", ble_forget},         {"observe", ble_observe}, {"observe_stop", ble_observe_stop},
-      {"adverts", ble_adverts},       {"services", ble_services}, {"read", ble_read},
-      {"write", ble_write},           {"notify", ble_notify},   {"notifs", ble_notifs},
-      {"advertise", ble_advertise},   {"advertise_stop", ble_advertise_stop}, {"advertising", ble_advertising},
-      {nullptr, nullptr}};
+  static const luaL_Reg fns[] = {{"start", ble_start},
+                                 {"stop", ble_stop},
+                                 {"scan", ble_scan},
+                                 {"scan_stop", ble_scan_stop},
+                                 {"devices", ble_devices},
+                                 {"connect", ble_connect},
+                                 {"disconnect", ble_disconnect},
+                                 {"state", ble_state},
+                                 {"paired", ble_paired},
+                                 {"forget", ble_forget},
+                                 {"observe", ble_observe},
+                                 {"observe_stop", ble_observe_stop},
+                                 {"adverts", ble_adverts},
+                                 {"services", ble_services},
+                                 {"read", ble_read},
+                                 {"write", ble_write},
+                                 {"notify", ble_notify},
+                                 {"notifs", ble_notifs},
+                                 {"advertise", ble_advertise},
+                                 {"advertise_stop", ble_advertise_stop},
+                                 {"advertising", ble_advertising},
+                                 {nullptr, nullptr}};
   regTable(L, c, "ble", fns);
 }
 

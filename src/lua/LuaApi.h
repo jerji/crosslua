@@ -38,10 +38,10 @@ class Backend {
   virtual void present(int mode) = 0;
 
   // --- input ---------------------------------------------------------------
-    // Next queued input event, or nullptr when empty: a button press ("back","confirm","left","right","up","down"),
-    // a button hold ("confirm_hold","left_hold","right_hold","up_hold","down_hold" — held >500 ms; Back has no hold,
-    // holding Back force-quits the app), a Bluetooth key ("key"), or a touch event ("press","long","tap","release").
-    virtual const char* popEvent() = 0;
+  // Next queued input event, or nullptr when empty: a button press ("back","confirm","left","right","up","down"),
+  // a button hold ("confirm_hold","left_hold","right_hold","up_hold","down_hold" — held >500 ms; Back has no hold,
+  // holding Back force-quits the app), a Bluetooth key ("key"), or a touch event ("press","long","tap","release").
+  virtual const char* popEvent() = 0;
 
   // --- system --------------------------------------------------------------
   virtual uint32_t millis() = 0;
@@ -63,10 +63,10 @@ class Backend {
   // Full battery telemetry. supported==false -> the board has no battery ("no battery on this device").
   struct BatteryStatus {
     bool supported = true;
-    int percent = -1;         // 0-100, -1 unknown
-    int millivolts = -1;      // -1 unknown
-    int charging = -1;        // -1 unknown, 0 not charging, 1 charging
-    int externalPower = -1;   // -1 unknown, 0 absent, 1 present (a full battery stops charging while still powered)
+    int percent = -1;        // 0-100, -1 unknown
+    int millivolts = -1;     // -1 unknown
+    int charging = -1;       // -1 unknown, 0 not charging, 1 charging
+    int externalPower = -1;  // -1 unknown, 0 absent, 1 present (a full battery stops charging while still powered)
   };
   virtual BatteryStatus batteryStatus() = 0;
   // The UI language's native display name (e.g. "English", "Français"). Points at a
@@ -538,9 +538,9 @@ class Backend {
   virtual void frontlightSet(int brightness, int warmth, int on) = 0;
   // Raw DEFLATE (zlib=false) or zlib-wrapped (zlib=true) inflate into a malloc'd buffer the caller free()s.
   // Input up to 64 KB, output capped at maxOut bytes; refuses anything bigger.
-  virtual bool inflate(const char* data, size_t n, bool zlib, size_t maxOut, bool stopAtMax, char** out,
-                       size_t* outLen, char* err, size_t errCap) = 0;  // stopAtMax: success once maxOut bytes are
-                                                                       // produced, even if the stream is not done
+  virtual bool inflate(const char* data, size_t n, bool zlib, size_t maxOut, bool stopAtMax, char** out, size_t* outLen,
+                       char* err, size_t errCap) = 0;  // stopAtMax: success once maxOut bytes are
+                                                       // produced, even if the stream is not done
   // Outline (filled=false) or filled rounded rectangle.
   virtual void drawRoundedRect(int x, int y, int w, int h, int radius, bool black, bool filled) = 0;
   // Decode a PNG/JPEG (absolute SD path) into the CURRENT frame, fitted (never upscaled) and centred in the box

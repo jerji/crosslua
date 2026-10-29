@@ -10,7 +10,7 @@
 // not resolved (raw tag names like "dc:title" are kept). The document's single root element is returned.
 #include <expat.h>
 
-#include <cstdio>   // snprintf
+#include <cstdio>  // snprintf
 #include <cstring>
 #include <vector>
 
@@ -57,7 +57,7 @@ void XMLCALL onStart(void* ud, const XML_Char* name, const XML_Char** atts) {
   }
   lua_setfield(L, -2, "attrs");
   // Reference the element, then link it into the tree.
-  if (b.open.empty()) {  // first element: the document root
+  if (b.open.empty()) {                            // first element: the document root
     const int r = luaL_ref(L, LUA_REGISTRYINDEX);  // ref #1 → open
     b.open.push_back(r);
     lua_rawgeti(L, LUA_REGISTRYINDEX, r);
@@ -79,12 +79,12 @@ void XMLCALL onText(void* ud, const XML_Char* s, int len) {
   lua_State* L = b.L;
   lua_rawgeti(L, LUA_REGISTRYINDEX, b.open.back());  // [parent]
   int& kid = b.kids.back();
-  if (kid > 0) {  // merge into the previous sibling when it is also text
+  if (kid > 0) {              // merge into the previous sibling when it is also text
     lua_rawgeti(L, -1, kid);  // [parent, last]
     if (lua_type(L, -1) == LUA_TSTRING) {
       lua_pushlstring(L, s, static_cast<size_t>(len));  // [parent, last, txt]
-      lua_concat(L, 2);                                  // [parent, merged]
-      lua_rawseti(L, -2, kid);                           // parent[kid] = merged
+      lua_concat(L, 2);                                 // [parent, merged]
+      lua_rawseti(L, -2, kid);                          // parent[kid] = merged
       lua_pop(L, 1);
       return;
     }

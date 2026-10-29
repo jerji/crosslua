@@ -705,8 +705,9 @@ int fs_rename(lua_State* L) {
 void registerFs(lua_State* L, Ctx* c) {
   static const luaL_Reg fs[] = {{"read", fs_read},     {"write", fs_write},   {"write_at", fs_write_at},
                                 {"append", fs_append}, {"exists", fs_exists}, {"size", fs_size},
-                                {"mkdir", fs_mkdir},   {"remove", fs_remove}, {"rmdir", fs_rmdir}, {"list", fs_list},
-                                {"rename", fs_rename}, {"stat", fs_stat},   {"volume", fs_volume}, {nullptr, nullptr}};
+                                {"mkdir", fs_mkdir},   {"remove", fs_remove}, {"rmdir", fs_rmdir},
+                                {"list", fs_list},     {"rename", fs_rename}, {"stat", fs_stat},
+                                {"volume", fs_volume}, {nullptr, nullptr}};
   regTable(L, c, "fs", fs);
 }
 
