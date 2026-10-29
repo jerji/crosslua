@@ -2183,9 +2183,17 @@ class LuaAppActivity::Backend final : public crosslua::Backend {
     // Pass 2: extract from a second enumeration, streaming each entry straight to the card with readFileToStream
     // (one small chunk buffer + the inflate state instead of a full malloc'd copy of every file). The extraction runs
     // on a SEPARATE ZipFile handle: reading through the shared handle would move the enumeration cursor and silently
-    // end the loop after the first entry (it broke at one file before this fix).
+    // end the loop after the first entry (it broke at one file before this fix). ONE handle for the whole pass:
+    // opening a fresh handle per entry while the enumeration handle is open made the EOCD scan flake on the device
+    // ("EOCD signature not found") and left every extracted file at 0 bytes.
     int written = 0;
     std::string currentAppDir;
+    ZipFile reader(zipPath);
+    if (!reader.open()) {
+      zip.close();
+      snprintf(err, errCap, "cannot open zip for extraction");
+      return -1;
+    }
     zip.enumerateFileEntries([&](std::string_view name, uint32_t, uint32_t) {
       if (name.rfind("plugins/", 0) != 0) return;         // informational top-level file (CROSSLUA-INSTALL.txt)
       if (name.size() > 1 && name.back() == '/') return;  // directory entry; mkdir creates dirs as needed
@@ -2200,14 +2208,18 @@ class LuaAppActivity::Backend final : public crosslua::Backend {
       }
       HalFile f;  // HalFile is a Print: readFileToStream writes each chunk straight into the card file
       if (Storage.openFileForWrite("LUA", target.c_str(), f)) {
-        ZipFile reader(zipPath);  // independent handle: the enumeration's `zip` must not be seeked mid-loop
-        const bool done = reader.open() && reader.readFileToStream(name.data(), f, 1024, false);
+        // NUL-terminate the entry name: the enumeration hands us a string_view over the zip's
+        // length-prefixed name field, and ZipFile::loadFileStatSlim strlen()s it. Without the copy
+        // it over-reads into the following bytes, matches nothing, and every file stays 0 bytes.
+        const std::string entryName(name);
+        const bool done = reader.readFileToStream(entryName.c_str(), f, 1024, false);
         if (done) written++;
         f.close();
       }
     });
     if (!currentAppDir.empty()) Storage.remove((currentAppDir + "/" + PluginLocations::INSTALL_MARKER).c_str());
     zip.close();
+    reader.close();
     return written;
   }
   bool requestRestart(const char* entry) override {

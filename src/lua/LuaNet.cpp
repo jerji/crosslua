@@ -14,7 +14,9 @@ namespace crosslua {
 namespace {
 
 // WiFi radio ~56 KB + TLS floor 40 KB (see HttpDownloader::MIN_TLS_FREE_HEAP).
-constexpr size_t NET_MIN_FREE_BYTES = 96 * 1024;  // WiFi (~57 KB) + the 40 KB a TLS session wants
+constexpr size_t NET_MIN_FREE_BYTES = 88 * 1024;  // WiFi + TLS: measured need ~46 KB (radio) + a 40 KB TLS
+                                                  // headroom; 96 KB left a restarted store VM (95,348 B free)
+                                                  // unable to connect, so this is 88 KB with the headroom kept
 // wifi.connect{tls=false}: apps that only use plain TCP/UDP never open a TLS session. Radio ~57 KB + the 16 KB the
 // socket layer refuses to go below (SOCK_MIN_FREE_BYTES in LuaSock.cpp) + ~7 KB margin. https then fails at request
 // time with its own message.

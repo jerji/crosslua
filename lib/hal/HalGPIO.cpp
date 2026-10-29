@@ -322,6 +322,13 @@ bool HalGPIO::coldBootImpliesPowerButton() const {
 }
 
 HalGPIO::WakeupReason HalGPIO::getWakeupReason() const {
+#ifdef QEMU_SIM
+  // The esp32c3 machine cold-boots with no modeled USB port. A real X4 reads a
+  // no-USB POWERON as a power-button wake (coldBootImpliesPowerButton), which
+  // parks the main loop in the wake-release path forever. Treat the sim as a
+  // plain cold boot.
+  return WakeupReason::Other;
+#endif
   const auto wakeupCause = esp_sleep_get_wakeup_cause();
   const auto resetReason = esp_reset_reason();
 

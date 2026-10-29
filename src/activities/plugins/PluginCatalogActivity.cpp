@@ -473,6 +473,7 @@ void PluginCatalogActivity::onEnter() {
 
 void PluginCatalogActivity::enterPluginPicker() {
   Storage.remove(BROWSE_TMP_PATH);
+  pickerCategory.clear();  // re-entering always shows the top level first
   installedPlugins = discoverPlugins();
   pluginHubAvailable = PluginHubInstallActivity::isAvailable();
   showPluginHubInstallRow = !pluginHubAvailable && !SETTINGS.pluginHubPromptHidden;
@@ -516,7 +517,23 @@ void PluginCatalogActivity::enterPluginPicker() {
   for (size_t i = 0; i < installedPlugins.size(); ++i) {
     if (installedPlugins[i].name != pickerReturnName) continue;
     const int prefixRows = (showOpds ? 1 : 0) + (showPluginHubInstallRow ? 1 : 0) + (showStoreInstallRow ? 1 : 0);
-    moveSelectionTo(prefixRows + static_cast<int>(i));
+    const PluginRef& ret = installedPlugins[i];
+    if (ret.category.empty()) {
+      int leaf = 0;
+      for (size_t j = 0; j < i; ++j)
+        if (installedPlugins[j].category.empty()) ++leaf;
+      moveSelectionTo(prefixRows + pickerCategoryCount() + leaf);
+    } else {
+      int catRow = 0;
+      std::string prev;
+      for (const auto& p : installedPlugins) {
+        if (p.category.empty() || p.category == prev) continue;
+        prev = p.category;
+        if (p.category == ret.category) break;
+        ++catRow;
+      }
+      moveSelectionTo(prefixRows + catRow);  // the category row for a categorized plugin
+    }
     break;
   }
   requestUpdate();
@@ -524,8 +541,14 @@ void PluginCatalogActivity::enterPluginPicker() {
 
 void PluginCatalogActivity::confirmUninstallPlugin(const int pickerIndex) {
   if (state != State::PLUGIN_PICKER) return;
-  const int offset = (showOpds ? 1 : 0) + (showPluginHubInstallRow ? 1 : 0) + (showStoreInstallRow ? 1 : 0);
-  const int pluginIndex = pickerIndex - offset;
+  int pluginIndex;
+  if (!pickerCategory.empty()) {
+    if (pickerIndex < 1) return;  // the ".." back row is not a plugin
+    pluginIndex = pickerTargetIndex(pickerIndex - 1);
+  } else {
+    const int offset = (showOpds ? 1 : 0) + (showPluginHubInstallRow ? 1 : 0) + (showStoreInstallRow ? 1 : 0);
+    pluginIndex = pickerTargetIndex(pickerIndex - offset);
+  }
   if (pluginIndex < 0 || pluginIndex >= static_cast<int>(installedPlugins.size())) return;
 
   const PluginRef plugin = installedPlugins[pluginIndex];
@@ -799,9 +822,11 @@ bool PluginCatalogActivity::nextRowVisible() const {
 }
 
 int PluginCatalogActivity::rowCount() const {
-  if (state == State::PLUGIN_PICKER)
-    return static_cast<int>(installedPlugins.size()) + (showOpds ? 1 : 0) + (showPluginHubInstallRow ? 1 : 0) +
-           (showStoreInstallRow ? 1 : 0);
+  if (state == State::PLUGIN_PICKER) {
+    if (!pickerCategory.empty()) return 1 + pickerLeafCount();  // back row + the category's plugins
+    const int synthetic = (showOpds ? 1 : 0) + (showPluginHubInstallRow ? 1 : 0) + (showStoreInstallRow ? 1 : 0);
+    return synthetic + pickerCategoryCount() + pickerLeafCount();  // categories + root plugins
+  }
   if (state == State::LIST_PICKER) return static_cast<int>(manifest.browseLists.size());
   if (state != State::BROWSING) return 0;
   return static_cast<int>(items.size()) + (prevRowVisible() ? 1 : 0) + (nextRowVisible() ? 1 : 0);
@@ -1344,9 +1369,74 @@ void PluginCatalogActivity::onBackButton() {
   }
 }
 
+void PluginCatalogActivity::routePluginAction(const PluginRef& plugin) {
+  const auto action = PluginLocations::pickerAction(plugin.deviceKind, !plugin.readmePath.empty());
+  if (action == PluginLocations::PickerAction::Readme) {
+    // A plain paged text view, not the book reader: viewing instructions must
+    // not touch the last-read book, recents, progress, or reader events.
+    // Capped: a README is setup notes, not a book, and lives in RAM here.
+    static constexpr size_t MAX_README_BYTES = 16 * 1024;
+    std::string text;
+    if (!Storage.readFileToString("PCAT", plugin.readmePath, MAX_README_BYTES, text)) {
+      LOG_ERR("PCAT", "README unreadable, empty, or over %u bytes: %s", static_cast<unsigned>(MAX_README_BYTES),
+              plugin.readmePath.c_str());
+      return;
+    }
+    auto viewer = makeUniqueNoThrow<DictionaryDefinitionActivity>(renderer, mappedInput, plugin.title, std::move(text));
+    if (!viewer) {
+      LOG_ERR("PCAT", "OOM: README viewer");
+      return;
+    }
+    app.clearTapFlash();
+    startActivityForResult(std::move(viewer), [](const ActivityResult&) {});
+    return;
+  }
+  if (action == PluginLocations::PickerAction::Lua) {
+    auto luaApp = makeUniqueNoThrow<LuaAppActivity>(renderer, mappedInput, plugin.name, plugin.dir);
+    if (!luaApp) {
+      LOG_ERR("PCAT", "OOM: Lua app");
+      return;
+    }
+    app.clearTapFlash();
+    pickerReturnName = plugin.name;  // copy before the plugin list is released below
+    // The suspended picker would otherwise pin every plugin's name/dir/manifest/category strings for the whole
+    // app session (~40 KB on a full card — the app's own heap budget is computed from what is left). Both vectors
+    // are released together: rowItems' labels point into installedPlugins' strings. enterPluginPicker() re-scans
+    // and rebuilds both on return, so nothing is lost.
+    installedPlugins.clear();
+    installedPlugins.shrink_to_fit();
+    rowItems.clear();
+    rowItems.shrink_to_fit();
+    startActivityForResult(std::move(luaApp), [this](const ActivityResult&) { enterPluginPicker(); });
+    return;
+  }
+  if (action != PluginLocations::PickerAction::Catalog) return;
+  app.clearTapFlash();  // the row leaves this screen
+  pickerReturnName = plugin.name;
+  manifestPath = plugin.manifestPath;
+  catalogTitle = plugin.title;
+  enterCatalog();
+}
+
 void PluginCatalogActivity::activateIndex(const int index) {
   if (state == State::PLUGIN_PICKER) {
     if (index < 0 || index >= rowCount()) return;
+    if (!pickerCategory.empty()) {
+      // Inside a category submenu: row 0 is ".." back to the top level.
+      if (index == 0) {
+        pickerCategory.clear();
+        releaseRows();
+        const int synthetic = (showOpds ? 1 : 0) + (showPluginHubInstallRow ? 1 : 0) + (showStoreInstallRow ? 1 : 0);
+        moveSelectionTo(synthetic);  // the first category row
+        requestUpdate();
+        return;
+      }
+      const int target = pickerTargetIndex(index - 1);
+      if (target < 0) return;
+      const PluginRef& plugin = installedPlugins[target];
+      routePluginAction(plugin);
+      return;
+    }
     if (showOpds && index == 0) {
       app.clearTapFlash();            // the row leaves this screen
       activityManager.goToBrowser();  // replaces this screen with the OPDS browser
@@ -1390,55 +1480,16 @@ void PluginCatalogActivity::activateIndex(const int index) {
       });
       return;
     }
-    const int syntheticRows = hubRows + (showStoreInstallRow ? 1 : 0);
-    const PluginRef& plugin = installedPlugins[index - pluginStart - syntheticRows];
-    const auto action = PluginLocations::pickerAction(plugin.deviceKind, !plugin.readmePath.empty());
-    if (action == PluginLocations::PickerAction::Readme) {
-      // A plain paged text view, not the book reader: viewing instructions must
-      // not touch the last-read book, recents, progress, or reader events.
-      // Capped: a README is setup notes, not a book, and lives in RAM here.
-      static constexpr size_t MAX_README_BYTES = 16 * 1024;
-      std::string text;
-      if (!Storage.readFileToString("PCAT", plugin.readmePath, MAX_README_BYTES, text)) {
-        LOG_ERR("PCAT", "README unreadable, empty, or over %u bytes: %s", static_cast<unsigned>(MAX_README_BYTES),
-                plugin.readmePath.c_str());
-        return;
-      }
-      auto viewer =
-          makeUniqueNoThrow<DictionaryDefinitionActivity>(renderer, mappedInput, plugin.title, std::move(text));
-      if (!viewer) {
-        LOG_ERR("PCAT", "OOM: README viewer");
-        return;
-      }
-      app.clearTapFlash();
-      startActivityForResult(std::move(viewer), [](const ActivityResult&) {});
+    const int synthetic = (showOpds ? 1 : 0) + (showPluginHubInstallRow ? 1 : 0) + (showStoreInstallRow ? 1 : 0);
+    const int pickRow = index - synthetic;
+    if (pickRow >= 0 && pickRow < pickerCategoryCount()) {
+      // A category row opens the folder's submenu.
+      enterPickerSubmenu(pickerCategoryAt(pickRow));
       return;
     }
-    if (action == PluginLocations::PickerAction::Lua) {
-      auto luaApp = makeUniqueNoThrow<LuaAppActivity>(renderer, mappedInput, plugin.name, plugin.dir);
-      if (!luaApp) {
-        LOG_ERR("PCAT", "OOM: Lua app");
-        return;
-      }
-      app.clearTapFlash();
-      pickerReturnName = plugin.name;  // copy before the plugin list is released below
-      // The suspended picker would otherwise pin every plugin's name/dir/manifest/category strings for the whole
-      // app session (~40 KB on a full card — the app's own heap budget is computed from what is left). Both vectors
-      // are released together: rowItems' sectionHeading points into installedPlugins' strings. enterPluginPicker()
-      // re-scans and rebuilds both on return, so nothing is lost.
-      installedPlugins.clear();
-      installedPlugins.shrink_to_fit();
-      rowItems.clear();
-      rowItems.shrink_to_fit();
-      startActivityForResult(std::move(luaApp), [this](const ActivityResult&) { enterPluginPicker(); });
-      return;
-    }
-    if (action != PluginLocations::PickerAction::Catalog) return;
-    app.clearTapFlash();  // the row leaves this screen
-    pickerReturnName = plugin.name;
-    manifestPath = plugin.manifestPath;
-    catalogTitle = plugin.title;
-    enterCatalog();
+    const int target = pickerTargetIndex(pickRow);
+    if (target < 0) return;
+    routePluginAction(installedPlugins[target]);
     return;
   }
   if (state == State::LIST_PICKER) {
@@ -1732,6 +1783,67 @@ void PluginCatalogActivity::buildBrowsingScreen(UiScreen& screen) {
   screen.list(props);
 }
 
+int PluginCatalogActivity::pickerCategoryCount() const {
+  int n = 0;
+  std::string prev;
+  for (const auto& p : installedPlugins) {
+    if (p.category.empty() || p.category == prev) continue;  // the sort groups categories
+    prev = p.category;
+    ++n;
+  }
+  return n;
+}
+
+int PluginCatalogActivity::pickerLeafCount() const {
+  int n = 0;
+  for (const auto& p : installedPlugins) {
+    if (pickerCategory.empty() ? p.category.empty() : p.category == pickerCategory) ++n;
+  }
+  return n;
+}
+
+std::string PluginCatalogActivity::pickerCategoryAt(int row) const {
+  if (!pickerCategory.empty() || row < 0) return {};
+  int n = 0;
+  std::string prev;
+  for (const auto& p : installedPlugins) {
+    if (p.category.empty() || p.category == prev) continue;
+    prev = p.category;
+    if (n == row) return p.category;
+    ++n;
+  }
+  return {};
+}
+
+int PluginCatalogActivity::pickerTargetIndex(int pickRow) const {
+  if (pickRow < 0) return -1;
+  if (pickerCategory.empty()) {
+    const int catCount = pickerCategoryCount();
+    if (pickRow < catCount) return -1;  // a category submenu row, not a plugin
+    int n = 0;
+    for (int i = 0; i < static_cast<int>(installedPlugins.size()); ++i) {
+      if (!installedPlugins[i].category.empty()) continue;
+      if (n == pickRow - catCount) return i;
+      ++n;
+    }
+    return -1;
+  }
+  int n = 0;
+  for (int i = 0; i < static_cast<int>(installedPlugins.size()); ++i) {
+    if (installedPlugins[i].category != pickerCategory) continue;
+    if (n == pickRow) return i;
+    ++n;
+  }
+  return -1;
+}
+
+void PluginCatalogActivity::enterPickerSubmenu(const std::string& category) {
+  pickerCategory = category;
+  releaseRows();
+  moveSelectionTo(pickerLeafCount() > 0 ? 1 : 0);  // first plugin, or the back row
+  requestUpdate();
+}
+
 // Derives rowItems from the current state's row source: the browse lists
 // (LIST_PICKER) or the pager rows bracketing the items (BROWSING). Labels
 // point into `manifest`/`items` strings, which outlive the buffer.
@@ -1751,12 +1863,7 @@ void PluginCatalogActivity::rebuildRowItems() {
     if (showPluginHubInstallRow) addRow(tr(STR_PLUGIN_HUB), tr(STR_PLUGIN_HUB_DESCRIPTION), ">");
     if (showStoreInstallRow)
       addRow("Get the Lua App Store", "Downloads the store app; it installs Lua apps from the release", ">");
-    std::string prevCategory = "\x01";  // impossible sentinel, so the first plugin's category always "starts"
-    for (const auto& plugin : installedPlugins) {
-      const bool categoryStart = plugin.category != prevCategory;
-      //   None       -> web-only hint; chevron only with a readme
-      //   Catalog    -> browsable, own description, chevron
-      //   Background -> events-only, own description, chevron only with a readme
+    const auto addPluginRow = [&](const PluginRef& plugin) {
       const char* subtitle = plugin.description.empty() ? nullptr : plugin.description.c_str();
       switch (plugin.deviceKind) {
         case PluginLocations::DeviceKind::None:
@@ -1772,9 +1879,31 @@ void PluginCatalogActivity::rebuildRowItems() {
           addRow(plugin.title.c_str(), subtitle ? subtitle : "Lua app", ">");
           break;
       }
-      // A category heading shares the first app's row (no index shift). Uncategorized apps get no heading.
-      if (categoryStart && !plugin.category.empty()) rowItems.back().sectionHeading = plugin.category.c_str();
-      prevCategory = plugin.category;
+    };
+    if (!pickerCategory.empty()) {
+      // A category submenu: the back row, then that folder's plugins.
+      addRow("..", "All plugins", "<");
+      for (const auto& plugin : installedPlugins) {
+        if (plugin.category != pickerCategory) continue;
+        addPluginRow(plugin);
+      }
+    } else {
+      // Top level: one submenu row per category folder, then the plugins that
+      // live directly at the root (uncategorized) — no section headers.
+      std::string prevCategory = "\x01";
+      for (const auto& plugin : installedPlugins) {
+        const bool categoryStart = plugin.category != prevCategory;
+        prevCategory = plugin.category;
+        if (categoryStart && !plugin.category.empty()) {
+          int leafs = 0;
+          for (const auto& other : installedPlugins)
+            if (other.category == plugin.category) ++leafs;
+          pickerCategoryRowLabel = std::to_string(leafs) + (leafs == 1 ? " app" : " apps");
+          addRow(plugin.category.c_str(), pickerCategoryRowLabel.c_str(), ">");
+        } else if (plugin.category.empty()) {
+          addPluginRow(plugin);
+        }
+      }
     }
   } else if (state == State::LIST_PICKER) {
     for (const auto& list : manifest.browseLists) addRow(list.title.c_str());

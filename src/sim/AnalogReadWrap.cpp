@@ -17,3 +17,13 @@ extern "C" int __wrap_analogRead(uint8_t pin) {
   (void)pin;
   return 0;
 }
+
+// The Home activity reads the battery via the millivolt-scaling path
+// (BatteryMonitor::readMillivolts -> analogReadMilliVolts), which on the
+// unmodeled SAR ADC busy-waits on the conversion-done flag the same way
+// analogRead does -> interrupt-wdt panic as soon as the Home header draws.
+// Return 0 mV; the battery math treats that as 0%.
+extern "C" int __wrap_analogReadMilliVolts(uint8_t pin) {
+  (void)pin;
+  return 0;
+}

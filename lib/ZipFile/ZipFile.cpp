@@ -254,23 +254,40 @@ bool ZipFile::loadZipDetails() {
     return false;  // Minimum EOCD size is 22 bytes
   }
 
-  // We scan the last 1KB (or the whole file if smaller) for the EOCD signature
-  // 0x06054b50 is stored as 0x50, 0x4b, 0x05, 0x06 in little-endian
-  const int scanRange = fileSize > 1024 ? 1024 : fileSize;
+  // We scan the last 64 KB (or the whole file if smaller) for the EOCD signature.
+  // 0x06054b50 is stored as 0x50, 0x4b, 0x05, 0x06 in little-endian. The zip may have a data
+  // descriptor after the last entry, so a 1 KB window is not enough for every producer.
+  const int scanRange = static_cast<int>(std::min<size_t>(fileSize, 65536));
   const auto buffer = static_cast<uint8_t*>(malloc(scanRange));
   if (!buffer) {
     LOG_ERR("ZIP", "Failed to allocate memory for EOCD scan buffer");
     return false;
   }
 
-  file.seek(fileSize - scanRange);
-  file.read(buffer, scanRange);
+  const size_t scanOffset = fileSize - scanRange;
+  if (!file.seek(scanOffset)) {
+    LOG_ERR("ZIP", "Failed to seek to end of zip for EOCD scan");
+    free(buffer);
+    return false;
+  }
+  size_t got = 0;
+  while (got < static_cast<size_t>(scanRange)) {
+    const int n = file.read(buffer + got, scanRange - got);
+    if (n <= 0) break;
+    got += n;
+  }
+  if (got < 22) {
+    LOG_ERR("ZIP", "EOCD scan read only %u bytes", static_cast<unsigned>(got));
+    free(buffer);
+    return false;
+  }
 
-  // Scan backwards for the signature
+  // Scan backwards for the signature (memcpy: buffer[i] may be unaligned on RISC-V).
   int foundOffset = -1;
-  for (int i = scanRange - 22; i >= 0; i--) {
-    constexpr uint32_t signature = 0x06054b50;
-    if (*reinterpret_cast<uint32_t*>(&buffer[i]) == signature) {
+  for (int i = static_cast<int>(got) - 22; i >= 0; i--) {
+    uint32_t sig = 0;
+    memcpy(&sig, buffer + i, sizeof(sig));
+    if (sig == 0x06054b50) {
       foundOffset = i;
       break;
     }

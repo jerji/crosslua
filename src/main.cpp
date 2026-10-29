@@ -43,6 +43,7 @@
 #include "WifiCredentialStore.h"
 #include "activities/Activity.h"
 #include "activities/ActivityManager.h"
+#include "activities/plugins/LuaAppActivity.h"
 #include "activities/plugins/LuaBluetoothHold.h"
 #include "activities/settings/SdFirmwareUpdateActivity.h"
 #include "components/UITheme.h"
@@ -50,9 +51,11 @@
 #include "platform/UsbSerialJtagHandoff.h"
 #include "util/ButtonNavigator.h"
 #include "util/PluginEvents.h"
+#include "util/PluginLocations.h"
 #include "util/ScreenshotUtil.h"
 #include "util/SlideSwitch.h"
 #include "util/Timezones.h"
+#include "Memory.h"
 
 #if CROSSPOINT_VECTOR_FONTS
 // Rendering (incl. FreeType TTF rasterization) runs on the Arduino loop task.
@@ -587,9 +590,14 @@ void setup() {
   delay(250);
 #endif
   Serial.begin(115200);
-#if LOG_SERIAL_HAS_TX_TIMEOUT
-  logSerial.setTxTimeoutMs(1);  // This is a load-bearing 1. Do not modify.
-#endif
+  #if LOG_SERIAL_HAS_TX_TIMEOUT
+  	logSerial.setTxTimeoutMs(1);  // This is a load-bearing 1. Do not modify.
+  #endif
+  #ifdef QEMU_SIM
+  	// Under QEMU the dev channel rides UART1 (two -serial ptys); Serial (HWCDC)
+  	// is the USB-Serial-JTAG peripheral QEMU does not model.
+  	Serial1.begin(921600);
+  #endif
 #endif
 
   HalSystem::begin();
@@ -805,6 +813,9 @@ void setup() {
       break;
     case BootResume::Splash:
       activityManager.goToBoot();
+#ifdef QEMU_SIM
+      LOG_ERR("ACTSIM", "splash boot activity launched");
+#endif
       break;
   }
 
@@ -837,7 +848,13 @@ void setup() {
              mappedInputManager.isPressed(MappedInputManager::Button::Back) || APP_STATE.readerActivityLoadCount > 0) {
     // Boot to home screen if no book is open, last sleep was not from reader, back button is held, or reader activity
     // crashed (indicated by readerActivityLoadCount > 0)
+#ifdef QEMU_SIM
+    LOG_ERR("ACTSIM", "routing to home (openEpubPath len=%u)", (unsigned)APP_STATE.openEpubPath.size());
+#endif
     activityManager.goHome(HomeMenuItem::NONE, needsWakeRefresh);
+#ifdef QEMU_SIM
+    LOG_ERR("ACTSIM", "goHome returned");
+#endif
   } else {
     // Clear app state to avoid getting into a boot loop if the epub doesn't load
     const auto path = APP_STATE.openEpubPath;
@@ -871,17 +888,22 @@ void setup() {
 // serial-injected button used to be dead while a Lua app sat in net.connect/http (the handler only ran in loop()).
 namespace devcapture {
 void pollSerial() {
-  if (logSerial.available() > 0) {
-    String line = logSerial.readStringUntil('\n');
+#ifdef QEMU_SIM
+  Stream& dev = Serial1;
+#else
+  Stream& dev = logSerial;
+#endif
+  if (dev.available() > 0) {
+    String line = dev.readStringUntil('\n');
     if (line.startsWith("CMD:")) {
       String cmd = line.substring(4);
       cmd.trim();
       if (cmd == "SCREENSHOT") {
         const uint32_t bufferSize = display.getBufferSize();
-        logSerial.printf("SCREENSHOT_START:%d\n", bufferSize);
+        dev.printf("SCREENSHOT_START:%d\n", bufferSize);
         uint8_t* buf = display.getFrameBuffer();
-        logSerial.write(buf, bufferSize);
-        logSerial.printf("SCREENSHOT_END\n");
+        dev.write(buf, bufferSize);
+        dev.printf("SCREENSHOT_END\n");
 #ifdef CROSSLUA_DEV
       } else if (cmd.startsWith("BTN:")) {
         // CrossLua dev/test channel: CMD:BTN:<back|confirm|left|right|up|down|power>[:holdMs] -- physical buttons.
@@ -912,12 +934,61 @@ void pollSerial() {
             ok = true;
           }
         }
-        logSerial.printf("BTN_%s:%s\n", ok ? "OK" : "ERR", name.c_str());
+        dev.printf("BTN_%s:%s\n", ok ? "OK" : "ERR", name.c_str());
       } else if (cmd == "SCREEN") {
-        devcapture::dump(logSerial, activityManager.currentName(), renderer.getScreenWidth(),
+        devcapture::dump(dev, activityManager.currentName(), renderer.getScreenWidth(),
                          renderer.getScreenHeight());
       } else if (cmd == "PING") {
-        logSerial.printf("PONG:%lu:%s\n", millis(), activityManager.currentName());
+        dev.printf("PONG:%lu:%s\n", millis(), activityManager.currentName());
+      } else if (cmd.startsWith("OPEN:")) {
+        // CMD:OPEN:<name> — jump straight to a named activity (dev/test channel).
+        String target = cmd.substring(5);
+        target.trim();
+        if (target == "Home") activityManager.goHome();
+        else if (target == "Plugins") activityManager.goToPlugins(false);
+        else if (target == "Library") activityManager.goToLibrary();
+        else if (target == "FileTransfer" || target == "FT") activityManager.goToFileTransfer();
+        else if (target == "FileBrowser") activityManager.goToFileBrowser();
+        else if (target == "Settings") activityManager.goToSettings();
+        else if (target == "Browse" || target == "OPDS") activityManager.goToBrowser();
+        else if (target == "Sleep") activityManager.goToSleep();
+        else {
+          dev.printf("OPEN_ERR:unknown:%s\n", target.c_str());
+          return;
+        }
+        dev.printf("OPEN_OK:%s\n", target.c_str());
+      } else if (cmd.startsWith("LUA:")) {
+        // CMD:LUA:<plugin-name> — launch a Lua plugin directly, no picker,
+        // by its on-disk dir name (e.g. app_store_lua). Dev/test channel.
+        String nameStr = cmd.substring(4);
+        nameStr.trim();
+        const std::string name(nameStr.c_str());
+        // Dev/test channel: scan all plugin roots/categories directly (the
+        // user-facing pluginsEnabled gate and the flat-only finder both skip
+        // categorized apps like /plugins/tools/app_store_lua).
+        std::string dir;
+        const auto plugins = PluginLocations::scanPluginsOnDisk();
+#ifdef QEMU_SIM
+        LOG_ERR("ACTSIM", "lua scan: %u plugins", static_cast<unsigned>(plugins.size()));
+        for (const auto& e : plugins) LOG_ERR("ACTSIM", "  plugin %s @ %s", e.name.c_str(), e.dir.c_str());
+#endif
+        for (const auto& e : plugins) {
+          if (e.name == name) {
+            dir = e.dir;
+            break;
+          }
+        }
+        if (dir.empty()) {
+          dev.printf("LUA_ERR:not-found:%s\n", name.c_str());
+          return;
+        }
+        auto luaApp = makeUniqueNoThrow<LuaAppActivity>(renderer, mappedInputManager, name, dir.c_str());
+        if (!luaApp) {
+          dev.printf("LUA_ERR:oom:%s\n", name.c_str());
+          return;
+        }
+        activityManager.replaceActivity(std::move(luaApp));
+        dev.printf("LUA_OK:%s\n", name.c_str());
 #endif
       }
     }

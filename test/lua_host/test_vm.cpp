@@ -2847,7 +2847,7 @@ int main() {
     }
   }
   {
-    TEST("net: wifi.connect refuses early when the app is too big for WiFi + TLS (96K free needed)");
+    TEST("net: wifi.connect refuses early when the app is too big for WiFi + TLS (88K free needed)");
     MockBackend be;
     be.freeHeapVal = 80 * 1024;
     LuaVm vm;
@@ -2858,16 +2858,16 @@ int main() {
     CHECK(run(vm, be) == Status::Finished);
     CHECK(be.logs.size() == 1 &&
           be.logs[0] ==
-              "false\tnot enough free RAM for WiFi + TLS (free 80K, need 96K): this app is too big for network use");
+              "false\tnot enough free RAM for WiFi + TLS (free 80K, need 88K): this app is too big for network use");
     CHECK(!be.wifiAsked);
   }
   {
     TEST(
-        "net: wifi.connect{tls=false} needs 80K free instead of 96K (plain TCP apps); the default and tls=true still "
-        "need 96K");
+        "net: wifi.connect{tls=false} needs 80K free instead of 88K (plain TCP apps); the default and tls=true still "
+        "need 88K");
     {
       MockBackend be;
-      be.freeHeapVal = 90 * 1024;
+      be.freeHeapVal = 84 * 1024;  // enough for plain TCP, not for TLS
       LuaVm vm;
       CHECK(vm.open(128 * 1024));
       registerApi(vm, be);
@@ -2879,10 +2879,10 @@ int main() {
       CHECK(be.logs.size() == 5);
       if (be.logs.size() == 5) {
         const char* refused =
-            "false\tnot enough free RAM for WiFi + TLS (free 90K, need 96K): this app is too big for network use";
+            "false\tnot enough free RAM for WiFi + TLS (free 84K, need 88K): this app is too big for network use";
         CHECK(be.logs[0] == refused && be.logs[1] == refused);
         CHECK(be.logs[2] ==
-              "false\tnot enough free RAM for WiFi + TLS (free 90K, need 96K): this app is too big for network use");
+              "false\tnot enough free RAM for WiFi + TLS (free 84K, need 88K): this app is too big for network use");
         CHECK(be.logs[3].rfind("false", 0) == 0 && be.logs[3].find("table expected") != std::string::npos);
         CHECK(be.logs[4].rfind("false", 0) == 0);
         CHECK(be.logs[4].find("tls must be a boolean") != std::string::npos);
@@ -2891,7 +2891,7 @@ int main() {
     }
     {
       MockBackend be;
-      be.freeHeapVal = 90 * 1024;  // enough for plain TCP, not for TLS
+      be.freeHeapVal = 84 * 1024;  // enough for plain TCP, not for TLS
       LuaVm vm;
       CHECK(vm.open(128 * 1024));
       registerApi(vm, be);

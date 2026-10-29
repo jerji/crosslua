@@ -1,14 +1,23 @@
 -- app_store.lua — download + install the CrossLua apps bundle (crosslua-apps-*.zip) straight off the
 -- GitHub release, then point the user at Home -> Plugins.
 --
--- Two phases by design: the firmware's heap after a WiFi download cannot also run the unzip (the deflate window
--- alone is a 32 KB contiguous block, and the post-download heap is fragmented), so phase 1 downloads the bundle,
--- drops data:install-pending and app.restart(\"main.lua\") — a fresh VM with the radio back off. Phase 2 starts
--- immediately in that fresh VM, installs, and exits normally.
-local URL_FILE = "data:url.txt"
-local PENDING = "data:install-pending"
--- Same repository the OTA update check uses; the bundle URL is derived from its latest release tag (or overridden by
--- data:url.txt, e.g. a local test bundle).
+-- Three phases, because WiFi + a TLS handshake (~45 KB peak) + the unzip's 32 KB deflate window
+-- cannot share one heap:
+--   phase 1 (main.lua, wifi):  look up the latest release tag (JSON streamed to SD + pattern-scanned),
+--                              write the derived bundle URL to data:store-url.txt, restart into download.lua.
+--   phase 2 (download.lua):    a deliberately tiny app that only connects and downloads the zip to
+--                              data:apps.zip. Loading main.lua here too would leave the handshake with
+--                              no margin for the response headers (measured on-device: OOM abort at
+--                              50.7 KB free), so the phase is a few-KB VM of its own.
+--   phase 3 (main.lua, no radio): app.restart turned the radio off; the pristine heap installs the zip.
+--
+-- Phase selection is by pending flags alone, so the app is safe to relaunch at any step. A data:url.txt
+-- override skips the release lookup. download.lua is REQUIRED (phase 2); an error there shows its own screen.
+local URL_FILE = "data:url.txt"          -- explicit override (no lookup)
+local STORE_URL = "data:store-url.txt"   -- derived URL written by phase 1, consumed by phase 2
+local DOWNLOAD = "data:download-pending" -- phase 2 marker
+local PENDING = "data:install-pending"   -- phase 3 marker
+-- Same repository the OTA update check uses; the bundle URL is derived from its latest release tag.
 local RELEASE_REPO = "jerji/crosslua"
 
 local W, H
@@ -42,53 +51,53 @@ local function main()
   local url = nil
   local ov = fs.read(URL_FILE)
   if ov and ov:gsub("%s+$", "") ~= "" then url = ov:gsub("%s+$", "") end
-  local shown = url and (url:match("([^/]+%.zip)") or url) or ("latest release (" .. RELEASE_REPO .. ")")
 
-  gfx.clear()
-  gfx.text(16, 10, "App Store", "ui12", "b")
-  gfx.line(0, 44, W - 1, 44)
-  gfx.text(16, 60, "Installs every CrossLua app", "sans16", "b")
-  gfx.text(16, 96, "from the release zip.", "sans16")
-  gfx.text(16, 128, shown:sub(1, 42), "small")
-  gfx.text(16, H - 60, "Confirm: download + install", "small")
-  gfx.text(16, H - 34, "Back: quit", "small")
-  gfx.present("fast")
-  if input.wait() ~= "confirm" then return end
-
+  -- Connect FIRST, while free heap is still at launch levels: the TLS preflight wants 96 KB free and
+  -- drawing the storefront first shaves the margin to nothing (measured on-device: 97,428 B -> fail).
   gfx.clear(); gfx.text(16, 10, "Connecting...", "ui12", "b"); gfx.present("fast")
-  collectgarbage()  -- free gfx/font/string temps: the WiFi preflight needs ~80 KB (plain) / 96 KB (TLS)
+  collectgarbage()
   local https = (url == nil) or (url:sub(1, 8) == "https://")  -- derived URLs are always GitHub HTTPS
   local ok, why
   if https then ok, why = wifi.connect() else ok, why = wifi.connect({ tls = false }) end
   if not ok then return fail("WiFi failed: " .. tostring(why)) end
 
-  gfx.clear(); gfx.text(16, 10, "Downloading...", "ui12", "b")
-  gfx.text(16, 50, shown:sub(1, 42), "small"); gfx.present("fast")
+  local lookupUrl = nil
   if not url then
     -- Derive the bundle URL from the release repo's latest tag, the same source the OTA update check uses.
+    -- Stream the JSON to SD and pattern-scan for the tag: holding the full body (19 KB) plus
+    -- json.decode on the post-WiFi heap starves the download phase that follows.
     gfx.clear(); gfx.text(16, 10, "Looking up the release...", "ui12", "b"); gfx.present("fast")
-    local okr, bodyr = http.request{ url = "https://api.github.com/repos/" .. RELEASE_REPO .. "/releases/latest",
-                                     max_body = 65536 }
+    local okr, errr = http.request{ url = "https://api.github.com/repos/" .. RELEASE_REPO .. "/releases/latest",
+                                    save_to = "data:release.json", max_body = 65536 }
     local tag = nil
     if okr then
-      local rel = json.decode(bodyr)
-      if rel and rel.tag_name then tag = tostring(rel.tag_name):gsub("^v", "") end
+      local off, overlap = 0, ""
+      while true do
+        local chunk = fs.read("data:release.json", off, 512)
+        if not chunk or #chunk == 0 then break end
+        local found = (overlap .. chunk):match('"tag_name"%s*:%s*"([^"]+)"')
+        if found then tag = found; break end
+        overlap = overlap .. chunk
+        overlap = overlap:sub(-24)  -- enough to catch a tag_name spanning the chunk boundary
+        off = off + #chunk
+      end
+      fs.remove("data:release.json")
     end
     if not tag then
-      return fail("Could not find the latest release: " .. tostring(okr and "bad response" or bodyr))
+      return fail("Could not find the latest release: " .. tostring(okr and "bad response" or errr))
     end
-    url = "https://github.com/" .. RELEASE_REPO .. "/releases/download/" .. tag .. "/crosslua-apps-" .. tag .. ".zip"
-    shown = url:match("([^/]+%.zip)") or url
-    gfx.clear(); gfx.text(16, 10, "Downloading...", "ui12", "b")
-    gfx.text(16, 50, shown:sub(1, 42), "small"); gfx.present("fast")
+    lookupUrl = "https://github.com/" .. RELEASE_REPO .. "/releases/download/" .. tag .. "/crosslua-apps-" .. tag .. ".zip"
+    fs.write(STORE_URL, lookupUrl)
+  else
+    fs.write(STORE_URL, url)
   end
-  local ok2, err2 = http.request{ url = url, save_to = "data:apps.zip" }
-  if not ok2 then return fail("Download failed: " .. tostring(err2)) end
 
-  -- Install in a fresh VM: app.restart turns the radio back off, and the unzip needs the contiguous heap that frees.
-  fs.write(PENDING, "1")
-  gfx.clear(); gfx.text(16, 10, "Downloaded. Installing...", "ui12", "b"); gfx.present("fast")
-  app.restart("main.lua")
+  -- Phase 2 (download.lua) does the actual download in a tiny VM; the phase-1 VM already proved the
+  -- github.com TLS handshake peaking at ~45 KB here, and carrying this VM's loaded code into the
+  -- download would leave no margin for it. Just hand off and restart.
+  fs.write(DOWNLOAD, "1")
+  gfx.clear(); gfx.text(16, 10, "Connecting to GitHub...", "ui12", "b"); gfx.present("fast")
+  app.restart("download.lua")
 end
 
 fail = function(msg)

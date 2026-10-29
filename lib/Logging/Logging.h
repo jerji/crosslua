@@ -31,7 +31,12 @@ won't trigger deprecation warnings.
 #define LOG_LEVEL 0
 #endif
 
-#if defined(ARDUINO_USB_CDC_ON_BOOT) && ARDUINO_USB_CDC_ON_BOOT
+#ifdef QEMU_SIM
+// The C3's HWCDC (Serial) is not modeled by QEMU, so the console would vanish.
+// Route the logs to UART1 (Serial1) where tools/qemu_agent.py tees them.
+static HardwareSerial& logSerial = Serial1;
+#define LOG_SERIAL_HAS_TX_TIMEOUT 0
+#elif defined(ARDUINO_USB_CDC_ON_BOOT) && ARDUINO_USB_CDC_ON_BOOT
 static HWCDC& logSerial = Serial;
 #define LOG_SERIAL_HAS_TX_TIMEOUT 1
 #else

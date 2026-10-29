@@ -103,6 +103,10 @@ void ActivityManager::renderTaskLoop() {
 }
 
 void ActivityManager::loop() {
+#ifdef QEMU_SIM
+  LOG_ERR("ACTSIM", "am.loop: pendingAction=%d pending=%d", static_cast<int>(pendingAction),
+          pendingActivity ? 1 : 0);
+#endif
   if (mappedInput.consumeSuppressedRelease()) return;
 
   if (currentActivity && currentActivity->requiresExclusiveStorageLoop()) {
@@ -150,10 +154,17 @@ void ActivityManager::loop() {
   }
 
   while (pendingAction != PendingAction::None) {
+#ifdef QEMU_SIM
+    LOG_ERR("ACTSIM", "pending transition: action=%d nextIsReader=%d",
+            static_cast<int>(pendingAction), pendingActivity ? pendingActivity->isReaderActivity() : 0);
+#endif
     // The page turner's radio gives its heap back before the next screen allocates. Its teardown
     // can span loop passes and runs outside the render lock.
     if (pendingAction != PendingAction::ReplaceForSleep &&
         !bleturner::beforeScreenChange(0, pendingActivity && pendingActivity->isReaderActivity())) {
+#ifdef QEMU_SIM
+      LOG_ERR("ACTSIM", "beforeScreenChange deferred the transition");
+#endif
       return;
     }
     if (pendingAction == PendingAction::Pop) {
@@ -206,6 +217,9 @@ void ActivityManager::loop() {
     } else if (pendingActivity) {
       // Current activity has requested a new activity to be launched
       RenderLock lock;
+#ifdef QEMU_SIM
+      LOG_ERR("ACTSIM", "got render lock, launching pending activity");
+#endif
 
       if (pendingAction == PendingAction::Replace || pendingAction == PendingAction::ReplaceForSleep) {
         // Destroy the current activity

@@ -262,6 +262,28 @@ def main(argv=None):
         r = dev.ping()
         print(f"PONG uptime={r[0]}ms screen={r[1]}" if r else "no reply")
         return 0 if r else 1
+    if a.cmd == "goto":
+        # CMD:OPEN:<activity> — jump straight to a named activity.
+        if not a.args:
+            raise SystemExit("goto needs an activity name (Home|Plugins|Library|FileTransfer|FileBrowser|Settings|Browse|Sleep)")
+        dev.send("OPEN:" + a.args[0])
+        for ln in dev.lines(3.0):
+            if ln.startswith(("OPEN_OK", "OPEN_ERR")):
+                print(ln)
+                return 0 if ln.startswith("OPEN_OK") else 1
+        print("no reply")
+        return 1
+    if a.cmd == "lua":
+        # CMD:LUA:<plugin-dir-name> — launch a Lua plugin directly, no picker.
+        if not a.args:
+            raise SystemExit("lua needs a plugin dir name (e.g. app_store_lua)")
+        dev.send("LUA:" + a.args[0])
+        for ln in dev.lines(5.0):
+            if ln.startswith(("LUA_OK", "LUA_ERR")):
+                print(ln)
+                return 0 if ln.startswith("LUA_OK") else 1
+        print("no reply")
+        return 1
     if a.cmd == "btn":
         dev.press(a.args, a.gap)
         return 0

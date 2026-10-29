@@ -28,6 +28,10 @@ std::vector<Entry> scanPluginsOnDisk() {
   seen.reserve(16);
   for (size_t r = 0; r < ROOT_COUNT; r++) {
     HalFile root = Storage.open(ROOTS[r]);
+#ifdef QEMU_SIM
+    LOG_ERR("ACTSIM", "scan root %s: open=%d isDir=%d", ROOTS[r], root.isOpen() ? 1 : 0,
+            root.isDirectory() ? 1 : 0);
+#endif
     if (!root || !root.isDirectory()) continue;
     for (HalFile entry = root.openNextFile(); entry; entry = root.openNextFile()) {
       if (!entry.isDirectory()) continue;
