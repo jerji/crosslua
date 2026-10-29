@@ -96,6 +96,12 @@ scr2 = {"activity": "LuaApp", "w": 480, "h": 800, "seq": 1, "truncated": False,
 t2 = x4ctl.render_screen(scr2)
 check("screen: CrossLua inverted row (big black bar) marks selection; thin black rule does not",
       "> y=200  ports" in t2 and "> y=230" in t2.replace("y=200 ", "y=200") or ("> y=200" in t2 and "other deck" in t2 and "> y=300" not in t2 and "> y=760" not in t2))
+scr3 = {"activity": "LuaApp", "w": 480, "h": 800, "seq": 2, "truncated": False,
+        "texts": [(24, 60, 1, "Lua tests (46)"), (24, 100, 1, "> net"), (24, 139, 1, "  radiocost"),
+                  (24, 178, 1, "  selftest")], "rects": []}
+t3 = x4ctl.render_screen(scr3)
+check("screen: hand-rolled '> ' text prefix marks the row (hub/grimoire/totp menus draw no selection rect)",
+      "> y=100  > net" in t3 and "\n  y=139" in t3 and "\n  y=178" in t3 and "> y=60" not in t3)
 stop = True
 print("ALL PASSED" if not fails else f"{fails} FAILED")
 sys.exit(1 if fails else 0)

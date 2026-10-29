@@ -173,7 +173,8 @@ def parse_screen(lines):
 
 
 def render_screen(scr):
-    """Human/LLM-readable text. '>' marks text sitting inside a gray-filled (selection) rectangle."""
+    """Human/LLM-readable text. '>' marks the selected row: text inside a selection rectangle, or a row whose first
+    cell carries the hand-rolled '> ' prefix (the low-RAM Lua menus draw no selection rect at all)."""
     # Native themes fill selected rows light/dark gray; CrossLua apps (ui.list) invert them: a big BLACK bar behind white text.
     sel = [r for r in scr["rects"]
            if (r[4] in SELECT_COLORS and r[2] >= 120 and r[3] >= 24) or (r[4] == 16 and r[2] >= 300 and 30 <= r[3] <= 120)]
@@ -186,7 +187,8 @@ def render_screen(scr):
     out = [f"[{scr['activity']} {scr['w']}x{scr['h']} frame#{scr['seq']}" + (" TRUNCATED" if scr["truncated"] else "") + "]"]
     for key in sorted(rows):
         cells = rows[key]
-        mark = ">" if any(selected(c) for c in cells) else " "
+        first = min(cells, key=lambda c: c[0])
+        mark = ">" if (any(selected(c) for c in cells) or first[3].startswith("> ")) else " "
         out.append(f"{mark} y={key:<4} " + "  |  ".join(c[3] for c in cells))
     return "\n".join(out)
 
@@ -280,7 +282,7 @@ def main(argv=None):
             marked = [ln for ln in render_screen(scr).splitlines()[1:] if ln.startswith(">")]
             if any(rx.search(ln) for ln in marked):
                 break
-            dev.press(["right"], 0.35)
+            dev.press(["down"], 0.35)
             time.sleep(1.0)  # let the e-ink redraw finish before reading the next frame
         else:
             print("not found; last screen:\n" + render_screen(scr))
