@@ -29,9 +29,13 @@ local function draw(note)
   if note then gfx.text(w // 2, h - 70, note, "small", "c") end
   gfx.text(w // 2, h - 40, "up/down choose   confirm run   back exit", "small", "c")
   local lh = gfx.line_height("ui12")
-  for i = 1, #names do
-    local y = 60 + (i - 1) * (lh + 10)
-    if y > h - 110 then gfx.text(w // 2, h - 100, "...", "ui12", "c"); break end
+  local step = lh + 10
+  local rows = math.max(1, (h - 110 - 60) // step)  -- rows that fit above the footer
+  -- Scroll the window around the selection: the menu used to render from row 1 only, so with more tests than fit on
+  -- screen the highlighted row was never drawn (and the host could not see or drive it).
+  local first = math.max(1, math.min(sel - rows // 2, #names - rows + 1))
+  for i = first, math.min(#names, first + rows - 1) do
+    local y = 60 + (i - first) * step
     gfx.text(24, y, ((i == sel) and "> " or "  ") .. names[i]:sub(1, -5), "ui12", i == sel and "b" or "")
   end
   gfx.present()
