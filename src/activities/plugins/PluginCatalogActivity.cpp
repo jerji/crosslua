@@ -1750,7 +1750,7 @@ void PluginCatalogActivity::rebuildRowItems() {
     if (showOpds) addRow(tr(STR_OPDS_BROWSER), tr(STR_OPDS_SERVERS));
     if (showPluginHubInstallRow) addRow(tr(STR_PLUGIN_HUB), tr(STR_PLUGIN_HUB_DESCRIPTION), ">");
     if (showStoreInstallRow)
-      addRow("Get the App Store", "Downloads the store app; it installs apps from the release", ">");
+      addRow("Get the Lua App Store", "Downloads the store app; it installs Lua apps from the release", ">");
     std::string prevCategory = "\x01";  // impossible sentinel, so the first plugin's category always "starts"
     for (const auto& plugin : installedPlugins) {
       const bool categoryStart = plugin.category != prevCategory;

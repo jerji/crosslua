@@ -1,1 +1,1 @@
-{"title": "App Store", "description": "Download and install the CrossLua apps bundle from the release", "permissions": ["network", "plugin_install"]}
+{"title": "Lua App Store", "description": "Download and install Lua apps from the CrossLua release bundle", "permissions": ["network", "plugin_install"]}

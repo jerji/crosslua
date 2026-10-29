@@ -44,9 +44,9 @@ bool StoreBootstrapActivity::isAvailable() {
 void StoreBootstrapActivity::onEnter() {
   CatalogActivity::onEnter();
 
-  auto confirmation = makeUniqueNoThrow<ConfirmationActivity>(renderer, mappedInput, "Get the App Store",
-                                                              "Downloads the App Store app (no plugins yet). "
-                                                              "It installs the full apps bundle from the release.",
+  auto confirmation = makeUniqueNoThrow<ConfirmationActivity>(renderer, mappedInput, "Get the Lua App Store",
+                                                              "Downloads the Lua App Store app (no plugins yet). "
+                                                              "It installs Lua apps from the release bundle.",
                                                               "Cancel", "Download");
   if (!confirmation) {
     LOG_ERR("STORE", "OOM: store bootstrap confirmation");
@@ -67,7 +67,7 @@ void StoreBootstrapActivity::onEnter() {
 }
 
 void StoreBootstrapActivity::startBrowse() {
-  beginDownload("Downloading the App Store...");
+  beginDownload("Downloading the Lua App Store...");
   requestUpdateAndWait();
   finishDownload(installStoreApp());
 }
@@ -162,10 +162,10 @@ bool StoreBootstrapActivity::handleCustomInput() {
 void StoreBootstrapActivity::onBackButton() { finish(); }
 
 void StoreBootstrapActivity::buildScreen(UiScreen& screen) {
-  screenHeader(screen, "Get the App Store");
+  screenHeader(screen, "Get the Lua App Store");
   if (buildStatusScreen(screen, true, true)) return;
 
   if (state == State::DONE) {
-    catalogCenteredBlock(screen, {{"App Store downloaded", true}, {"Open Home -> Plugins to run it"}});
+    catalogCenteredBlock(screen, {{"Lua App Store downloaded", true}, {"Open Home -> Plugins to run it"}});
   }
 }
