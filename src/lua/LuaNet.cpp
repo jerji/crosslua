@@ -114,37 +114,68 @@ int wifi_status(lua_State* L) {
   return 1;
 }
 
-// wifi.scan([max]) -> { {ssid, rssi, encrypted} ... } | nil, err. Blocking, a few seconds (network permission).
+// The scan rows are malloc'd for the call (they used to be a `static out[50]`: that pinned 4.4 KB of .bss for the
+// whole boot, for a call most apps never make). Pushed from inside lua_pcall so an OOM while building the table
+// cannot skip the free().
+struct PushScan {
+  const Backend::WifiScanInfo* out;
+  int n;
+  int total;
+};
+int push_scan(lua_State* L) {
+  const PushScan* p = static_cast<const PushScan*>(lua_touserdata(L, 1));
+  lua_createtable(L, p->n, 0);
+  for (int i = 0; i < p->n; i++) {
+    lua_createtable(L, 0, 7);
+    lua_pushstring(L, p->out[i].ssid);
+    lua_setfield(L, -2, "ssid");
+    lua_pushinteger(L, p->out[i].rssi);
+    lua_setfield(L, -2, "rssi");
+    lua_pushboolean(L, p->out[i].encrypted);
+    lua_setfield(L, -2, "encrypted");
+    lua_pushstring(L, p->out[i].bssid);
+    lua_setfield(L, -2, "bssid");
+    lua_pushinteger(L, p->out[i].channel);
+    lua_setfield(L, -2, "channel");
+    lua_pushstring(L, p->out[i].auth);
+    lua_setfield(L, -2, "auth");
+    lua_pushboolean(L, p->out[i].hidden);
+    lua_setfield(L, -2, "hidden");
+    lua_rawseti(L, -2, i + 1);
+  }
+  lua_pushinteger(L, p->total);
+  return 2;
+}
+
+// wifi.scan([max]) -> { {ssid, rssi, encrypted} ... }, total | nil, err. Blocking, a few seconds (network permission).
 int wifi_scan(lua_State* L) {
   if (!allowed(L)) return pushFail(L, DENIED);
-  int max = lua_isnoneornil(L, 1) ? 20 : static_cast<int>(luaL_checknumber(L, 1));
+  int max = 20;
+  if (!lua_isnoneornil(L, 1)) {
+    if (!lua_isnumber(L, 1)) return pushFail(L, "max must be a number");
+    max = static_cast<int>(lua_tonumber(L, 1));
+  }
   if (max < 1 || max > 50) return pushFail(L, "max must be 1..50");
   if (be(L).bleRunning()) return pushFail(L, "bluetooth is running: call ble.stop() first");
   char err[96] = {0};
   int total = 0;
-  static Backend::WifiScanInfo out[50];
+  Backend::WifiScanInfo* out =
+      static_cast<Backend::WifiScanInfo*>(malloc(sizeof(Backend::WifiScanInfo) * static_cast<size_t>(max)));
+  if (!out) return pushFail(L, "out of memory");
   const int n = be(L).wifiScan(out, max, &total, err, sizeof(err));
-  if (n < 0) return pushFail(L, err);
-  lua_createtable(L, n, 0);
-  for (int i = 0; i < n; i++) {
-    lua_createtable(L, 0, 7);
-    lua_pushstring(L, out[i].ssid);
-    lua_setfield(L, -2, "ssid");
-    lua_pushinteger(L, out[i].rssi);
-    lua_setfield(L, -2, "rssi");
-    lua_pushboolean(L, out[i].encrypted);
-    lua_setfield(L, -2, "encrypted");
-    lua_pushstring(L, out[i].bssid);
-    lua_setfield(L, -2, "bssid");
-    lua_pushinteger(L, out[i].channel);
-    lua_setfield(L, -2, "channel");
-    lua_pushstring(L, out[i].auth);
-    lua_setfield(L, -2, "auth");
-    lua_pushboolean(L, out[i].hidden);
-    lua_setfield(L, -2, "hidden");
-    lua_rawseti(L, -2, i + 1);
+  if (n < 0) {
+    free(out);
+    return pushFail(L, err);
   }
-  lua_pushinteger(L, total);
+  PushScan p{out, n, total};
+  lua_pushcfunction(L, push_scan);
+  lua_pushlightuserdata(L, &p);
+  const int rc = lua_pcall(L, 1, 2, 0);
+  free(out);
+  if (rc != LUA_OK) {
+    lua_pop(L, 1);
+    return pushFail(L, "not enough memory for the scan list (lower max)");
+  }
   return 2;
 }
 
