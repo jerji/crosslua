@@ -156,7 +156,7 @@ jobs:
           gh release upload "$RELEASE_TAG" dist/crosspoint-*.bin \
             --repo "$GITHUB_REPOSITORY" --clobber
 
-      # The SD-card contents (apps, and separately the on-device test suites), zipped by the same script CI runs on every push.
+      # The SD-card contents (apps + on-device test suites in ONE zip), zipped by the same script CI runs on every push.
       - name: Package the SD-card contents
         env:
           RELEASE_TAG: ${{ github.event.release.tag_name }}
@@ -164,10 +164,9 @@ jobs:
           version="${RELEASE_TAG#v}"
           python3 scripts/package_sd_card.py "$version" zips
           test -f "zips/crosslua-apps-${version}.zip"
-          test -f "zips/crosslua-tests-${version}.zip"
-          test "$(find zips -maxdepth 1 -type f -name 'crosslua-*.zip' | wc -l)" -eq 2
+          test "$(find zips -maxdepth 1 -type f -name 'crosslua-*.zip' | wc -l)" -eq 1
 
-      - name: Attach the SD-card zips
+      - name: Attach the SD-card zip
         env:
           GH_TOKEN: ${{ github.token }}
           RELEASE_TAG: ${{ github.event.release.tag_name }}

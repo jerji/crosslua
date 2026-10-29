@@ -234,10 +234,10 @@ jobs:
       - name: Run the x4ctl driver tests
         run: uv run --with pyserial --with pillow test/lua_host/test_x4ctl.py
 
-  # The SD-card zips are built here on every push, by the same script the release uses, so a bad plugin
-  # (missing manifest, oversized script, host path or LAN address in a shipped file) fails CI instead of a release.
+  # The SD-card zip (user apps + on-device test suites) is built here on every push, by the same script the release uses,
+  # so a bad plugin (missing manifest, oversized script, host path or LAN address in a shipped file) fails CI instead of a release.
   sd-card-zip:
-    name: SD card zips
+    name: SD card zip
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6

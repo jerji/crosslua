@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
-"""Package sd_card_contents/ into the zips attached to a CrossLua release.
+"""Package sd_card_contents/ into the zip attached to a CrossLua release.
 
     python3 scripts/package_sd_card.py <version> <outdir>
 
 Produces, in <outdir>:
-  crosslua-apps-<version>.zip   the apps users install (unzip into the SD card's root: it creates /plugins/<app>/)
-  crosslua-tests-<version>.zip  the on-device test suites (lua_tests_lua, grants_lua), for developers
+  crosslua-apps-<version>.zip   everything on the card: user apps AND the on-device test suites
+                               (lua_tests_lua, grants_lua under system/) — unzip into the SD card's root:
+                               it creates /plugins/<category>/<app>/.
 
 The same script runs in CI on every push, so the zip a pull request builds is the zip a release ships. It fails (exit 1)
 when a plugin is malformed or when a shipped file leaks a host path or a LAN address.
@@ -20,14 +21,14 @@ import zipfile
 
 ROOT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..")
 SRC = os.path.join(ROOT, "sd_card_contents")
-TEST_APPS = {"lua_tests_lua", "grants_lua"}  # developer suites: not part of the apps zip
 MAX_LUA_BYTES = 64 * 1024                    # the runtime refuses bigger scripts
 STAMP = (2026, 1, 1, 0, 0, 0)                # fixed zip timestamp (FAT cannot store anything earlier than 1980)
-LEAK = re.compile(rb"/root/|/home/[a-z]|192\.168\.\d+\.\d+|C:\\\\Users")
+LEAK = re.compile(rb"/root/|/home/[a-z]|192\.168\.\d+\.\d+|C:\\Users")
 LUAC = shutil.which("luac5.4") or shutil.which("luac")  # parse-only Lua syntax check (nil when absent)
 INSTALL = """CrossLua apps {version}
 
-Unzip this archive into the ROOT of the SD card. It creates /plugins/<category>/<app>/ for every app.
+Unzip this archive into the ROOT of the SD card. It creates /plugins/<category>/<app>/ for every app
+(user apps plus the system test suites: lua_tests_lua, grants_lua).
 Then, on the device: Home -> Plugins (turn plugins on under Settings -> Connectivity if the entry is missing).
 
 Apps ask for their permissions the first time they run; each app's folder has a manifest.json that lists them.
@@ -113,26 +114,20 @@ def main():
         for p in problems:
             print("  -", p)
         return 1
-    user_apps = [a for a in apps if os.path.basename(a) not in TEST_APPS]
-    test_apps = [a for a in apps if os.path.basename(a) in TEST_APPS]
-    if not user_apps or not test_apps:
-        print(f"PACKAGING FAILED: expected both user apps and test apps, got {user_apps} / {test_apps}")
+    if not apps:
+        print("PACKAGING FAILED: no apps found under plugins/")
         return 1
     apps_zip = os.path.join(outdir, f"crosslua-apps-{version}.zip")
-    tests_zip = os.path.join(outdir, f"crosslua-tests-{version}.zip")
-    write_zip(apps_zip, user_apps, {"CROSSLUA-INSTALL.txt": INSTALL.format(version=version)})
-    write_zip(tests_zip, test_apps)
-    # read both back: every entry must be intact and under plugins/
-    for path in (apps_zip, tests_zip):
-        with zipfile.ZipFile(path) as z:
-            bad = z.testzip()
-            names = [n for n in z.namelist() if n != "CROSSLUA-INSTALL.txt"]
-            if bad or not names or any(not n.startswith("plugins/") for n in names):
-                print(f"PACKAGING FAILED: {path} is not a clean plugins/ archive (first bad: {bad})")
-                return 1
-        print(f"{os.path.basename(path)}: {os.path.getsize(path)} bytes, {len(names)} files")
-    print("apps:", ", ".join(user_apps))
-    print("tests:", ", ".join(test_apps))
+    write_zip(apps_zip, apps, {"CROSSLUA-INSTALL.txt": INSTALL.format(version=version)})
+    # read it back: every entry must be intact and under plugins/
+    with zipfile.ZipFile(apps_zip) as z:
+        bad = z.testzip()
+        names = [n for n in z.namelist() if n != "CROSSLUA-INSTALL.txt"]
+        if bad or not names or any(not n.startswith("plugins/") for n in names):
+            print(f"PACKAGING FAILED: {apps_zip} is not a clean plugins/ archive (first bad: {bad})")
+            return 1
+    print(f"{os.path.basename(apps_zip)}: {os.path.getsize(apps_zip)} bytes, {len(names)} files")
+    print("apps:", ", ".join(apps))
     return 0
 
 

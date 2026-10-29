@@ -53,8 +53,8 @@ Everything below comes from **this repository's [Releases](https://github.com/je
 1. **Firmware**: download `crosspoint-<version>-<board>.bin` (`x3-x4` for the X3 and X4; `sticky`, `x4pro`, `x4c`, `papermono`,
    `metalio_eink4`, `eego_a4`, `picco` for the others) and flash it the way any CrossPoint firmware is flashed: the web installer's
    "Custom .bin" option, or `esptool` at offset `0x10000` (see [Install firmware](#install-firmware) below).
-2. **Apps**: download `crosslua-apps-<version>.zip` and unzip it into the **root of the SD card** (it creates `/plugins/<app>/`),
-   then enable Settings → Connectivity → Plugins. `crosslua-tests-<version>.zip` holds the on-device test suites (for developers).
+2. **Apps**: download `crosslua-apps-<version>.zip` and unzip it into the **root of the SD card** (it creates `/plugins/<category>/<app>/`),
+   then enable Settings → Connectivity → Plugins. The same zip carries the on-device test suites (`system/lua_tests_lua`, `system/grants_lua`).
 3. **Updates**: Settings → Check for update reads *this* repository's latest release (a fork of CrossLua points it at its own
    repository with `-DCROSSLUA_RELEASE_REPO=\"owner/name\"`). Versions look like `2.0.0-crosslua.3`: the first three numbers are the
    CrossPoint base, the last one is the CrossLua revision, and an update is offered when that revision is higher.
