@@ -17,7 +17,7 @@
 -- assertion held.  Exits 0 on success, 1 on failure.
 
 local SCRIPT_DIR       = (arg and arg[0] or ""):match("^(.*)/[^/]*$") or "."
-local PLUGIN_DIR      = SCRIPT_DIR .. "/../../sd_card_contents/plugins/grimoire_lua"
+local PLUGIN_DIR      = SCRIPT_DIR .. "/../../sd_card_contents/plugins/games/grimoire_lua"
 local GRIMOIRE_SPELLS = assert(os.getenv("GRIMOIRE_DIR"), "set GRIMOIRE_DIR to a Grimoire checkout") .. "/sd_card_contents/spells"
 local HOST_ROOT       = (os.getenv("TMPDIR") or "/tmp") .. "/grimoire_shim_test"
 
