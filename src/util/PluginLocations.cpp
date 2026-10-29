@@ -72,7 +72,13 @@ std::vector<Entry> scanPluginsOnDisk() {
 }
 
 std::vector<Entry> scanPlugins() {
+#ifndef QEMU_SIM
   if (!SETTINGS.pluginsEnabled) return {};
+#else
+  // The sim's settings object never loads settings.json, so pluginsEnabled
+  // stays at its (disabled) default and the picker would show an empty list.
+  // Gate the sim off: the device's user switch still applies on hardware.
+#endif
   auto plugins = scanPluginsOnDisk();
   plugins.erase(std::remove_if(plugins.begin(), plugins.end(),
                                [](const Entry& entry) {

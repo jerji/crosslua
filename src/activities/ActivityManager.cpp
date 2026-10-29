@@ -104,8 +104,19 @@ void ActivityManager::renderTaskLoop() {
 
 void ActivityManager::loop() {
 #ifdef QEMU_SIM
-  LOG_ERR("ACTSIM", "am.loop: pendingAction=%d pending=%d", static_cast<int>(pendingAction),
-          pendingActivity ? 1 : 0);
+  static unsigned long lastTick = 0;
+  static int lastPending = -1;
+  static int lastHasPending = -1;
+  const unsigned long nowMs = millis();
+  const int pend = static_cast<int>(pendingAction);
+  const int hasPend = pendingActivity ? 1 : 0;
+  if (nowMs - lastTick >= 10000 || pend != lastPending || hasPend != lastHasPending) {
+    lastTick = nowMs;
+    LOG_ERR("ACTSIM", "am.tick: pendingAction=%d pending=%d current=%s", pend, hasPend,
+            currentActivity ? String(currentActivity->name.c_str()).c_str() : "null");
+    lastPending = pend;
+    lastHasPending = hasPend;
+  }
 #endif
   if (mappedInput.consumeSuppressedRelease()) return;
 

@@ -1859,10 +1859,14 @@ void PluginCatalogActivity::rebuildRowItems() {
     rowItems.push_back(row);
   };
   if (state == State::PLUGIN_PICKER) {
-    if (showOpds) addRow(tr(STR_OPDS_BROWSER), tr(STR_OPDS_SERVERS));
-    if (showPluginHubInstallRow) addRow(tr(STR_PLUGIN_HUB), tr(STR_PLUGIN_HUB_DESCRIPTION), ">");
-    if (showStoreInstallRow)
-      addRow("Get the Lua App Store", "Downloads the store app; it installs Lua apps from the release", ">");
+    // The synthetic rows (OPDS / hub installer / store bootstrap) belong to
+    // the top level only; a category submenu starts with the ".." back row.
+    if (pickerCategory.empty()) {
+      if (showOpds) addRow(tr(STR_OPDS_BROWSER), tr(STR_OPDS_SERVERS));
+      if (showPluginHubInstallRow) addRow(tr(STR_PLUGIN_HUB), tr(STR_PLUGIN_HUB_DESCRIPTION), ">");
+      if (showStoreInstallRow)
+        addRow("Get the Lua App Store", "Downloads the store app; it installs Lua apps from the release", ">");
+    }
     const auto addPluginRow = [&](const PluginRef& plugin) {
       const char* subtitle = plugin.description.empty() ? nullptr : plugin.description.c_str();
       switch (plugin.deviceKind) {

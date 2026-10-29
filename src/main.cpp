@@ -1078,10 +1078,14 @@ void loop() {
   // arrive after setup, so consume that one input frame rather than making it
   // a page turn, refresh, or other short power-button action.
   if (wakePowerReleasePending && !gpio.isPressed(HalGPIO::BTN_POWER)) {
+#ifdef QEMU_SIM
+    LOG_ERR("ACTSIM", "loop-ret: wake release consumed");
+#endif
     wakePowerReleasePending = false;
     return;
   }
 
+  #ifndef QEMU_SIM
   static bool screenshotButtonsReleased = true;
   static bool screenshotComboActive = false;
   if (gpio.isPressed(HalGPIO::BTN_POWER) && gpio.isPressed(HalGPIO::BTN_DOWN)) {
@@ -1102,9 +1106,8 @@ void loop() {
       screenshotComboActive = false;
       return;
     }
-    screenshotButtonsReleased = true;
-    screenshotComboActive = false;
   }
+#endif
 
   // Consume the second X4 Pro power-button release so it does not also run a
   // configured short-power action after toggling the frontlight.
@@ -1146,12 +1149,18 @@ void loop() {
   }
 
   const unsigned long sleepTimeoutMs = SETTINGS.getSleepTimeoutMs();
+#ifndef QEMU_SIM
+  // The QEMU sim has no volatile GPIOs, so "activity" goes stale and the idle
+  // timer fires mid-session; deep sleep is a no-op there anyway (the firmware
+  // falls through to `return` on every pass and the pending-transition drain
+  // never runs). Keep the sim awake.
   if (sleepTimeoutMs > 0 && millis() - lastActivityTime >= sleepTimeoutMs) {
     LOG_DBG("SLP", "Auto-sleep triggered after %lu ms of inactivity", sleepTimeoutMs);
     enterDeepSleep(true);
     // This should never be hit as `enterDeepSleep` calls esp_deep_sleep_start
     return;
   }
+#endif
 
   // A hold that woke the device must be released before it can count as a new
   // in-app long press. Otherwise a user who keeps holding after wake would put
@@ -1166,6 +1175,10 @@ void loop() {
                                         SETTINGS.shortPwrBtn == CrossPointSettings::SHORT_PWRBTN::SLEEP &&
                                         gpio.getPowerButtonHeldTime() <= X4PRO_POWER_CLICK_MAX_HOLD_MS;
 
+  #ifndef QEMU_SIM
+  // Physical power-button hold semantics. The sim's GPIOs read as stuck (the
+  // matrix is unmodeled), so this path would fire at allowSleepAt and return
+  // before the activity-manager loop every pass.
   if (!x4ProAwaitingClickWindow && powerReleasedSinceWake && millis() >= allowSleepAt &&
       gpio.isPressed(HalGPIO::BTN_POWER) && gpio.getPowerButtonHeldTime() > SETTINGS.getPowerButtonDuration()) {
     // If the screenshot combination is potentially being pressed, don't sleep
@@ -1177,6 +1190,7 @@ void loop() {
     // This should never be hit as `enterDeepSleep` calls esp_deep_sleep_start
     return;
   }
+#endif
 
 #if FREEINK_DEVICE_PAPERMONO
   // Paper Mono reports the PMIC power button as a one-tick click, so the held

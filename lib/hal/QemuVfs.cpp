@@ -52,16 +52,28 @@ int exchange(const char* op, const char* arg1, const char* arg2, const char* arg
   if (arg2) { req += " "; req += arg2; }
   if (arg3) { req += " "; req += arg3; }
   req += "\n";
-  Serial1.print(req);
 
-  String line;
-  if (!readLine(line)) return -1;
-  if (line.startsWith("VFS ERR")) return -1;
-  if (line.startsWith("VFS OK")) {
-    String rest = line.substring(6);
-    rest.trim();
-    value = rest;
-    return rest.isEmpty() ? 0 : 1;
+  // A misaligned bus (a stale line from a previous timed-out exchange) makes
+  // the first reply garbage. Drain it and retry instead of failing the call:
+  // exchanges are strictly request/response, so any non-VFS line is orphaned
+  // and safe to drop.
+  for (int attempt = 0; attempt < 3; ++attempt) {
+    Serial1.print(req);
+    String line;
+    if (!readLine(line)) {
+      // Timeout: let the peer catch up and try again.
+      delay(10);
+      continue;
+    }
+    if (line.startsWith("VFS ERR")) return -1;
+    if (line.startsWith("VFS OK")) {
+      String rest = line.substring(6);
+      rest.trim();
+      value = rest;
+      return rest.isEmpty() ? 0 : 1;
+    }
+    // Garbage (leftover or mirrored line): consume and retry the request.
+    LOG_ERR("VFS", "exchange %s got stray line, resyncing (attempt %d)", op, attempt + 1);
   }
   return -1;
 }
