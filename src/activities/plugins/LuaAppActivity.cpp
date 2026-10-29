@@ -1,6 +1,7 @@
 #include "LuaAppActivity.h"
 
 #include <AudioManager.h>
+#include <BatteryMonitor.h>
 #include <BleKeyboardHost.h>
 #include <BoardConfig.h>
 #include <Buzzer.h>
@@ -10,7 +11,6 @@
 #include <GfxRenderer.h>
 #include <HalMemory.h>
 #include <HalPowerManager.h>
-#include <BatteryMonitor.h>
 #include <I18n.h>
 #include <Imu.h>
 #include <LedManager.h>
@@ -39,10 +39,12 @@
 #include <ESPmDNS.h>
 #include <HalFrontlight.h>
 #include <HalStorage.h>
-#include <SDCardManager.h>
 #include <InflateReader.h>
+#include <LibraryBuilder.h>
+#include <LibraryIndexFile.h>
 #include <Logging.h>
 #include <Memory.h>
+#include <SDCardManager.h>
 #include <TrustedTime.h>
 #include <WiFi.h>
 #include <WiFiUdp.h>
@@ -59,6 +61,7 @@
 #include "CrossPointSettings.h"
 #include "Epub/converters/ImageDecoderFactory.h"
 #include "MappedInputManager.h"
+#include "RecentBooksStore.h"
 #include "SilentRestart.h"
 #include "activities/ActivityManager.h"
 #include "activities/network/WifiSelectionActivity.h"
@@ -71,16 +74,13 @@
 #include "lua/LuaInternal.h"
 #include "lua/LuaVm.h"
 #include "lua/PermText.h"
-#include "network/HttpDownloader.h"
 #include "network/FirmwareBoardTag.h"
+#include "network/HttpDownloader.h"
 #include "network/WifiPowerSaveGuard.h"
-#include "util/QrUtils.h"
 #include "util/BookProgress.h"
 #include "util/PluginLocations.h"
+#include "util/QrUtils.h"
 #include "util/ScreenshotUtil.h"
-#include "RecentBooksStore.h"
-#include <LibraryIndexFile.h>
-#include <LibraryBuilder.h>
 
 static bool g_inDeepSleepCall = false;  // true while system.sleep() is inside upstream enterDeepSleep()
 
@@ -120,8 +120,8 @@ std::atomic<bool> g_bluetoothHeld{
     false};  // a Lua app's Bluetooth session owns the shared stack (read through luabt::held())
 constexpr size_t MAX_SCRIPT_BYTES = 64 * 1024;
 
-constexpr uint32_t SLICE_MS = 25;        // max time one loop() pass spends inside Lua
-constexpr uint32_t EXIT_HOLD_MS = 1000;    // hold Back this long to force-quit any app
+constexpr uint32_t SLICE_MS = 25;         // max time one loop() pass spends inside Lua
+constexpr uint32_t EXIT_HOLD_MS = 1000;   // hold Back this long to force-quit any app
 constexpr uint32_t BUTTON_HOLD_MS = 500;  // hold a nav button this long -> "<name>_hold" (Back reserved for force-quit)
 constexpr size_t EVENT_QUEUE_MAX = 16;
 
@@ -575,7 +575,10 @@ class LuaAppActivity::Backend final : public crosslua::Backend {
     BatteryStatus s;
     const static BatteryMonitor bm;  // same local-monitor pattern HalPowerManager::getBatteryPercentage uses
     const auto st = bm.readStatus();
-    if (!st.supported) { s.supported = false; return s; }
+    if (!st.supported) {
+      s.supported = false;
+      return s;
+    }
     if (st.percentageKnown) s.percent = st.percentage;
     if (st.millivoltsKnown) s.millivolts = st.millivolts;
     if (st.chargingKnown) s.charging = st.charging ? 1 : 0;
@@ -775,7 +778,7 @@ class LuaAppActivity::Backend final : public crosslua::Backend {
     int8_t rssi;
     uint8_t data[250];
   };
-  MonPkt* monRing_ = nullptr;      // allocated on monitorStart, freed on stop (~2 KB)
+  MonPkt* monRing_ = nullptr;  // allocated on monitorStart, freed on stop (~2 KB)
   std::atomic<uint8_t> monHead_{0}, monTail_{0};
   std::atomic<int> monCaptured_{0}, monDropped_{0};
   bool monUp_ = false;
@@ -784,7 +787,7 @@ class LuaAppActivity::Backend final : public crosslua::Backend {
   HalFile monFile_;
   char monPath_[160] = {0};
   uint32_t monBytes_ = 0;
-  uint8_t* monBuf_ = nullptr;      // PCAP staging buffer, allocated with the ring (~2 KB)
+  uint8_t* monBuf_ = nullptr;  // PCAP staging buffer, allocated with the ring (~2 KB)
   size_t monBufLen_ = 0;
   inline static Backend* monSelf_ = nullptr;
   static void onPromiscuous(void* cbBuf, wifi_promiscuous_pkt_type_t type) {
@@ -1203,8 +1206,8 @@ class LuaAppActivity::Backend final : public crosslua::Backend {
       gattLinkCb_.reset();
       snprintf(gattTarget_, sizeof(gattTarget_), "%s", addr);
       // Async connect: returns at once; ble.state().link reports "connecting" then "connected"/"failed".
-      if (!gattClient_->connect(NimBLEAddress(std::string(addr), addrType ? BLE_ADDR_RANDOM : BLE_ADDR_PUBLIC),
-                                true, true, true)) {
+      if (!gattClient_->connect(NimBLEAddress(std::string(addr), addrType ? BLE_ADDR_RANDOM : BLE_ADDR_PUBLIC), true,
+                                true, true)) {
         gattTarget_[0] = 0;
         snprintf(err, errCap, "the connection attempt did not start");
         return false;
@@ -1724,7 +1727,7 @@ class LuaAppActivity::Backend final : public crosslua::Backend {
       return false;
     }
     if (WiFi.getMode() == WIFI_MODE_NULL) {
-      WiFi.mode(WIFI_STA);  // init the driver so the MAC can be programmed
+      WiFi.mode(WIFI_STA);                                // init the driver so the MAC can be programmed
       if (setFloorFn) setFloorFn(LUA_HEAP_FLOOR_ONLINE);  // the radio owns its RAM now (same as wifi.connect / hotspot)
     }
     if (esp_wifi_set_mac(WIFI_IF_STA, mac) != ESP_OK) {
@@ -2186,7 +2189,8 @@ class LuaAppActivity::Backend final : public crosslua::Backend {
     zip.enumerateFileEntries([&](std::string_view name, uint32_t, uint32_t) {
       if (name.rfind("plugins/", 0) != 0) return;         // informational top-level file (CROSSLUA-INSTALL.txt)
       if (name.size() > 1 && name.back() == '/') return;  // directory entry; mkdir creates dirs as needed
-      const std::string target = "/" + std::string(name); // "plugins/games/foo/main.lua" -> "/plugins/games/foo/main.lua"
+      const std::string target =
+          "/" + std::string(name);  // "plugins/games/foo/main.lua" -> "/plugins/games/foo/main.lua"
       const std::string appDir = target.substr(0, target.rfind('/'));
       if (appDir != currentAppDir) {  // entering a new app: close the previous marker, open this one
         if (!currentAppDir.empty()) Storage.remove((currentAppDir + "/" + PluginLocations::INSTALL_MARKER).c_str());
@@ -3036,16 +3040,16 @@ class LuaAppActivity::Backend final : public crosslua::Backend {
   MappedInputManager& in_;
   bool net_ = false;
   bool lib_ = false;
-  bool listenReq_ = false;   // manifest asked for "listen" (effective only after approval)
-  bool audioReq_ = false;    // manifest asked for "audio" (effective only after approval)
-  bool micReq_ = false;      // manifest asked for "microphone" (effective only after approval)
-  bool hotspotReq_ = false;  // manifest asked for "hotspot" (effective only after approval)
-  bool espnowReq_ = false;   // manifest asked for "espnow" (effective only after approval)
-  bool monitorReq_ = false;  // manifest asked for "monitor" (effective only after approval)
-  bool txReq_ = false;       // manifest asked for "tx" (effective only after approval)
-  bool bleReq_ = false;      // manifest asked for "bluetooth" (effective only after approval)
+  bool listenReq_ = false;         // manifest asked for "listen" (effective only after approval)
+  bool audioReq_ = false;          // manifest asked for "audio" (effective only after approval)
+  bool micReq_ = false;            // manifest asked for "microphone" (effective only after approval)
+  bool hotspotReq_ = false;        // manifest asked for "hotspot" (effective only after approval)
+  bool espnowReq_ = false;         // manifest asked for "espnow" (effective only after approval)
+  bool monitorReq_ = false;        // manifest asked for "monitor" (effective only after approval)
+  bool txReq_ = false;             // manifest asked for "tx" (effective only after approval)
+  bool bleReq_ = false;            // manifest asked for "bluetooth" (effective only after approval)
   bool pluginInstallReq_ = false;  // manifest asked for "plugin_install" (effective only after approval)
-  bool bleFailed_ = false;   // the last connect failed (reason in bleReason_)
+  bool bleFailed_ = false;         // the last connect failed (reason in bleReason_)
   bool bleHasPasskey_ = false;
   uint32_t blePasskey_ = 0;
   char bleReason_[64] = {0};

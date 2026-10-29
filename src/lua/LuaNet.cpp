@@ -520,7 +520,8 @@ static bool parseMacColon(const char* s, uint8_t out[6]) {
   }
   return true;
 }
-// wifi.set_mac("AA:BB:CC:DD:EE:FF" | 6 raw bytes) -> true | nil, err. Rotates the STA MAC (ghost mode). Requires network.
+// wifi.set_mac("AA:BB:CC:DD:EE:FF" | 6 raw bytes) -> true | nil, err. Rotates the STA MAC (ghost mode). Requires
+// network.
 int wifi_set_mac(lua_State* L) {
   if (!allowed(L)) return pushFail(L, DENIED);
   if (lua_type(L, 1) != LUA_TSTRING) return pushFail(L, "mac must be a string (6 bytes or \"AA:BB:CC:DD:EE:FF\")");
@@ -557,9 +558,9 @@ int wifi_get_mac(lua_State* L) {
 
 void registerNet(lua_State* L, Ctx* c) {
   static const luaL_Reg wifiFns[] = {
-      {"connect", wifi_connect}, {"status", wifi_status},           {"off", wifi_off}, {"scan", wifi_scan},
-      {"softap", wifi_softap},   {"softap_info", wifi_softap_info}, {"set_mac", wifi_set_mac},
-      {"get_mac", wifi_get_mac}, {nullptr, nullptr}};
+      {"connect", wifi_connect}, {"status", wifi_status},   {"off", wifi_off},
+      {"scan", wifi_scan},       {"softap", wifi_softap},   {"softap_info", wifi_softap_info},
+      {"set_mac", wifi_set_mac}, {"get_mac", wifi_get_mac}, {nullptr, nullptr}};
   regTable(L, c, "wifi", wifiFns);
   registerWifiMonitor(L, c);  // wifi.monitor_* joins the same lazy table
   registerWifiTx(L, c);       // wifi.tx_* too
