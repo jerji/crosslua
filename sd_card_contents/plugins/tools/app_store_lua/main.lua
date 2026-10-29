@@ -57,7 +57,7 @@ local function main()
 
   gfx.clear(); gfx.text(16, 10, "Connecting...", "ui12", "b"); gfx.present("fast")
   collectgarbage()  -- free gfx/font/string temps: the WiFi preflight needs ~80 KB (plain) / 96 KB (TLS)
-  local https = url:sub(1, 8) == "https://"
+  local https = (url == nil) or (url:sub(1, 8) == "https://")  -- derived URLs are always GitHub HTTPS
   local ok, why
   if https then ok, why = wifi.connect() else ok, why = wifi.connect({ tls = false }) end
   if not ok then return fail("WiFi failed: " .. tostring(why)) end
