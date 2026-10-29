@@ -24,6 +24,9 @@ The headline features, all verified on hardware:
 - **Secrets**: `crypto.device_key(label)` gives each app a key bound to the device (derived from the secret upstream keeps in NVS),
   and `vault.lua` turns it plus a PIN into an encrypted file. The bundled **Authenticator** (`totp_lua`) is a TOTP app on top:
   digit-wheel PIN, `otpauth://` import, auto-lock. How it is built and what it does not protect against: [docs/lua/VAULT.md](docs/lua/VAULT.md).
+- **App store**: the bundled **Lua App Store** downloads the apps bundle from this fork's latest release right on the
+  device (WiFi → store → install, no computer needed). If the store app is ever missing, the picker shows
+  **"Get the Lua App Store"** and the firmware re-downloads it from this repository — the store can't be permanently lost.
 - **Safety**: every sensitive API sits behind a manifest permission and a native approval dialog that always shows the full list
   (a recording device is never enabled silently).
 
@@ -33,7 +36,7 @@ The headline features, all verified on hardware:
 
 ## RAM: read this before writing network apps
 
-The device has ~107 KB of free heap and a 32-bit Lua with a per-app budget (~85 KB). RAM is the main constraint, by design:
+The device has ~133 KB of free heap at app launch and a 32-bit Lua with a per-app budget (~92 KB). RAM is the main constraint, by design:
 
 - **Radio modes cost ~55 KB each** (ESP-NOW, monitor); **Bluetooth costs ~52 KB** and is exclusive with every WiFi mode. The hotspot costs ~60 KB. `espnow.start` / `wifi.monitor_start` /
   `wifi.tx_start` / `wifi.softap` refuse below an **80 KB free-heap floor** (48 KB once the radio has already been used in the
@@ -47,6 +50,16 @@ Full API reference: [`docs/lua/API.md`](docs/lua/API.md) · feature status: [`do
 upstream files touched: [`docs/lua/UPSTREAM_TOUCHPOINTS.md`](docs/lua/UPSTREAM_TOUCHPOINTS.md).
 
 ## Install and update CrossLua
+
+The release ships 8 firmware images (one per board) and ONE SD-card zip: `crosslua-apps-<version>.zip` carries every app —
+**~110 Lua apps** across `games` (wordle, sudoku, chess, hearts, minesweeper…), `network` (BLE scanner/beacon/spam, captive
+portal, dead drop, mdns browser…), `wifi` (AP cloner, beacon flood, deauth detector, passive sniffer, signal locator…),
+`security` (TOTP authenticator, password manager, PIN lock, SD encrypt, stego…), `reading` (AO3, xkcd, HN, OPDS, dictionary…),
+`media`, `tools`, and `system` (including the test suites) — unzip it into the root of the SD card.
+
+Two ways to install:
+- **On the device**: connect to WiFi from the Lua App Store and install the bundle directly (Settings → Connectivity → Plugins enabled first).
+- **From a computer**: unzip the zip into the SD card root.
 
 Everything below comes from **this repository's [Releases](https://github.com/jerji/crosslua/releases)**, not upstream's.
 
