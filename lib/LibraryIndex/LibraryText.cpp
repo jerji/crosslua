@@ -3,6 +3,7 @@
 #include <Utf8.h>
 
 #include <algorithm>
+#include <cstddef>  // ptrdiff_t (host GCC needs the explicit header; the ESP-IDF toolchain gets it transitively)
 
 namespace library {
 
