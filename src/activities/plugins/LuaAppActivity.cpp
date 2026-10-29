@@ -245,10 +245,23 @@ static void bleUuidStr(const NimBLEUUID& u, char* out, size_t cap) {
 // script's thread with ble.notifs(). Dropped notifications (a full ring) are counted but not surfaced per-entry.
 class GattNotifier {
  public:
+  // The ring is ~9 KB (BLE_MAX_GATT_NOTIFS x BleGattNotif); only a ble.start("gatt") app can fill it, so the backing
+  // array is allocated on GATT start and freed on bleStop() — every other app never pays for it.
+  bool alloc() {
+    if (ring_) return true;
+    ring_ = static_cast<crosslua::Backend::BleGattNotif*>(
+        calloc(crosslua::Backend::BLE_MAX_GATT_NOTIFS, sizeof(crosslua::Backend::BleGattNotif)));
+    return ring_ != nullptr;
+  }
+  void release() {
+    free(ring_);
+    ring_ = nullptr;
+    head_ = count_ = dropped_ = 0;
+  }
   void push(const char* uuid, const uint8_t* data, size_t len) {
     if (len > 244) len = 244;
     portENTER_CRITICAL(&mux_);
-    if (count_ < crosslua::Backend::BLE_MAX_GATT_NOTIFS) {
+    if (ring_ && count_ < crosslua::Backend::BLE_MAX_GATT_NOTIFS) {
       crosslua::Backend::BleGattNotif& n = ring_[(head_ + count_) % crosslua::Backend::BLE_MAX_GATT_NOTIFS];
       snprintf(n.uuid, sizeof(n.uuid), "%s", uuid);
       n.len = static_cast<uint8_t>(len);
@@ -261,6 +274,10 @@ class GattNotifier {
   }
   int snapshot(crosslua::Backend::BleGattNotif* out, int cap) {
     portENTER_CRITICAL(&mux_);
+    if (!ring_) {
+      portEXIT_CRITICAL(&mux_);
+      return 0;
+    }
     const int n = count_ < cap ? count_ : cap;
     for (int i = 0; i < n; i++) out[i] = ring_[(head_ + i) % crosslua::Backend::BLE_MAX_GATT_NOTIFS];
     head_ = (head_ + n) % crosslua::Backend::BLE_MAX_GATT_NOTIFS;
@@ -278,7 +295,7 @@ class GattNotifier {
 
  private:
   portMUX_TYPE mux_ = portMUX_INITIALIZER_UNLOCKED;
-  crosslua::Backend::BleGattNotif ring_[crosslua::Backend::BLE_MAX_GATT_NOTIFS];
+  crosslua::Backend::BleGattNotif* ring_ = nullptr;
   int head_ = 0, count_ = 0, dropped_ = 0;
 };
 
@@ -631,7 +648,7 @@ class LuaAppActivity::Backend final : public crosslua::Backend {
     uint8_t len;
     uint8_t data[250];
   };
-  EnPacket enRing_[ESPNOW_RING] = {};
+  EnPacket* enRing_ = nullptr;  // allocated on espnowStart, freed on stop: ~1.5 KB for an app that never calls espnow
   std::atomic<uint8_t> enHead_{0}, enTail_{0};  // head: consumer (Lua poll) owns; tail: producer (callback) owns
   std::atomic<int> enDropped_{0};
   bool espnowUp_ = false;
@@ -640,7 +657,7 @@ class LuaAppActivity::Backend final : public crosslua::Backend {
   inline static Backend* espnowSelf_ = nullptr;
   static void onEspNowRecv(const esp_now_recv_info_t* info, const uint8_t* data, int len) {
     Backend* b = espnowSelf_;
-    if (!b || !info || !data || len <= 0 || len > 250) return;
+    if (!b || !b->enRing_ || !info || !data || len <= 0 || len > 250) return;
     const uint8_t tail = b->enTail_.load(std::memory_order_relaxed);
     const uint8_t next = static_cast<uint8_t>((tail + 1) % ESPNOW_RING);
     if (next == b->enHead_.load(std::memory_order_acquire)) {
@@ -673,6 +690,10 @@ class LuaAppActivity::Backend final : public crosslua::Backend {
     }
     if (esp_wifi_set_channel(static_cast<uint8_t>(channel), WIFI_SECOND_CHAN_NONE) != ESP_OK)
       return fail("could not set the channel");
+    if (!enRing_) {
+      enRing_ = static_cast<EnPacket*>(malloc(sizeof(EnPacket) * ESPNOW_RING));
+      if (!enRing_) return fail("not enough memory for ESP-NOW");
+    }
     if (esp_now_init() != ESP_OK) return fail("esp_now_init failed");
     espnowUp_ = true;
     enHead_.store(0);
@@ -702,6 +723,8 @@ class LuaAppActivity::Backend final : public crosslua::Backend {
       espnowUp_ = false;
     }
     if (espnowSelf_ == this) espnowSelf_ = nullptr;
+    free(enRing_);
+    enRing_ = nullptr;
     if ((WiFi.getMode() & WIFI_MODE_STA) && !wifiConnected()) WiFi.mode(WIFI_OFF);
   }
   bool espnowSend(const uint8_t mac[6], bool broadcast, const void* data, size_t n, char* err, size_t errCap) override {
@@ -726,7 +749,7 @@ class LuaAppActivity::Backend final : public crosslua::Backend {
   }
   int espnowRecv(void* buf, size_t cap, uint8_t mac[6]) override {
     const uint8_t head = enHead_.load(std::memory_order_relaxed);
-    if (head == enTail_.load(std::memory_order_acquire)) return 0;
+    if (head == enTail_.load(std::memory_order_acquire) || !enRing_) return 0;
     const EnPacket& p = enRing_[head];
     const size_t n = std::min<size_t>(p.len, cap);
     memcpy(buf, p.data, n);
@@ -752,7 +775,7 @@ class LuaAppActivity::Backend final : public crosslua::Backend {
     int8_t rssi;
     uint8_t data[250];
   };
-  MonPkt monRing_[MON_RING] = {};
+  MonPkt* monRing_ = nullptr;      // allocated on monitorStart, freed on stop (~2 KB)
   std::atomic<uint8_t> monHead_{0}, monTail_{0};
   std::atomic<int> monCaptured_{0}, monDropped_{0};
   bool monUp_ = false;
@@ -761,12 +784,12 @@ class LuaAppActivity::Backend final : public crosslua::Backend {
   HalFile monFile_;
   char monPath_[160] = {0};
   uint32_t monBytes_ = 0;
-  uint8_t monBuf_[MON_PCAP_BUFFER] = {};
+  uint8_t* monBuf_ = nullptr;      // PCAP staging buffer, allocated with the ring (~2 KB)
   size_t monBufLen_ = 0;
   inline static Backend* monSelf_ = nullptr;
   static void onPromiscuous(void* cbBuf, wifi_promiscuous_pkt_type_t type) {
     Backend* b = monSelf_;
-    if (!b || !cbBuf || (type != WIFI_PKT_MGMT && type != WIFI_PKT_DATA)) return;
+    if (!b || !b->monRing_ || !b->monBuf_ || !cbBuf || (type != WIFI_PKT_MGMT && type != WIFI_PKT_DATA)) return;
     const wifi_promiscuous_pkt_t* pkt = static_cast<const wifi_promiscuous_pkt_t*>(cbBuf);
     const int len = pkt->rx_ctrl.sig_len;
     if (len <= 0) return;
@@ -788,11 +811,11 @@ class LuaAppActivity::Backend final : public crosslua::Backend {
   void pcapAppend(const uint8_t* pkt, size_t len, int rssi) {
     (void)rssi;
     const size_t stored = len < 250 ? len : 250;
-    if (monBufLen_ + 16 + stored > sizeof(monBuf_)) {
+    if (monBufLen_ + 16 + stored > MON_PCAP_BUFFER) {
       if (monBufLen_ && monFile_.write(monBuf_, monBufLen_) == monBufLen_) monBytes_ += monBufLen_;
       monBufLen_ = 0;
     }
-    if (16 + stored > sizeof(monBuf_)) return;  // cannot happen (stored <= 250)
+    if (16 + stored > MON_PCAP_BUFFER) return;  // cannot happen (stored <= 250)
     const int64_t us = esp_timer_get_time();
     uint8_t rec[16];
     const uint32_t sec = static_cast<uint32_t>(us / 1000000), usec = static_cast<uint32_t>(us % 1000000);
@@ -823,6 +846,17 @@ class LuaAppActivity::Backend final : public crosslua::Backend {
     if (esp_wifi_set_channel(static_cast<uint8_t>(channel), WIFI_SECOND_CHAN_NONE) != ESP_OK)
       return fail("could not set the channel");
     radioEverStarted_ = true;
+    if (!monRing_ || !monBuf_) {
+      if (!monRing_) monRing_ = static_cast<MonPkt*>(malloc(sizeof(MonPkt) * MON_RING));
+      if (!monBuf_) monBuf_ = static_cast<uint8_t*>(malloc(MON_PCAP_BUFFER));
+      if (!monRing_ || !monBuf_) {
+        free(monRing_);
+        monRing_ = nullptr;
+        free(monBuf_);
+        monBuf_ = nullptr;
+        return fail("not enough memory for the sniffer");
+      }
+    }
     wifi_promiscuous_filter_t filter = {.filter_mask = WIFI_PROMIS_FILTER_MASK_MGMT | WIFI_PROMIS_FILTER_MASK_DATA};
     if (esp_wifi_set_promiscuous_filter(&filter) != ESP_OK) return fail("could not set the capture filter");
     monHead_.store(0);
@@ -866,6 +900,11 @@ class LuaAppActivity::Backend final : public crosslua::Backend {
       monFile_.close();
     }
     *pcapBytes = monBytes_;
+    free(monRing_);
+    monRing_ = nullptr;
+    free(monBuf_);
+    monBuf_ = nullptr;
+    monBufLen_ = 0;
     if (!txUp_ && !wifiConnected() &&
         !WiFi.softAPIP()) {  // give the radio back entirely (promiscuous leaves it started)
       WiFi.mode(WIFI_OFF);
@@ -873,7 +912,7 @@ class LuaAppActivity::Backend final : public crosslua::Backend {
   }
   int monitorRecv(void* buf, size_t cap, int* rssi, int* channel) override {
     const uint8_t head = monHead_.load(std::memory_order_relaxed);
-    if (head == monTail_.load(std::memory_order_acquire)) return 0;
+    if (head == monTail_.load(std::memory_order_acquire) || !monRing_) return 0;
     const MonPkt& p = monRing_[head];
     const size_t n = std::min<size_t>(p.len, cap);
     memcpy(buf, p.data, n);
@@ -1049,14 +1088,20 @@ class LuaAppActivity::Backend final : public crosslua::Backend {
 #endif
     } else if (gatt) {
 #if FREEINK_CAP_BLE_HID_HOST
+      if (!gattNotifs_.alloc()) {
+        snprintf(err, errCap, "not enough memory for the Bluetooth client");
+        return false;
+      }
       if (!NimBLEDevice::init("CrossLua")) {
         snprintf(err, errCap, "the Bluetooth stack did not start");
+        gattNotifs_.release();
         return false;
       }
       gattClient_ = NimBLEDevice::createClient();
       if (!gattClient_) {
         NimBLEDevice::deinit(true);
         snprintf(err, errCap, "the Bluetooth client did not start");
+        gattNotifs_.release();
         return false;
       }
       gattClient_->setClientCallbacks(&gattLinkCb_, false);
@@ -1097,6 +1142,7 @@ class LuaAppActivity::Backend final : public crosslua::Backend {
       gattNotifs_.clear();
       gattLinkCb_.reset();
       NimBLEDevice::deinit(true);
+      gattNotifs_.release();
 #endif
     } else {
       for (int i = 0; i < 4 && !BleHid.end(1000); i++) {
