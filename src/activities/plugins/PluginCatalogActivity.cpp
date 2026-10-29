@@ -29,6 +29,7 @@
 #include "PluginCatalogPaging.h"
 #include "activities/reader/DictionaryDefinitionActivity.h"  // plain-text README viewer
 #include "activities/settings/PluginHubInstallActivity.h"
+#include "activities/settings/StoreBootstrapActivity.h"
 #include "activities/util/ConfirmationActivity.h"
 #include "activities/util/DetailsActivity.h"
 #include "components/CatalogScreens.h"
@@ -465,6 +466,8 @@ void PluginCatalogActivity::enterPluginPicker() {
   installedPlugins = discoverPlugins();
   pluginHubAvailable = PluginHubInstallActivity::isAvailable();
   showPluginHubInstallRow = !pluginHubAvailable && !SETTINGS.pluginHubPromptHidden;
+  storeAvailable = StoreBootstrapActivity::isAvailable();
+  showStoreInstallRow = !storeAvailable;
   // Discovery just re-read the plugin folders; keep the event subscription
   // table in step so a plugin installed since boot starts receiving events
   // (and a removed one stops) without a restart.
@@ -502,7 +505,7 @@ void PluginCatalogActivity::enterPluginPicker() {
   state = State::PLUGIN_PICKER;
   for (size_t i = 0; i < installedPlugins.size(); ++i) {
     if (installedPlugins[i].name != pickerReturnName) continue;
-    const int prefixRows = (showOpds ? 1 : 0) + (showPluginHubInstallRow ? 1 : 0);
+    const int prefixRows = (showOpds ? 1 : 0) + (showPluginHubInstallRow ? 1 : 0) + (showStoreInstallRow ? 1 : 0);
     moveSelectionTo(prefixRows + static_cast<int>(i));
     break;
   }
@@ -511,7 +514,7 @@ void PluginCatalogActivity::enterPluginPicker() {
 
 void PluginCatalogActivity::confirmUninstallPlugin(const int pickerIndex) {
   if (state != State::PLUGIN_PICKER) return;
-  const int offset = (showOpds ? 1 : 0) + (showPluginHubInstallRow ? 1 : 0);
+  const int offset = (showOpds ? 1 : 0) + (showPluginHubInstallRow ? 1 : 0) + (showStoreInstallRow ? 1 : 0);
   const int pluginIndex = pickerIndex - offset;
   if (pluginIndex < 0 || pluginIndex >= static_cast<int>(installedPlugins.size())) return;
 
@@ -787,7 +790,8 @@ bool PluginCatalogActivity::nextRowVisible() const {
 
 int PluginCatalogActivity::rowCount() const {
   if (state == State::PLUGIN_PICKER)
-    return static_cast<int>(installedPlugins.size()) + (showOpds ? 1 : 0) + (showPluginHubInstallRow ? 1 : 0);
+    return static_cast<int>(installedPlugins.size()) + (showOpds ? 1 : 0) + (showPluginHubInstallRow ? 1 : 0) +
+           (showStoreInstallRow ? 1 : 0);
   if (state == State::LIST_PICKER) return static_cast<int>(manifest.browseLists.size());
   if (state != State::BROWSING) return 0;
   return static_cast<int>(items.size()) + (prevRowVisible() ? 1 : 0) + (nextRowVisible() ? 1 : 0);
@@ -1358,8 +1362,22 @@ void PluginCatalogActivity::activateIndex(const int index) {
       requestUpdate();
       return;
     }
-    const int syntheticHubRows = showPluginHubInstallRow ? 1 : 0;
-    const PluginRef& plugin = installedPlugins[index - pluginStart - syntheticHubRows];
+    const int hubRows = (showPluginHubInstallRow ? 1 : 0);
+    if (showStoreInstallRow && index == pluginStart + hubRows) {
+      auto bootstrap = makeUniqueNoThrow<StoreBootstrapActivity>(renderer, mappedInput);
+      if (!bootstrap) {
+        LOG_ERR("PCAT", "OOM: App Store bootstrap");
+        return;
+      }
+      app.clearTapFlash();  // the row leaves this screen
+      startActivityForResult(std::move(bootstrap), [this](const ActivityResult& result) {
+        (void)result;
+        enterPluginPicker();
+      });
+      return;
+    }
+    const int syntheticRows = hubRows + (showStoreInstallRow ? 1 : 0);
+    const PluginRef& plugin = installedPlugins[index - pluginStart - syntheticRows];
     const auto action = PluginLocations::pickerAction(plugin.deviceKind, !plugin.readmePath.empty());
     if (action == PluginLocations::PickerAction::Readme) {
       // A plain paged text view, not the book reader: viewing instructions must
@@ -1717,6 +1735,8 @@ void PluginCatalogActivity::rebuildRowItems() {
   if (state == State::PLUGIN_PICKER) {
     if (showOpds) addRow(tr(STR_OPDS_BROWSER), tr(STR_OPDS_SERVERS));
     if (showPluginHubInstallRow) addRow(tr(STR_PLUGIN_HUB), tr(STR_PLUGIN_HUB_DESCRIPTION), ">");
+    if (showStoreInstallRow) addRow("Get the App Store", "Downloads the store app; it installs apps from the release",
+                                   ">");
     std::string prevCategory = "\x01";  // impossible sentinel, so the first plugin's category always "starts"
     for (const auto& plugin : installedPlugins) {
       const bool categoryStart = plugin.category != prevCategory;

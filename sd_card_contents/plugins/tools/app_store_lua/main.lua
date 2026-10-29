@@ -7,10 +7,9 @@
 -- immediately in that fresh VM, installs, and exits normally.
 local URL_FILE = "data:url.txt"
 local PENDING = "data:install-pending"
--- The crosslua-apps-<version>.zip asset of the current release. Bump the version on each release, or put the
--- full URL in data:url.txt to override without editing this file.
-local DEFAULT_URL = "https://github.com/jerji/crosslua/releases/download/2.1.0-crosslua.1/crosslua-apps-2.1.0-crosslua.1.zip"
--- Non-release test bundles live on a local server; a data:url.txt override wins anyway.
+-- Same repository the OTA update check uses; the bundle URL is derived from its latest release tag (or overridden by
+-- data:url.txt, e.g. a local test bundle).
+local RELEASE_REPO = "jerji/crosslua"
 
 local W, H
 local fail  -- forward-declared so the phase functions can call it before its definition below
@@ -40,10 +39,10 @@ local function main()
     return
   end
 
-  local url = DEFAULT_URL
+  local url = nil
   local ov = fs.read(URL_FILE)
-  if ov then url = (ov:gsub("%s+$", "")) end
-  local shown = url:match("([^/]+%.zip)") or url
+  if ov and ov:gsub("%s+$", "") ~= "" then url = ov:gsub("%s+$", "") end
+  local shown = url and (url:match("([^/]+%.zip)") or url) or ("latest release (" .. RELEASE_REPO .. ")")
 
   gfx.clear()
   gfx.text(16, 10, "App Store", "ui12", "b")
@@ -65,6 +64,24 @@ local function main()
 
   gfx.clear(); gfx.text(16, 10, "Downloading...", "ui12", "b")
   gfx.text(16, 50, shown:sub(1, 42), "small"); gfx.present("fast")
+  if not url then
+    -- Derive the bundle URL from the release repo's latest tag, the same source the OTA update check uses.
+    gfx.clear(); gfx.text(16, 10, "Looking up the release...", "ui12", "b"); gfx.present("fast")
+    local okr, bodyr = http.request{ url = "https://api.github.com/repos/" .. RELEASE_REPO .. "/releases/latest",
+                                     max_body = 65536 }
+    local tag = nil
+    if okr then
+      local rel = json.decode(bodyr)
+      if rel and rel.tag_name then tag = tostring(rel.tag_name):gsub("^v", "") end
+    end
+    if not tag then
+      return fail("Could not find the latest release: " .. tostring(okr and "bad response" or bodyr))
+    end
+    url = "https://github.com/" .. RELEASE_REPO .. "/releases/download/" .. tag .. "/crosslua-apps-" .. tag .. ".zip"
+    shown = url:match("([^/]+%.zip)") or url
+    gfx.clear(); gfx.text(16, 10, "Downloading...", "ui12", "b")
+    gfx.text(16, 50, shown:sub(1, 42), "small"); gfx.present("fast")
+  end
   local ok2, err2 = http.request{ url = url, save_to = "data:apps.zip" }
   if not ok2 then return fail("Download failed: " .. tostring(err2)) end
 
