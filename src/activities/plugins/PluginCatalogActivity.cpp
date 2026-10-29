@@ -225,7 +225,10 @@ std::vector<PluginRef> discoverPlugins() {
     const bool lhsHub = lhs.name == "pluginhub";
     const bool rhsHub = rhs.name == "pluginhub";
     if (lhsHub != rhsHub) return lhsHub;
-    // Categorised apps group together; within a category, title then folder name.
+    // Categorised apps lead the list (groups of a category together); uncategorised apps trail at the bottom.
+    const bool lhsCat = !lhs.category.empty();
+    const bool rhsCat = !rhs.category.empty();
+    if (lhsCat != rhsCat) return lhsCat;
     const int catOrder = strcasecmp(lhs.category.c_str(), rhs.category.c_str());
     if (catOrder != 0) return catOrder < 0;
     const int titleOrder = strcasecmp(lhs.title.c_str(), rhs.title.c_str());
@@ -1386,7 +1389,15 @@ void PluginCatalogActivity::activateIndex(const int index) {
         return;
       }
       app.clearTapFlash();
-      pickerReturnName = plugin.name;
+      pickerReturnName = plugin.name;  // copy before the plugin list is released below
+      // The suspended picker would otherwise pin every plugin's name/dir/manifest/category strings for the whole
+      // app session (~40 KB on a full card — the app's own heap budget is computed from what is left). Both vectors
+      // are released together: rowItems' sectionHeading points into installedPlugins' strings. enterPluginPicker()
+      // re-scans and rebuilds both on return, so nothing is lost.
+      installedPlugins.clear();
+      installedPlugins.shrink_to_fit();
+      rowItems.clear();
+      rowItems.shrink_to_fit();
       startActivityForResult(std::move(luaApp), [this](const ActivityResult&) { enterPluginPicker(); });
       return;
     }
