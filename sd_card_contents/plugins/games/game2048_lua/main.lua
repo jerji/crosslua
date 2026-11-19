@@ -1,4 +1,5 @@
 -- 2048 for the X4.  Left/Right/Up/Down = slide (Up/Down are the side buttons).  Confirm = undo.  Back = menu.
+device.input_mode("grid")
 local game = require("game")
 
 local W, H = gfx.size()

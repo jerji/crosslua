@@ -808,6 +808,7 @@ end
 
 local __main
 __main = function()
+  device.input_mode("grid")
   local ok, err = cores.begin()
   if not ok then
     S.entries = {}

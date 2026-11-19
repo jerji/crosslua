@@ -6,6 +6,7 @@
 -- second Confirm on the same point commits it; moving the cursor drops the
 -- aim. A warning appears when the aim is a mistake (fills your own eye,
 -- self-atari). Back opens the pause menu (pass, leave, give up).
+device.input_mode("grid")
 local co = require("goco")
 local brain = require("gobrain")
 local nearby = require("nearby")

@@ -21,6 +21,7 @@
 -- nobody; the AI remembers both discard piles but never sees the deck or
 -- your unrevealed hand.
 
+device.input_mode("grid")
 local game = require("game")
 -- The Navigator and the PLAY NEARBY modules load on first use: a radio session
 -- needs most of the device's Lua heap, so a solo game does not carry them.

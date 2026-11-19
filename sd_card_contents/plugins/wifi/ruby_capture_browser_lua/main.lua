@@ -218,6 +218,7 @@ local function detail(S, i)
 end
 
 local function main()
+  device.input_mode("grid")
   W, H = gfx.size()
   local names = fs.list(SRC)
   if not names then

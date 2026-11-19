@@ -5,6 +5,7 @@
 --
 -- Controls: the arrows move the cursor over the cells, Confirm places a stone
 -- on the cursor (one tap, no second tap), Back opens the pause menu.
+device.input_mode("grid")
 local core = require("hexcore")
 local brain = require("brain")
 local nearby = require("nearby")

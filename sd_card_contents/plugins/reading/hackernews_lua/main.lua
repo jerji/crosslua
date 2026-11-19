@@ -24,6 +24,7 @@
 -- front page, which the C++ keeps in RAM, is cached to data:front.json so
 -- returning from the reader (and relaunching) restores it without the radio.
 
+device.input_mode("grid")
 local hn              -- required inside __main so a load error hits the pcall
 
 local BAND_H = 44

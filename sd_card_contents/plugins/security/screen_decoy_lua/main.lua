@@ -2,6 +2,7 @@
 -- up/left = previous, back = leave. Use it when someone is looking over your shoulder.
 -- The inverted/high-contrast decoy and the duress wipe are in pin_lock_lua (duress PIN).
 
+device.input_mode("grid")
 local PAGES = {
   { "Chapter 4", "", "The train slowed as it came into the valley, and the", "lights of the small station flickered once before the", "platform came into view. Nobody was waiting. She", "stepped down anyway and let the doors close behind her." },
   { "", "She had read the letter three times on the way up", "from the city, and each time the same line caught in her", "throat: the house was hers now, whether she wanted it or not.", "", "The stationmaster nodded at her ticket without looking up." },

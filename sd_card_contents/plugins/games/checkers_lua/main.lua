@@ -9,6 +9,7 @@
 -- taking pieces only), the capsule reads "YOU MUST TAKE", and a rejected
 -- Confirm does not repaint. A piece in hand shows a dot on each landing and
 -- corner marks on every enemy that landing captures.
+device.input_mode("grid")
 local ck = require("checkers")
 local nearby = require("nearby")
 local wire = require("wire")

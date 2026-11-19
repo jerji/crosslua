@@ -10,6 +10,7 @@
 --   GUESS: move onto a tile and Confirm to guess it. Right answer wins; a wrong guess loses. Back cancels.
 -- The bot picks its secret once at the start and never changes it.
 
+device.input_mode("grid")
 local W, H = 0, 0
 local SLOTS = { "hair", "eyes", "mouth" }
 local WORDS = {}

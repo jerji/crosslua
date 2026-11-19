@@ -7,6 +7,7 @@
 -- Controls: up/down/left/right move the letter cursor; confirm presses the letter; the DEL and ENTER keys sit on the
 -- bottom row. Back exits. Today's guesses save to data:wordle.sav and resume on the next start.
 
+device.input_mode("grid")
 local W, H = 0, 0
 local LETTERS = "QWERTYUIOPASDFGHJKLZXCVBNM"
 local ROWS = { "QWERTYUIOP", "ASDFGHJKL", "ZXCVBNM" }

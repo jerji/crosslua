@@ -19,6 +19,7 @@
 -- cannot see your hand by construction. Nearby mode ships the 64-byte state
 -- from core.pack; both devices rebuild the same deck from the seed.
 
+device.input_mode("grid")
 local core = require("core")
 local brain = require("brain")
 local link = require("link")

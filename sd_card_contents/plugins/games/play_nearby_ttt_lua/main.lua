@@ -107,6 +107,7 @@ local function handle(data)
 end
 
 local function main()
+  device.input_mode("grid")
   W, H = gfx.size()
   local ok, mac = espnow.start({ channel = 1 })
   if not ok then error("espnow: " .. tostring(mac)) end

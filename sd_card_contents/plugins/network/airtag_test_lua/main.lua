@@ -6,6 +6,7 @@
 -- Mode "rotate" replaces the key every ROTATE_MS while advertising (Apple's cadence is ~15 min); "fixed" keeps one key.
 -- The advertisement is replaced in place when the key rotates. Back stops the radio and exits.
 
+device.input_mode("grid")
 local ROTATE_MS = 15 * 60 * 1000
 local INTERVAL_MS = 2000       -- Find My offline advertisements go out about every 2 s
 local TICK_MS = 1000           -- input.wait timeout, so rotation timing runs while idle

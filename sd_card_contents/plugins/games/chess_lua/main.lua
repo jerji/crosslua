@@ -13,6 +13,7 @@
 -- playable Lua games navigate with a cursor, so the board plays with a cursor
 -- and Confirm, and the gear (settings) is the square above the top rank.
 
+device.input_mode("grid")
 local chess = require("chess")
 local engine = require("engine")
 local link = require("link")

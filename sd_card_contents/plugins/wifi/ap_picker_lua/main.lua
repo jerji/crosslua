@@ -151,6 +151,7 @@ local function draw()
 end
 
 local function main()
+  device.input_mode("grid")
   load_saved()
   scan()
   draw()

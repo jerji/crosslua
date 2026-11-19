@@ -2,6 +2,7 @@
 -- Underhand: summon the seven gods. A port of the crossplay game (rules and
 -- card text used with Spoopy Squad's permission; screens are new, text-only,
 -- button-driven for the X4's seven buttons).
+device.input_mode("grid")
 local engine = require("engine")
 local rngmod = require("rng")
 local data = require("data")

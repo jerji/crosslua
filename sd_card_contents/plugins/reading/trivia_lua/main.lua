@@ -31,6 +31,7 @@
 --     lists. The clue is set in sans18 (the reading serif does not exist in
 --     the Lua font set) and wrapped by width.
 
+device.input_mode("grid")
 local function __main()
   local W, H = gfx.size()
   local M, ASIDE_W, ASIDE_GAP, CHROME_H, FOOTER_H = 16, 132, 12, 44, 62

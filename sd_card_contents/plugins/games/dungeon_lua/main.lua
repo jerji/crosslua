@@ -23,6 +23,7 @@
 -- data:dungeon_progress.txt, the Lua stand-in for the C++ NVS save. No
 -- permissions: nothing here touches the radio, and app:/data: need none.
 
+device.input_mode("grid")
 local bank = require("bank")
 
 local W, H = 0, 0

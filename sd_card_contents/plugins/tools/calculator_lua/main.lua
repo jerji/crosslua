@@ -1,5 +1,6 @@
 -- Calculator (no radio, no storage). Pad: 5 columns x 4 rows of keys. Arrows move the cursor (it wraps), Confirm presses.
 -- Back exits. Arithmetic: dec.lua (exact decimal). Key rules: calc.lua (crossplay docs/apps/calculator.md).
+device.input_mode("grid")
 local C = require("calc")
 
 local W, H = 0, 0

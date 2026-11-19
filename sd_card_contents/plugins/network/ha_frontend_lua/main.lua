@@ -4,6 +4,7 @@
 -- Homelab mode: http and https are both allowed. https is only verified if HomeAssistant/ca.pem is on the card; the
 -- screen shows a warning when it is not.
 -- Entity lists come from the template endpoint, so the device reads only the short list it is showing.
+device.input_mode("grid")
 local vault = require("vault")
 local ha = require("ha")
 local PATH = "data:ha.vault"

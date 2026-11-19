@@ -6,6 +6,7 @@
 -- Back returns to the tier menu, Back again exits. Cases are not saved in v1.
 -- Tiers: ELEMENTARY (3x3), NOSY (4x4). HARD BOILED and IMPOSSIBLE are not in this build (see the crossplay doc, section 1).
 
+device.input_mode("grid")
 local core = require("core")
 
 local W, H = 0, 0

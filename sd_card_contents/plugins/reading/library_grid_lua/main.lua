@@ -3,6 +3,7 @@
 --   empty square = new (no progress saved), half-filled = reading,
 --   filled square = finished (>= 99%). Confirm opens the book at its saved place.
 
+device.input_mode("grid")
 local TITLE_H = 44
 local COLS, ROWS = 3, 4
 local PER = COLS * ROWS

@@ -8,6 +8,7 @@
 -- than the guess. Scoring: exact 5, one off 3, two off 1, nothing beyond. A correct end-call adds 1.
 -- Round one is practice and does not score. Back exits. The "pick one of two spectra" step is not in this build.
 
+device.input_mode("grid")
 local W, H = 0, 0
 local SLOTS = 20
 local PEEK_MS = 4000

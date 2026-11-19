@@ -24,6 +24,7 @@
 --           left/right prev/next comic, confirm = reader menu
 --           (WHOLE COMIC / PAGE VIEW toggle, ALT TEXT), back to menu
 
+device.input_mode("grid")
 local core = require("xkcd_core")
 
 local BASE = "sd:Xkcd"

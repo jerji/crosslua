@@ -16,6 +16,7 @@ local function covers(dir)
 end
 
 local function main()
+  device.input_mode("grid")
   local W, H = gfx.size()
   local list = covers(ROOT)
   local cur, page_top = 1, 1

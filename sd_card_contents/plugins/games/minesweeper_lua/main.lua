@@ -20,6 +20,7 @@
 -- The armed tool is shown in the strip right under the grid, beside the
 -- counter — at the action, not six hundred pixels away.
 
+device.input_mode("grid")
 local game = require("game")
 
 local W, H = gfx.size()

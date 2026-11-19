@@ -147,6 +147,7 @@ local function save()
 end
 
 local function main()
+  device.input_mode("grid")
   W, H = gfx.size()
   for r = 1, ROWS do grid[r] = {}; for c = 1, COLS do grid[r][c] = { sum = 0, n = 0 } end end
   target = pick_ap()

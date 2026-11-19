@@ -5,6 +5,7 @@
 -- Push + fetch only: there is no binding to write a position back into the
 -- firmware yet, so a remote position is shown, never applied.
 
+device.input_mode("grid")
 local W, H = gfx.size()
 local CFG = "data:kosync.txt"   -- line 1: server URL, line 2: username
 local PW = "data:kosync.pw"     -- 12-byte nonce .. AES-GCM sealed password

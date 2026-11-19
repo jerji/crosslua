@@ -1,4 +1,5 @@
 -- Counter: Confirm = +1, Left = -1, Right = +10, Up = reset. Back = quit. State survives power-off.
+device.input_mode("grid")
 local store = require("store")
 
 local w, h = gfx.size()

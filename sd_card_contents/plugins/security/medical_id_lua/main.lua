@@ -62,6 +62,7 @@ local function open_pin()
 end
 
 local function main()
+  device.input_mode("grid")
   W, H = gfx.size()
   v = open_pin()
   if not v then return end

@@ -7,6 +7,7 @@
 -- the card (save_to) and filtered line by line before xml.parse ever sees
 -- them. The list only keeps the current feed; Back re-reads a cached copy.
 
+device.input_mode("grid")
 local opds                     -- required inside __main so a load error hits the pcall
 
 local DEFAULT_FEEDS = {

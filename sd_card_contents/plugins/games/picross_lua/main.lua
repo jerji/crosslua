@@ -9,6 +9,7 @@
 -- Controls: up/down/left/right move the cursor. The top row is the MODE line: confirm there toggles FILL/MARK.
 -- Confirm on a board cell acts with the current mode. Back returns to the picker; Back in the picker exits.
 
+device.input_mode("grid")
 local W, H = 0, 0
 local BANK_PATH = "sd:Picross/puzzles.txt"
 local MAX_SIZE = 15

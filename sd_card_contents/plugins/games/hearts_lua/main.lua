@@ -24,6 +24,7 @@
 -- every seat's three cards are lifted before any are dealt in, so no hand
 -- ever ends up with fourteen.
 
+device.input_mode("grid")
 local cards = require("cards")
 local hearts = require("hearts")
 local brain = require("brain")

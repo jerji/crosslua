@@ -6,6 +6,7 @@
 -- PLAY NEARBY (crossplay docs/apps/connectfour.md, spec play-nearby §4.3): two
 -- devices on ESP-NOW; the whole board travels as the 46-byte game blob (wire.lua).
 
+device.input_mode("grid")
 local game4 = require("game4")
 local nearby = require("nearby")
 local wire = require("wire")

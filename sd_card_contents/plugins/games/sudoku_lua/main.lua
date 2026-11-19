@@ -4,6 +4,7 @@
 -- goes up a level. Hold-to-pencil has no Lua equivalent, so pencil is a
 -- one-shot gesture: confirm an already-armed pad key, then confirm a cell.
 
+device.input_mode("grid")
 local sudoku
 
 local W, H = gfx.size()

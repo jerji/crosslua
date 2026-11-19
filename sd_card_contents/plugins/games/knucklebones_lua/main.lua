@@ -7,6 +7,7 @@
 -- crossplay's link: the grids travel as the 24-byte blob in wire.lua, spec play-nearby §4.3).
 -- Controls: Left/Right choose column, Confirm rolls the die and drops it, Back leaves.
 
+device.input_mode("grid")
 local nearby = require("nearby")
 local wire = require("wire")
 local GAME_ID = 0x0501

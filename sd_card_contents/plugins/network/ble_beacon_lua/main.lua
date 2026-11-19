@@ -4,6 +4,7 @@
 -- Beacons are non-connectable and transmit only while advertising is on; Back stops them.
 -- Edits while advertising re-advertise immediately (ble.advertise replaces the advertisement).
 
+device.input_mode("grid")
 local UUID_HEX = "E2C56DB5DFFB48D2B060D0F5A71096E0"  -- generic sample UUID, not tied to any vendor
 local UUID = (UUID_HEX:gsub("%x%x", function(h) return string.char(tonumber(h, 16)) end))
 local NAMES = { "BLE-Beacon", "Sensor-01", "Tracker", "Gadget" }

@@ -1,5 +1,6 @@
 -- Study: spaced-repetition flashcards (FSRS-5) for the X4. Decks are tab-separated text files; see deck.lua.
 --   Review:  Confirm = show answer, Confirm = Good.  Back = Again, Left = Hard, Right = Easy.  (Up = Again, Down = Good)
+device.input_mode("grid")
 local sched = require("sched")
 local store = require("store")
 local deck = require("deck")

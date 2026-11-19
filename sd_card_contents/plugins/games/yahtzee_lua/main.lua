@@ -12,6 +12,7 @@
 -- PLAY NEARBY (crossplay docs/apps/yahtzee.md, spec play-nearby §4.3): two devices over
 -- ESP-NOW; the cards and dice travel as the 40-byte game blob (wire.lua).
 
+device.input_mode("grid")
 local nearby = require("nearby")
 local wire = require("wire")
 

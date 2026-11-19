@@ -7,6 +7,7 @@
 -- data:name.txt, Back exits. A saved name is loaded next time.
 -- Names are three word indices, not the crossplay wire format; the wire format is not in this build.
 
+device.input_mode("grid")
 local N_WORDS = 14
 local SLOTS = { "hair", "eyes", "mouth" }
 local WORDS = {}           -- WORDS[slot] = { "BALD", ... }

@@ -219,6 +219,7 @@ end
 
 -- ---------- main ----------
 local function main()
+  device.input_mode("grid")
   refresh()
   while true do
     gfx.clear(); draw_list(); gfx.present()

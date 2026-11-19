@@ -2,6 +2,7 @@
 -- then removes it. Scope is the sandbox: data: only, which is this app's folder. It cannot reach the card.
 -- Not a secure erase on wear-levelled flash: old blocks may survive. It reduces what a casual read reveals.
 
+device.input_mode("grid")
 local function txt(...) return input.text(...) or "" end
 
 local function wipe_file(name)

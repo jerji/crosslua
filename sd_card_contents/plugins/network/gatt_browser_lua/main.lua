@@ -374,6 +374,7 @@ local function labels_for(devs)
 end
 
 local function main()
+  device.input_mode("grid")
   while true do
     if not devs_cache then
       local devs, err = scan()

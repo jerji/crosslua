@@ -169,6 +169,7 @@ local function read_book(path, offset)
 end
 
 local function main()
+  device.input_mode("grid")
   W, H = gfx.size()
   LH = gfx.line_height(FONT) + 4
   TEXT_W = W - 28
