@@ -3,8 +3,10 @@
 -- crossplay's PlayerAvatarArt.h / PlayerAvatar.cpp, converted into faces.bin / faces.idx / words.txt here.
 -- Bit convention (FreeInk Icon): bit 0 = draw black, bit 1 = transparent, rows MSB first.
 --
--- Controls: Up/Down choose the slot, Left/Right change the word (wraps), Confirm saves the name to
--- data:name.txt, Back exits. A saved name is loaded next time.
+-- Controls: Left/Right change the word (wraps). Slot: Up/Down where the board has them, or tap the slot's
+-- row on a touch board (grid mode never emits up/down, so touch is the only slot control on X4 Pro).
+-- Confirm (power button, or a tap outside the rows) saves the name to data:name.txt. Back (or swipe in
+-- from the left edge) exits. A saved name is loaded next time.
 -- Names are three word indices, not the crossplay wire format; the wire format is not in this build.
 
 device.input_mode("grid")
@@ -66,6 +68,18 @@ local function load_name()
   return { tonumber(a) + 1, tonumber(b) + 1, tonumber(c) + 1 }
 end
 
+-- Slot rows as drawn in draw(): row s has its top at ROW_Y0 + (s-1)*ROW_STEP, height ROW_H.
+local ROW_Y0, ROW_STEP, ROW_H = 256, 40, 30
+
+-- which slot row a screen point is on, or nil
+local function slot_at(x, y)
+  for s = 1, #SLOTS do
+    local top = ROW_Y0 + (s - 1) * ROW_STEP
+    if y >= top and y < top + ROW_H then return s end
+  end
+  return nil
+end
+
 local function draw(picks, cur, note)
   gfx.clear(); W, H = gfx.size()
   gfx.rect(0, 0, W, 40, true); gfx.text(14, 10, "Player", "ui12", "bw")
@@ -81,7 +95,7 @@ local function draw(picks, cur, note)
     y = y + 40
   end
   gfx.text(14, H - 60, note or "", "small")
-  gfx.text(14, H - 34, "Up/Down slot, Left/Right word, Confirm = save, Back = exit", "small")
+  gfx.text(14, H - 34, "Tap a row or Up/Down = slot, Left/Right = word, Confirm = save, Back = exit", "small")
   gfx.present()
 end
 
@@ -99,8 +113,15 @@ local ok, err = pcall(function()
     elseif e == "left" then picks[cur] = picks[cur] > 1 and picks[cur] - 1 or N_WORDS; note = ""
     elseif e == "right" then picks[cur] = picks[cur] < N_WORDS and picks[cur] + 1 or 1; note = ""
     elseif e == "confirm" then
-      local ok2 = fs.write(SAVE, string.format("%d\n%d\n%d\n", picks[1] - 1, picks[2] - 1, picks[3] - 1))
-      note = ok2 and "saved" or "could not save"
+      -- a touch tap carries its position (input.pos()); a power-button press has none
+      local px, py = input.pos()
+      local s = px and slot_at(px, py)
+      if s then
+        cur = s; note = ""
+      else
+        local ok2 = fs.write(SAVE, string.format("%d\n%d\n%d\n", picks[1] - 1, picks[2] - 1, picks[3] - 1))
+        note = ok2 and "saved" or "could not save"
+      end
     end
     draw(picks, cur, note)
   end

@@ -153,6 +153,9 @@ std::vector<String> HalStorage::listFiles(const char* path, int maxFiles) {
   HAL_STORAGE_WRAPPED_CALL(listFiles, path, maxFiles);
 }
 
+uint64_t HalStorage::sdTotalBytes() { HAL_STORAGE_WRAPPED_CALL(sdTotalBytes); }
+bool HalStorage::sdUsedBytes(uint64_t& usedBytes) { HAL_STORAGE_WRAPPED_CALL(sdUsedBytes, usedBytes); }
+
 String HalStorage::readFile(const char* path) {
 #ifdef QEMU_SIM
   size_t size = 0;
@@ -357,10 +360,6 @@ bool HalStorage::openFileForRead(const char* moduleName, const std::string& path
   return openFileForRead(moduleName, path.c_str(), file);
 }
 
-bool HalStorage::openFileForRead(const char* moduleName, const String& path, HalFile& file) {
-  return openFileForRead(moduleName, path.c_str(), file);
-}
-
 bool HalStorage::openFileForWrite(const char* moduleName, const char* path, HalFile& file) {
   StorageLock lock;  // ensure thread safety for the duration of this function
 #ifdef QEMU_SIM
@@ -466,6 +465,7 @@ bool HalFile::seek64(uint64_t pos) { HAL_FILE_WRAPPED_CALL(seekSet, pos); }
 bool HalFile::seekCur(int64_t offset) { HAL_FILE_WRAPPED_CALL(seekCur, offset); }
 bool HalFile::seekSet(size_t offset) { HAL_FILE_WRAPPED_CALL(seekSet, offset); }
 bool HalFile::truncate(const uint64_t length) { HAL_FILE_WRAPPED_CALL(truncate, length); }
+<<<<<<< HEAD
 int HalFile::available() const {
 #ifdef QEMU_SIM
   if (qemuvfs::enabled() && impl) return static_cast<int>(impl->vfsSize - impl->vfsPos);

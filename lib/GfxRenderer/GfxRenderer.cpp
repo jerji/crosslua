@@ -338,16 +338,6 @@ void GfxRenderer::prewarmFallbackText(const int fontId, const TextGetter getter,
                         /*loadKernLig=*/false);
 }
 
-void GfxRenderer::prewarmFallbackText(const int fontId, const char* text, const EpdFontFamily::Style style) const {
-  if (text == nullptr || *text == '\0') {
-    return;
-  }
-  const int resolvedFontId = resolveTextFontId(fontId, text, style);
-  if (resolvedFontId != fontId) {
-    ensureSdGlyphsResident(resolvedFontId, text, style, false);
-  }
-}
-
 void GfxRenderer::ensureSdGlyphsResident(const int fontId, const char* text, const EpdFontFamily::Style style,
                                          const bool metadataOnly) const {
   const auto sdIt = sdCardFonts_.find(fontId);
@@ -467,11 +457,9 @@ enum class TextRotation { None, Rotated90CW };
 //
 // drawText() scales the advance width by the same factor so layout reserves exactly
 // the right horizontal space for the scaled glyph.
-static void renderCharScaled(const GfxRenderer& renderer, GfxRenderer::RenderMode renderMode,
-                             const EpdFontFamily& fontFamily, const uint32_t cp, int cursorX, int cursorY,
-                             const bool pixelState, const EpdFontFamily::Style style, const int scaleNum,
-                             const int scaleDen) {
-  if (renderer.grayPlanesAreAbsolute()) renderMode = GfxRenderer::BW;
+static void renderCharScaled(const GfxRenderer& renderer, const EpdFontFamily& fontFamily, const uint32_t cp,
+                             int cursorX, int cursorY, const bool pixelState, const EpdFontFamily::Style style,
+                             const int scaleNum, const int scaleDen) {
   EpdGlyph solidFallback;
   const EpdGlyph* glyph = fontFamily.getGlyphMetrics(cp, solidFallback, style);
   if (!glyph) return;
@@ -757,6 +745,8 @@ void GfxRenderer::drawText(const int fontId, const int x, const int y, const cha
     // font-native position. Fonts without their glyphs — the built-ins — miss
     // the getGlyph lookup and skip them, as before.
     if (utf8IsCombiningMark(cp) || BidiUtils::isTransparentMark(cp)) {
+      // getGlyph falls back to U+FFFD, which would be stamped over the base.
+      if (!font.hasCodepoint(cp, style)) continue;
       const EpdGlyph* combiningGlyph = font.getGlyph(cp, style);
       if (!combiningGlyph) continue;
       const auto anchor = combiningMark::anchorFor(cp);
@@ -803,10 +793,9 @@ void GfxRenderer::drawText(const int fontId, const int x, const int y, const cha
 
     if (isSupSub) {
       // yPos already carries the vertical offset applied by TextBlock::render().
-      renderCharScaled(*this, renderMode, font, cp, lastBaseX, yPos, black, style, 1, 2);
+      renderCharScaled(*this, font, cp, lastBaseX, yPos, black, style, 1, 2);
     } else if (isSmallCap) {
-      renderCharScaled(*this, renderMode, font, cp, lastBaseX, yPos, black, style, SMALL_CAPS_SCALE_NUM,
-                       SMALL_CAPS_SCALE_DEN);
+      renderCharScaled(*this, font, cp, lastBaseX, yPos, black, style, SMALL_CAPS_SCALE_NUM, SMALL_CAPS_SCALE_DEN);
     } else {
       renderCharImpl<TextRotation::None>(*this, renderMode, font, cp, lastBaseX, yPos, black, style);
     }
@@ -1021,21 +1010,6 @@ void GfxRenderer::fillRect(const int x, const int y, const int width, const int 
 // NOTE: Those are in critical path, and need to be templated to avoid runtime checks for every pixel.
 // Any branching must be done outside the loops to avoid performance degradation.
 template <>
-void GfxRenderer::drawPixelDither<Color::Clear>(const int x, const int y) const {
-  // Do nothing
-}
-
-template <>
-void GfxRenderer::drawPixelDither<Color::Black>(const int x, const int y) const {
-  drawPixel(x, y, true);
-}
-
-template <>
-void GfxRenderer::drawPixelDither<Color::White>(const int x, const int y) const {
-  drawPixel(x, y, false);
-}
-
-template <>
 void GfxRenderer::drawPixelDither<Color::LightGray>(const int x, const int y) const {
   drawPixel(x, y, x % 2 == 0 && y % 2 == 0);
 }
@@ -1045,7 +1019,9 @@ void GfxRenderer::drawPixelDither<Color::DarkGray>(const int x, const int y) con
   drawPixel(x, y, (x + y) % 2 == 0);  // TODO: maybe find a better pattern?
 }
 
-void GfxRenderer::fillRectDither(const int x, const int y, const int width, const int height, Color color) const {
+void GfxRenderer::fillRectDither(const int x, const int y, const int width, const int height, Color color,
+                                 const DitherMode mode) const {
+  if (mode == DitherMode::PreserveInk && color == Color::White) return;
 #ifdef CROSSLUA_DEV
   devcapture::rect(x, y, width, height, color);
 #endif
@@ -1059,16 +1035,17 @@ void GfxRenderer::fillRectDither(const int x, const int y, const int width, cons
       fillRectImpl<Color::White>(x, y, width, height);
       break;
     case Color::LightGray:
-      fillRectImpl<Color::LightGray>(x, y, width, height);
+      fillRectImpl<Color::LightGray>(x, y, width, height, mode);
       break;
     case Color::DarkGray:
-      fillRectImpl<Color::DarkGray>(x, y, width, height);
+      fillRectImpl<Color::DarkGray>(x, y, width, height, mode);
       break;
   }
 }
 
 template <Color C>
-void GfxRenderer::fillRectImpl(const int x, const int y, const int width, const int height) const {
+void GfxRenderer::fillRectImpl(const int x, const int y, const int width, const int height,
+                               const DitherMode mode) const {
   if constexpr (C == Color::Clear) return;
   if (width <= 0 || height <= 0) return;
   if (fontCacheManager_ && fontCacheManager_->isScanning()) return;
@@ -1212,11 +1189,21 @@ void GfxRenderer::fillRectImpl(const int x, const int y, const int width, const 
       const uint8_t blackMask = blackMasks[py & 1];
       const uint8_t whiteMask = static_cast<uint8_t>(~blackMask);
 
-      // Dither writes BOTH inks (the slow path called drawPixel for every
-      // pixel — setting or clearing — so we must do the same). Inside the
-      // rect mask: write whiteMask (1s where white, 0s where black). Outside
-      // the rect mask: leave the framebuffer untouched.
       uint8_t* row = target + static_cast<int32_t>(py - originY) * panelStride;
+      switch (mode) {
+        case DitherMode::PreserveInk:
+          for (int byte = byteStart; byte <= byteEnd; ++byte) {
+            uint8_t mask = blackMask;
+            if (byte == byteStart) mask &= headMask;
+            if (byte == byteEnd) mask &= tailMask;
+            row[byte] &= static_cast<uint8_t>(~mask);
+          }
+          continue;
+        case DitherMode::Replace:
+          break;
+      }
+
+      // Replace writes both inks inside the rectangle and leaves other pixels untouched.
       if (byteStart == byteEnd) {
         const uint8_t rectMask = headMask & tailMask;
         row[byteStart] = static_cast<uint8_t>((row[byteStart] & ~rectMask) | (rectMask & whiteMask));
@@ -1232,10 +1219,10 @@ void GfxRenderer::fillRectImpl(const int x, const int y, const int width, const 
   }
 }
 
-template void GfxRenderer::fillRectImpl<Color::Black>(int, int, int, int) const;
-template void GfxRenderer::fillRectImpl<Color::White>(int, int, int, int) const;
-template void GfxRenderer::fillRectImpl<Color::LightGray>(int, int, int, int) const;
-template void GfxRenderer::fillRectImpl<Color::DarkGray>(int, int, int, int) const;
+template void GfxRenderer::fillRectImpl<Color::Black>(int, int, int, int, DitherMode) const;
+template void GfxRenderer::fillRectImpl<Color::White>(int, int, int, int, DitherMode) const;
+template void GfxRenderer::fillRectImpl<Color::LightGray>(int, int, int, int, DitherMode) const;
+template void GfxRenderer::fillRectImpl<Color::DarkGray>(int, int, int, int, DitherMode) const;
 
 void GfxRenderer::maskRoundedRectOutsideCorners(const int x, const int y, const int width, const int height,
                                                 const int radius, const Color color) const {
@@ -1393,16 +1380,17 @@ void GfxRenderer::drawImage(const uint8_t bitmap[], const int x, const int y, co
   int rotatedY = 0;
   rotateCoordinates(orientation, x, y, &rotatedX, &rotatedY, panelWidth, panelHeight);
   // Rotate origin corner
+  // The bitmap is unrotated, so use its physical blit dimensions.
   switch (orientation) {
     case Portrait:
-      rotatedY = rotatedY - height;
+      rotatedY -= height - 1;
       break;
     case PortraitInverted:
-      rotatedX = rotatedX - width;
+      rotatedX -= width - 1;
       break;
     case LandscapeClockwise:
-      rotatedY = rotatedY - height;
-      rotatedX = rotatedX - width;
+      rotatedY -= height - 1;
+      rotatedX -= width - 1;
       break;
     case LandscapeCounterClockwise:
       break;
@@ -1491,7 +1479,11 @@ bool GfxRenderer::drawBitmap(const Bitmap& bitmap, const int x, const int y, con
     }
     screenY += y;  // the offset should not be scaled
     if (screenY >= getScreenHeight()) {
-      break;
+      // Top-down: every later row is lower still. Bottom-up: later rows move up
+      // onto the screen, so consume this one and keep going.
+      if (bitmap.isTopDown()) break;
+      if (bitmap.readNextRow(outputRow, rowBytes) != BmpReaderError::Ok) return false;
+      continue;
     }
 
     if (bitmap.readNextRow(outputRow, rowBytes) != BmpReaderError::Ok) {
@@ -1806,8 +1798,6 @@ HalDisplay::GrayscaleCapabilities GfxRenderer::grayscaleCapabilities(HalDisplay:
   if (fadingFix) caps.asyncBase = false;
   return caps;
 }
-
-bool GfxRenderer::supportsAsyncGrayscaleBase() const { return grayscaleCapabilities().asyncBase; }
 
 size_t GfxRenderer::readFramebufferRegion(int x, int y, int w, int h, uint8_t* dst, size_t dstCapacity) const {
   if (dst == nullptr || w <= 0 || h <= 0) return 0;
@@ -2386,6 +2376,8 @@ void GfxRenderer::drawTextRotated90CW(const int fontId, const int x, const int y
     // font-native position. Fonts without their glyphs — the built-ins — miss
     // the getGlyph lookup and skip them, as before.
     if (utf8IsCombiningMark(cp) || BidiUtils::isTransparentMark(cp)) {
+      // getGlyph falls back to U+FFFD, which would be stamped over the base.
+      if (!font.hasCodepoint(cp, style)) continue;
       const EpdGlyph* combiningGlyph = font.getGlyph(cp, style);
       if (!combiningGlyph) continue;
       const auto anchor = combiningMark::anchorFor(cp);
@@ -2441,25 +2433,18 @@ bool GfxRenderer::displayGrayscaleBase(HalDisplay::GrayscaleMode mode, HalDispla
   return true;
 }
 
-void GfxRenderer::preconditionGrayscale() const { display.preconditionGrayscale(); }
-
-void GfxRenderer::preconditionGrayscale(int x, int y, int w, int h) const {
-  if (w <= 0 || h <= 0) return;
-  // Rotate the logical rect's opposite corners to physical panel coords; the
-  // physical bbox stays axis-aligned for all four orientations.
+bool GfxRenderer::displayRetainedGrayscaleOverlay(int x, int y, int width, int height, bool restore) const {
+  if (x < 0 || y < 0 || width <= 0 || height <= 0 || x >= getScreenWidth() || y >= getScreenHeight() ||
+      width > getScreenWidth() - x || height > getScreenHeight() - y)
+    return false;
   int ax, ay, bx, by;
   rotateCoordinates(orientation, x, y, &ax, &ay, panelWidth, panelHeight);
-  rotateCoordinates(orientation, x + w - 1, y + h - 1, &bx, &by, panelWidth, panelHeight);
-  int x0 = ax < bx ? ax : bx, x1 = ax > bx ? ax : bx;
-  int y0 = ay < by ? ay : by, y1 = ay > by ? ay : by;
-  if (x0 < 0) x0 = 0;
-  if (y0 < 0) y0 = 0;
-  if (x1 >= panelWidth) x1 = panelWidth - 1;
-  if (y1 >= panelHeight) y1 = panelHeight - 1;
-  if (x1 < x0 || y1 < y0) return;
-  display.preconditionGrayscale(static_cast<uint16_t>(x0), static_cast<uint16_t>(y0),
-                                static_cast<uint16_t>(x1 - x0 + 1), static_cast<uint16_t>(y1 - y0 + 1));
+  rotateCoordinates(orientation, x + width - 1, y + height - 1, &bx, &by, panelWidth, panelHeight);
+  const int x0 = std::min(ax, bx), y0 = std::min(ay, by);
+  return display.displayRetainedGrayscaleOverlay(x0, y0, std::abs(ax - bx) + 1, std::abs(ay - by) + 1, restore);
 }
+
+void GfxRenderer::preconditionGrayscale() const { display.preconditionGrayscale(); }
 
 void GfxRenderer::copyGrayscaleLsbBuffers() const { display.copyGrayscaleLsbBuffers(frameBuffer); }
 
@@ -2482,12 +2467,6 @@ void GfxRenderer::writeGrayscalePlaneStrip(bool lsbPlane, const uint8_t* scratch
   // Guard the uint16_t casts below: a negative would wrap to a huge length.
   assert(yStart >= 0 && numRows > 0 && yStart <= static_cast<int>(panelHeight) - numRows);
   display.writeGrayscalePlaneStrip(lsbPlane, scratch, static_cast<uint16_t>(yStart), static_cast<uint16_t>(numRows));
-}
-
-bool GfxRenderer::supportsStripGrayscale() const { return grayscaleCapabilities().stripUploads; }
-
-bool GfxRenderer::combinesGrayscaleBase() const {
-  return grayscaleCapabilities().base == HalDisplay::GrayscaleBase::Combined;
 }
 
 void GfxRenderer::freeBwBufferChunks() {
