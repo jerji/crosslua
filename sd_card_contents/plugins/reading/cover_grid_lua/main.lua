@@ -16,7 +16,7 @@ local function covers(dir)
 end
 
 local function main()
-  device.input_mode("grid")
+  device.input_mode("nav")   -- nav: physical buttons = up/down = previous/next cover (grid mode has no up/down)
   local W, H = gfx.size()
   local list = covers(ROOT)
   local cur, page_top = 1, 1
@@ -37,7 +37,7 @@ local function main()
         gfx.text(x + 4, y + cell_h - 24, list[i]:sub(1, 16), "small")
       end
     end
-    gfx.text(14, H - 34, "Arrows move, Confirm open, Back exit", "small")
+    gfx.text(14, H - 34, "Prev/Next move, Confirm open, Back exit", "small")
     gfx.present()
   end
   draw()
@@ -46,8 +46,8 @@ local function main()
     if e == "back" then break
     elseif e == "left" then if cur > 1 then cur = cur - 1 end
     elseif e == "right" then if cur < #list then cur = cur + 1 end
-    elseif e == "up" then if cur - COLS >= 1 then cur = cur - COLS end
-    elseif e == "down" then if cur + COLS <= #list then cur = cur + COLS end
+    elseif e == "up" then if cur > 1 then cur = cur - 1 end
+    elseif e == "down" then if cur < #list then cur = cur + 1 end
     elseif e == "confirm" and list[cur] then
       gfx.clear()
       gfx.image("sd:" .. ROOT .. "/" .. list[cur], 0, 0, W, H)
