@@ -169,17 +169,16 @@ def main():
                     else:
                         send_line(s, b"VFS ERR")
                 elif op == "FREAD" and len(parts) >= 3:
-                    hid, n = int(parts[1]), int(parts[2])
-                    h = _handles.get(hid)
-                    if h:
-                        with open(h["path"], "rb") as f:
-                            f.seek(h["pos"])
-                            data = f.read(n)
-                        h["pos"] += len(data)
-                        send_line(s, f"VFS OK {len(data)}".encode())
-                        s.write(data)
-                    else:
-                        send_line(s, b"VFS ERR")
+                                        hid, n = int(parts[1]), int(parts[2])
+                                        h = _handles.get(hid)
+                                        if h:
+                                            with open(h["path"], "rb") as f:
+                                                f.seek(h["pos"])
+                                                data = f.read(n)
+                                            h["pos"] += len(data)
+                                            send_line(s, f"VFS OK {data.hex()}".encode())
+                                        else:
+                                            send_line(s, b"VFS ERR")
                 elif op == "FSEEK" and len(parts) >= 3:
                     h = _handles.get(int(parts[1]))
                     if h:
