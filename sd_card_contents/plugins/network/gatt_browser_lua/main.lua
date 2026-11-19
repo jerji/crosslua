@@ -60,12 +60,12 @@ local function view(title, lines, hint)
     for i = top, math.min(#lines, top + rows - 1) do
       gfx.text(14, 52 + (i - top) * LH, lines[i]:sub(1, 46), "small")
     end
-    footer(hint or "up/down scroll   back = return")
+    footer(hint or "prev/next scroll   back = return")
     gfx.present()
     local e = input.wait()
     if e == "back" or e == "confirm" then return end
-    if e == "down" and top + rows <= #lines then top = top + 1 end
-    if e == "up" and top > 1 then top = top - 1 end
+    if (e == "down" or e == "right") and top + rows <= #lines then top = top + 1 end
+    if (e == "up" or e == "left") and top > 1 then top = top - 1 end
   end
 end
 
@@ -74,6 +74,7 @@ local function message(title, text)
 end
 
 -- Selectable list. Returns "select", index | "right", index | "back", nil.
+-- Grid mode: physical prev/next arrive as left/right; holding next (down_hold) is the secondary action ("right").
 local function menu(title, items, hint, status)
   local cur, top, rows = 1, 1, rows_fit()
   while true do
@@ -93,10 +94,10 @@ local function menu(title, items, hint, status)
     footer(hint)
     gfx.present()
     local e = input.wait()
-    if e == "up" and cur > 1 then cur = cur - 1
-    elseif e == "down" and cur < #items then cur = cur + 1
+    if (e == "up" or e == "left") and cur > 1 then cur = cur - 1
+    elseif (e == "down" or e == "right") and cur < #items then cur = cur + 1
     elseif e == "confirm" and #items > 0 then return "select", cur
-    elseif e == "right" then return "right", cur
+    elseif e == "down_hold" then return "right", cur
     elseif e == "back" then return "back", nil end
     if cur < top then top = cur elseif cur >= top + rows then top = cur - rows + 1 end
   end
@@ -353,7 +354,7 @@ local function browse(dev)
       labels[i] = string.format("%s%-8s %-14s %s", mark, short_uuid(c.uuid), nm:sub(1, 14), props_text(c.props))
     end
     local status = #list == 0 and "no services found" or nil
-    local kind, idx = menu(dev.name or dev.addr, labels, "confirm = actions  right = live  back = disconnect", status)
+    local kind, idx = menu(dev.name or dev.addr, labels, "confirm = actions  hold next = live  back = disconnect", status)
     if kind == "back" then return end
     if kind == "right" then
       live(subs)
@@ -383,7 +384,7 @@ local function main()
     end
     local labels = labels_for(devs_cache)
     local kind, idx = menu("GATT devices (" .. #devs_cache .. ")", labels,
-      "confirm = connect  right = rescan  back = quit")
+      "confirm = connect  hold next = rescan  back = quit")
     if kind == "back" then return end
     if kind == "right" then
       devs_cache = nil
