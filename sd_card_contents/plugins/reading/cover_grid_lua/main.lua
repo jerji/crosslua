@@ -48,13 +48,24 @@ local function main()
     elseif e == "right" then if cur < #list then cur = cur + 1 end
     elseif e == "up" then if cur > 1 then cur = cur - 1 end
     elseif e == "down" then if cur < #list then cur = cur + 1 end
-    elseif e == "confirm" and list[cur] then
-      gfx.clear()
-      gfx.image("sd:" .. ROOT .. "/" .. list[cur], 0, 0, W, H)
-      gfx.text(14, H - 34, "Back = grid", "small")
-      gfx.present()
-      while input.wait() ~= "back" do end
-      draw()
+    elseif e == "confirm" then
+      -- touch tap: open the cell under the finger (input.pos() is nil for button presses -> the highlighted cover)
+      local hit = cur
+      local px, py = input.pos()
+      if px then
+        hit = nil
+        local col, row = (px - 10) // cell_w, (py - 50) // cell_h
+        if px >= 10 and py >= 50 and col < COLS and row < ROWS then hit = page_top + row * COLS + col end
+      end
+      if hit and list[hit] then
+        cur = hit
+        gfx.clear()
+        gfx.image("sd:" .. ROOT .. "/" .. list[cur], 0, 0, W, H)
+        gfx.text(14, H - 34, "Back = grid", "small")
+        gfx.present()
+        while input.wait() ~= "back" do end
+        draw()
+      end
       goto continue
     end
     -- keep the selected cell on the visible page
