@@ -280,13 +280,15 @@ std::vector<PluginRef> discoverPlugins() {
     plugins.push_back(std::move(ref));
   }
   std::sort(plugins.begin(), plugins.end(), [](const PluginRef& lhs, const PluginRef& rhs) {
-    const bool lhsHub = lhs.name == "pluginhub";
-    const bool rhsHub = rhs.name == "pluginhub";
-    if (lhsHub != rhsHub) return lhsHub;
     // Categorised apps lead the list (groups of a category together); uncategorised apps trail at the bottom.
     const bool lhsCat = !lhs.category.empty();
     const bool rhsCat = !rhs.category.empty();
     if (lhsCat != rhsCat) return lhsCat;
+    // Pluginhub comes after categories so it doesn't get caught by the
+    // category-index check in activateIndex when synthetic rows are absent.
+    const bool lhsHub = lhs.name == "pluginhub";
+    const bool rhsHub = rhs.name == "pluginhub";
+    if (lhsHub != rhsHub) return rhsHub;
     const int catOrder = strcasecmp(lhs.category.c_str(), rhs.category.c_str());
     if (catOrder != 0) return catOrder < 0;
     const int titleOrder = strcasecmp(lhs.title.c_str(), rhs.title.c_str());
