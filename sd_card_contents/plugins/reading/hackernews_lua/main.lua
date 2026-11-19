@@ -24,7 +24,7 @@
 -- front page, which the C++ keeps in RAM, is cached to data:front.json so
 -- returning from the reader (and relaunching) restores it without the radio.
 
-device.input_mode("grid")
+device.input_mode("nav")   -- list cursor = up/down; the front/saved shelves flip at the list ends
 local hn              -- required inside __main so a load error hits the pcall
 
 local BAND_H = 44
@@ -276,7 +276,7 @@ local function draw_list()
   local rows_visible = math.max(1, math.floor((H - y0 - FOOT_H - 6) / row_h))
   if #src == 0 then
     draw_empty_state()
-    draw_footer("left/right shelf · confirm " .. (view == "front" and "load" or "") .. " · back exit")
+    draw_footer("up/down past the end: other shelf · confirm " .. (view == "front" and "load" or "") .. " · back exit")
     gfx.present()
     return
   end
@@ -301,7 +301,7 @@ local function draw_list()
       gfx.text(16, yy + 2, tostring(item.comments) .. " comments", FONT_SMALL, ty)
     end
   end
-  draw_footer("left/right shelf · up/down move · confirm open · back exit")
+  draw_footer("up/down move, past the end: other shelf · confirm open · back exit")
   gfx.present()
 end
 
@@ -594,15 +594,15 @@ local function __main()
           open_story(stories[cursor])
         end
       elseif e == "up" then
-        local rows = view == "saved" and saved or stories
-        if #rows > 0 and cursor > 1 then cursor = cursor - 1; draw_list() end
+        -- top of a shelf flips to the other shelf's last row (one continuous list)
+        if cursor > 1 then cursor = cursor - 1; draw_list()
+        elseif view == "front" and #saved > 0 then view = "saved"; cursor = #saved; draw_list()
+        elseif view == "saved" and #stories > 0 then view = "front"; cursor = #stories; draw_list() end
       elseif e == "down" then
         local rows = view == "saved" and saved or stories
-        if #rows > 0 and cursor < #rows then cursor = cursor + 1; draw_list() end
-      elseif e == "left" then
-        if view ~= "saved" then view = "saved"; cursor = 1; draw_list() end
-      elseif e == "right" then
-        if view ~= "front" then view = "front"; cursor = 1; draw_list() end
+        if #rows > 0 and cursor < #rows then cursor = cursor + 1; draw_list()
+        elseif view == "front" and #saved > 0 then view = "saved"; cursor = 1; draw_list()
+        elseif view == "saved" and #stories > 0 then view = "front"; cursor = 1; draw_list() end
       end
     elseif phase == "reader" then
       if e == "back" then
