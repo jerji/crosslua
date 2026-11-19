@@ -870,10 +870,10 @@ local function __main()
     if S then ev = input.wait(100) else ev = input.wait() end
     ev = ev or "none"
     if screen == "menu" then
-      if ev == "up" then
+      if ev == "up" or ev == "left" then
         menuSel = (menuSel - 2) % 3 + 1
         drawMenu()
-      elseif ev == "down" then
+      elseif ev == "down" or ev == "right" then
         menuSel = menuSel % 3 + 1
         drawMenu()
       elseif ev == "confirm" then
@@ -893,10 +893,10 @@ local function __main()
         return
       end
     elseif screen == "howto" then
-      if ev == "up" then
+      if ev == "up" or ev == "left" then
         howtoPage = howtoPage == 1 and 4 or howtoPage - 1
         drawHowTo()
-      elseif ev == "down" then
+      elseif ev == "down" or ev == "right" then
         howtoPage = howtoPage % 4 + 1
         drawHowTo()
       elseif ev == "confirm" or ev == "back" then

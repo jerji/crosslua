@@ -186,8 +186,8 @@ local function menu()
     gfx.present()
     local ev = input.wait()
     if ev == "back" then return nil end
-    if ev == "up" then sel = (sel - 1) % #rows
-    elseif ev == "down" then sel = (sel + 1) % #rows
+    if ev == "up" or ev == "left" then sel = (sel - 1) % #rows
+    elseif ev == "down" or ev == "right" then sel = (sel + 1) % #rows
     elseif ev == "confirm" then return ({ "play", "nearby", "howto" })[sel + 1] end
   end
 end

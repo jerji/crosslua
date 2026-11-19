@@ -612,9 +612,9 @@ local function handleHowTo(ev)
 end
 
 local function handleResult(ev)
-  if ev == "up" then
+  if ev == "up" or ev == "left" then
     resultSel = 1
-  elseif ev == "down" then
+  elseif ev == "down" or ev == "right" then
     resultSel = 2
   elseif ev == "confirm" then
     if resultSel == 1 then

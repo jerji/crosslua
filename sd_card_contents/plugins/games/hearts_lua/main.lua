@@ -750,10 +750,10 @@ end
 
 local function routeMenu(ev)
   local items = menuItems()
-  if ev == "up" then
+  if ev == "up" or ev == "left" then
     menu_sel = ((menu_sel - 2) % #items) + 1
     drawMenu()
-  elseif ev == "down" then
+  elseif ev == "down" or ev == "right" then
     menu_sel = (menu_sel % #items) + 1
     drawMenu()
   elseif ev == "confirm" then

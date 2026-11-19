@@ -241,8 +241,8 @@ local ok, err = pcall(function()
   while true do
     local e = input.wait()
     if e == "back" then break
-    elseif e == "up" and #list > 0 then sel = sel > 1 and sel - 1 or #list
-    elseif e == "down" and #list > 0 then sel = sel < #list and sel + 1 or 1
+    elseif (e == "up" or e == "left") and #list > 0 then sel = sel > 1 and sel - 1 or #list
+    elseif (e == "down" or e == "right") and #list > 0 then sel = sel < #list and sel + 1 or 1
     elseif e == "confirm" and #list > 0 then play(list[sel])
     end
     draw_picker(list, sel, "")

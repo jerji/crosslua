@@ -886,9 +886,9 @@ local function menu_loop()
       return
     end
     local rows = menu_rows()
-    if ev == "up" then
+    if ev == "up" or ev == "left" then
       S.menu = S.menu > 0 and S.menu - 1 or 0
-    elseif ev == "down" then
+    elseif ev == "down" or ev == "right" then
       if S.menu < #rows - 1 then S.menu = S.menu + 1 end
     elseif ev == "confirm" then
       local label = rows[S.menu + 1]

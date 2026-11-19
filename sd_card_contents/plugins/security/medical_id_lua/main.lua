@@ -62,11 +62,13 @@ local function open_pin()
 end
 
 local function main()
-  device.input_mode("grid")
+  -- Nav mode (no device.input_mode("grid")): up/down move the cursor. In grid mode the firmware turns up/down
+  -- into left/right, so the field list could not be reached. The last row opens the card view.
   W, H = gfx.size()
   v = open_pin()
   if not v then return end
   local cur = 1
+  local SHOW = #FIELDS + 1  -- "show card" row
   while true do
     local f = load_fields()
     gfx.clear(); W, H = gfx.size()
@@ -78,18 +80,22 @@ local function main()
       else gfx.text(16, y, label, "small") end
       y = y + LH + 4
     end
-    gfx.text(14, H - 60, "Confirm = edit field, Right = show card", "small")
+    if cur == SHOW then gfx.rect(10, y - 4, W - 20, LH + 4, true); gfx.text(16, y, "> show card", "small", "w")
+    else gfx.text(16, y, "> show card", "small") end
+    gfx.text(14, H - 60, "Up/Down = move, Confirm = edit field or show card", "small")
     gfx.text(14, H - 34, "Back = lock and exit", "small")
     gfx.present()
     local e = input.wait()
-    if e == "up" then cur = cur > 1 and cur - 1 or #FIELDS
-    elseif e == "down" then cur = cur < #FIELDS and cur + 1 or 1
-    elseif e == "right" then card(f)
+    if e == "up" then cur = cur > 1 and cur - 1 or SHOW
+    elseif e == "down" then cur = cur < SHOW and cur + 1 or 1
     elseif e == "back" then break
     elseif e == "confirm" then
-      local k = FIELDS[cur]
-      local val = input.text(k, f[k] or "", 160)
-      if val then f[k] = val; save_fields(f) end
+      if cur == SHOW then card(f)
+      else
+        local k = FIELDS[cur]
+        local val = input.text(k, f[k] or "", 160)
+        if val then f[k] = val; save_fields(f) end
+      end
     end
   end
   v:lock()

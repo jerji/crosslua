@@ -716,8 +716,8 @@ end
 local function settingsEvent(ev, sel, fromMenu)
   local rows = settingRows(fromMenu)
   local closeIdx = #rows
-  if ev == "up" then return nil, (sel + #rows) % (#rows + 1)
-  elseif ev == "down" then return nil, (sel + 1) % (#rows + 1)
+  if ev == "up" or ev == "left" then return nil, (sel + #rows) % (#rows + 1)
+  elseif ev == "down" or ev == "right" then return nil, (sel + 1) % (#rows + 1)
   elseif ev == "back" then return "close", sel
   elseif ev == "confirm" then
     if sel == closeIdx then return "close", sel end
@@ -778,8 +778,8 @@ local function menuScreen()
     drawMenu(sel)
     local ev = input.wait()
     if ev == "back" then return "exit" end
-    if ev == "up" then sel = (sel - 1 + #menuRows()) % #menuRows()
-    elseif ev == "down" then sel = (sel + 1) % #menuRows()
+    if ev == "up" or ev == "left" then sel = (sel - 1 + #menuRows()) % #menuRows()
+    elseif ev == "down" or ev == "right" then sel = (sel + 1) % #menuRows()
     elseif ev == "confirm" then
       local row = menuRows()[sel + 1]
       if row == "CONTINUE" then return "board" end

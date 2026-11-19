@@ -868,10 +868,10 @@ local function routeMenu(ev)
 end
 
 local function routeCall(ev)
-  if ev == "up" then
+  if ev == "up" or ev == "left" then
     call_sel = call_sel == 1 and 2 or 1
     drawCall()
-  elseif ev == "down" then
+  elseif ev == "down" or ev == "right" then
     call_sel = call_sel == 1 and 2 or 1
     drawCall()
   elseif ev == "confirm" then
@@ -888,10 +888,10 @@ local function routeRoundOver(ev)
     return
   end
   local over = g.phase == game.PHASE.GAMEOVER
-  if ev == "up" then
+  if ev == "up" or ev == "left" then
     ro_sel = over and (((ro_sel - 2) % 2) + 1) or (((ro_sel - 2) % 2) + 1)
     drawRoundOver()
-  elseif ev == "down" then
+  elseif ev == "down" or ev == "right" then
     ro_sel = (ro_sel % 2) + 1
     drawRoundOver()
   elseif ev == "confirm" then
@@ -1047,7 +1047,7 @@ local function linkRoute(ev)
   elseif screen == "roundover" then
     if ev == "back" then
       leaveLink()
-    elseif ev == "up" or ev == "down" then
+    elseif ev == "up" or ev == "down" or ev == "left" or ev == "right" then
       ro_sel = 3 - ro_sel
       drawRoundOver()
     elseif ev == "confirm" then

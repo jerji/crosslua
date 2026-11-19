@@ -310,7 +310,7 @@ end
 
 local function handleKey(ev)
   if screen == "menu" then
-    if ev == "up" or ev == "down" then
+    if ev == "up" or ev == "down" or ev == "left" or ev == "right" then
       menuSel = menuSel == 1 and 2 or 1
     elseif ev == "confirm" then
       if menuSel == 1 then startCpu() else startLink() end

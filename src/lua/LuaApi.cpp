@@ -999,7 +999,7 @@ void loadTime(lua_State* L, Ctx* c) {
 }
 void loadDevice(lua_State* L, Ctx* c) {
   static const luaL_Reg devFns[] = {
-      {"frontlight", dev_frontlight},   {"caps", dev_caps}, {"haptic", dev_haptic}, {"motion", dev_motion},
+      {"frontlight", dev_frontlight},   {"caps", dev_caps}, {"haptic", dev_haptic},         {"motion", dev_motion},
       {"environment", dev_environment}, {"tone", dev_tone}, {"input_mode", dev_input_mode}, {nullptr, nullptr}};
   regTable(L, c, "device", devFns);
 }
@@ -1131,7 +1131,8 @@ void registerApi(LuaVm& vm, Backend& backend) {
 int dev_input_mode(lua_State* L) {
   const char* mode = luaL_checkstring(L, 1);
   g_inputGridMode = false;
-  if (strcmp(mode, "grid") == 0) g_inputGridMode = true;
+  if (strcmp(mode, "grid") == 0)
+    g_inputGridMode = true;
   else if (strcmp(mode, "nav") != 0)
     return luaL_error(L, "input_mode must be 'nav' or 'grid'");
   return 0;

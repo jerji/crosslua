@@ -36,6 +36,7 @@
 #include "KOReaderCredentialStore.h"
 #include "LcpPassphraseStore.h"
 #include "MappedInputManager.h"
+#include "Memory.h"
 #include "OpdsServerStore.h"
 #include "OpdsTokenStore.h"
 #include "RecentBooksStore.h"
@@ -55,7 +56,6 @@
 #include "util/ScreenshotUtil.h"
 #include "util/SlideSwitch.h"
 #include "util/Timezones.h"
-#include "Memory.h"
 
 #if CROSSPOINT_VECTOR_FONTS
 // Rendering (incl. FreeType TTF rasterization) runs on the Arduino loop task.
@@ -580,15 +580,15 @@ void setup() {
   delay(250);
 #endif
   Serial.begin(921600);
-  #if LOG_SERIAL_HAS_TX_TIMEOUT
-  	logSerial.setTxTimeoutMs(1);  // This is a load-bearing 1. Do not modify.
-  #endif
-  #ifdef QEMU_SIM
-  	// Under QEMU the dev channel rides UART1 (two -serial ptys); Serial (HWCDC)
-  	// is the USB-Serial-JTAG peripheral QEMU does not model.
-  	Serial1.begin(921600);
-  	Serial1.setRxBufferSize(16 * 1024);  // 16 KB RX ring so large FREAD payloads don't overflow
-  #endif
+#if LOG_SERIAL_HAS_TX_TIMEOUT
+  logSerial.setTxTimeoutMs(1);  // This is a load-bearing 1. Do not modify.
+#endif
+#ifdef QEMU_SIM
+  // Under QEMU the dev channel rides UART1 (two -serial ptys); Serial (HWCDC)
+  // is the USB-Serial-JTAG peripheral QEMU does not model.
+  Serial1.begin(921600);
+  Serial1.setRxBufferSize(16 * 1024);  // 16 KB RX ring so large FREAD payloads don't overflow
+#endif
 #endif
 
   HalSystem::begin();
@@ -945,22 +945,29 @@ void pollSerial() {
         }
         dev.printf("BTN_%s:%s\n", ok ? "OK" : "ERR", name.c_str());
       } else if (cmd == "SCREEN") {
-        devcapture::dump(dev, activityManager.currentName(), renderer.getScreenWidth(),
-                         renderer.getScreenHeight());
+        devcapture::dump(dev, activityManager.currentName(), renderer.getScreenWidth(), renderer.getScreenHeight());
       } else if (cmd == "PING") {
         dev.printf("PONG:%lu:%s\n", millis(), activityManager.currentName());
       } else if (cmd.startsWith("OPEN:")) {
         // CMD:OPEN:<name> — jump straight to a named activity (dev/test channel).
         String target = cmd.substring(5);
         target.trim();
-        if (target == "Home") activityManager.goHome();
-        else if (target == "Plugins") activityManager.goToPlugins(false);
-        else if (target == "Library") activityManager.goToLibrary();
-        else if (target == "FileTransfer" || target == "FT") activityManager.goToFileTransfer();
-        else if (target == "FileBrowser") activityManager.goToFileBrowser();
-        else if (target == "Settings") activityManager.goToSettings();
-        else if (target == "Browse" || target == "OPDS") activityManager.goToBrowser();
-        else if (target == "Sleep") activityManager.goToSleep();
+        if (target == "Home")
+          activityManager.goHome();
+        else if (target == "Plugins")
+          activityManager.goToPlugins(false);
+        else if (target == "Library")
+          activityManager.goToLibrary();
+        else if (target == "FileTransfer" || target == "FT")
+          activityManager.goToFileTransfer();
+        else if (target == "FileBrowser")
+          activityManager.goToFileBrowser();
+        else if (target == "Settings")
+          activityManager.goToSettings();
+        else if (target == "Browse" || target == "OPDS")
+          activityManager.goToBrowser();
+        else if (target == "Sleep")
+          activityManager.goToSleep();
         else {
           dev.printf("OPEN_ERR:unknown:%s\n", target.c_str());
           return;
@@ -1090,7 +1097,7 @@ void loop() {
     powerManager.setPowerSaving(false);  // Restore normal CPU frequency on user activity
   }
 
-// Let wake continue as soon as its hold has been verified. The release can
+  // Let wake continue as soon as its hold has been verified. The release can
   // arrive after setup, so consume that one input frame rather than making it
   // a page turn, refresh, or other short power-button action.
   if (wakePowerReleasePending && !gpio.isPressed(HalGPIO::BTN_POWER)) {
@@ -1101,7 +1108,7 @@ void loop() {
     return;
   }
 
-  #ifndef QEMU_SIM
+#ifndef QEMU_SIM
   static bool screenshotButtonsReleased = true;
   static bool screenshotComboActive = false;
   if (gpio.isPressed(HalGPIO::BTN_POWER) && gpio.isPressed(HalGPIO::BTN_DOWN)) {

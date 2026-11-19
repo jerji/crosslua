@@ -1,9 +1,9 @@
 #ifdef QEMU_SIM
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+#include "hal/gpio_ll.h"
 #include "soc/gpio_reg.h"
 #include "soc/gpio_struct.h"
-#include "hal/gpio_ll.h"
 
 // The QEMU C3 model leaves the display BUSY GPIO (pin 6) in an unknown
 // state. The e-ink driver reads it as LOW (busy) and the X4 Pro's

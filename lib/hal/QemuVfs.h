@@ -31,7 +31,7 @@ bool mkdir(const char* path);
 
 // HalFile handles (host-side, seekable).
 int openRead(const char* path, bool* isDirOut = nullptr);  // -1 on failure
-int fileRead(int id, void* out, size_t n);  // bytes read, -1 on error
+int fileRead(int id, void* out, size_t n);                 // bytes read, -1 on error
 bool fileSeek(int id, size_t pos);
 bool fileTell(int id, size_t& pos);
 bool fileSize(int id, size_t& sizeOut);

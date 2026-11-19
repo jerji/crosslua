@@ -218,8 +218,8 @@ local function menu(title, rows, sel, footer)
     if footer then gfx.text(W // 2, H - 92, footer, "ui12", "c") end
     gfx.present()
     local ev = input.wait()
-    if ev == "up" then sel = sel > 1 and sel - 1 or #rows
-    elseif ev == "down" then sel = sel < #rows and sel + 1 or 1
+    if ev == "up" or ev == "left" then sel = sel > 1 and sel - 1 or #rows
+    elseif ev == "down" or ev == "right" then sel = sel < #rows and sel + 1 or 1
     elseif ev == "confirm" then return sel
     elseif ev == "back" then return nil end
   end

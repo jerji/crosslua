@@ -166,8 +166,8 @@ void ActivityManager::loop() {
 
   while (pendingAction != PendingAction::None) {
 #ifdef QEMU_SIM
-    LOG_ERR("ACTSIM", "pending transition: action=%d nextIsReader=%d",
-            static_cast<int>(pendingAction), pendingActivity ? pendingActivity->isReaderActivity() : 0);
+    LOG_ERR("ACTSIM", "pending transition: action=%d nextIsReader=%d", static_cast<int>(pendingAction),
+            pendingActivity ? pendingActivity->isReaderActivity() : 0);
 #endif
     // The page turner's radio gives its heap back before the next screen allocates. Its teardown
     // can span loop passes and runs outside the render lock.

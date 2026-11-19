@@ -1,7 +1,8 @@
 -- totp_lua - an authenticator (RFC 6238 one-time codes) whose secrets live in a PIN-protected vault on the card.
 -- vault.lua: AES-256 + HMAC, key = PIN + this device's secret (crypto.device_key). totp.lua: codes, base32, otpauth:// links.
 -- No permissions: it needs no radio. The clock comes from the system (restored from flash, re-synced whenever WiFi connects).
-device.input_mode("grid")
+-- No device.input_mode("grid"): in grid mode the firmware turns up/down into left/right, which would make the
+-- account list and menus unreachable. PIN entry uses the system keyboard (password mode), see ask_pin.
 local function __main()
 local vault = require("vault")
 local totp = require("totp")
@@ -72,51 +73,9 @@ local function choose(title, items, hint)
   end
 end
 
--- PIN pad: a digit wheel (no keyboard pop-up). up/down spin the current digit, right locks it and moves on, left erases the
--- last one (at the start: type a passphrase instead), confirm submits, back cancels. Returns a string, "keyboard" or nil.
-local WHEEL_MAX = 12
-local function ask_digits(title)
-  local digits, cur, note = {}, 0, nil
-  while true do
-    header(title)
-    local n = #digits
-    T(16, 56, "Spin each digit, then move to the next.", "small")
-    for i = 1, WHEEL_MAX do
-      local x = 20 + (i - 1) * 36
-      if i <= n then T(x + 8, 150, "*", "sans18", true)
-      elseif i == n + 1 then
-        gfx.rect(x - 4, 120, 34, 76, false)
-        T(x + 10, 98, "^", "ui12"); T(x + 4, 140, tostring(cur), "sans18", true); T(x + 10, 198, "v", "ui12")
-      else T(x + 8, 150, "_", "sans18") end
-    end
-    T(16, 250, "up / down    spin the digit", "ui12")
-    T(16, 284, "right        lock it, next digit", "ui12")
-    T(16, 318, "left         erase the last digit", "ui12")
-    T(16, 352, "             (first digit: use a passphrase)", "small")
-    T(16, 392, "confirm      done (" .. vault.MIN_PIN .. "+ digits)", "ui12")
-    T(16, 426, "back         cancel", "ui12")
-    if note then T(16, 480, note, "ui12", true) end
-    gfx.present()
-    local ev = input.wait()
-    note = nil
-    if ev == "up" and n < WHEEL_MAX then cur = (cur + 1) % 10
-    elseif ev == "down" and n < WHEEL_MAX then cur = (cur - 1) % 10
-    elseif ev == "right" and n < WHEEL_MAX then digits[n + 1] = cur; cur = 0
-    elseif ev == "left" then
-      if n == 0 then return "keyboard" end
-      cur = digits[n]; digits[n] = nil
-    elseif ev == "confirm" then
-      local all = {table.unpack(digits)}
-      if n < WHEEL_MAX then all[#all + 1] = cur end
-      if #all < vault.MIN_PIN then note = "At least " .. vault.MIN_PIN .. " digits." else return table.concat(all) end
-    elseif ev == "back" then return nil end
-  end
-end
-
+-- PIN entry: the system keyboard in password mode (touch or buttons, whatever the board offers).
 local function ask_pin(title)
-  local r = ask_digits(title)
-  if r == "keyboard" then return input.text(title .. " (passphrase)", "", vault.MAX_PIN, "password") end
-  return r
+  return input.text(title, "", vault.MAX_PIN, "password")
 end
 
 -- first run: choose a PIN twice, create the vault. Returns the open vault or nil.

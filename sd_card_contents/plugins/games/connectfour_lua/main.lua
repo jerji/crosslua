@@ -426,10 +426,10 @@ end
 -- Returns "exit" when the app should end.
 local function handleKey(ev)
   if screen == "menu" then
-    if ev == "up" then
+    if ev == "up" or ev == "left" then
       menuSel = (menuSel - 2) % 3 + 1
       dirty = true
-    elseif ev == "down" then
+    elseif ev == "down" or ev == "right" then
       menuSel = menuSel % 3 + 1
       dirty = true
     elseif ev == "confirm" then

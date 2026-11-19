@@ -152,8 +152,8 @@ local ok, err = pcall(function()
       else break end
     elseif not done then   -- once the result is shown, only back does anything
       if st.mode == "ask" then
-      if e == "up" then st.qsel = st.qsel > 1 and st.qsel - 1 or #QUESTIONS
-      elseif e == "down" then st.qsel = st.qsel < #QUESTIONS and st.qsel + 1 or 1
+      if e == "up" or e == "left" then st.qsel = st.qsel > 1 and st.qsel - 1 or #QUESTIONS
+      elseif e == "down" or e == "right" then st.qsel = st.qsel < #QUESTIONS and st.qsel + 1 or 1
       elseif e == "confirm" then
         local q = QUESTIONS[st.qsel]
         st.asked = st.asked + 1

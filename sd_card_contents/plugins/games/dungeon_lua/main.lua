@@ -313,6 +313,7 @@ local function draw_board()
   local bw = (W - 2 * m - 10) / 2
   btn(m, yBar, bw, 46, "CLEAR", STATE.bzone == "buttons" and STATE.bb == 1)
   btn(m + bw + 10, yBar, bw, 46, "DUNGEONS", STATE.bzone == "buttons" and STATE.bb == 2)
+  gfx.present()
 end
 
 local function open_dungeon(k, fromResume)
@@ -441,6 +442,7 @@ local function draw_menu()
   gfx.text(12 + 40, ny + (44 - lineh("small")) / 2, p.name, "small", "b")
   btn(W - 12 - 150, ny, 150, 44, "TUTORIAL", STATE.zone == "buttons" and STATE.bzone == 2)
   btn(m, yBar, W - 2 * m, 46, RESUME and "RESUME" or "PLAY", STATE.zone == "buttons" and STATE.bzone == 1)
+  gfx.present()
 end
 
 local function menu_loop()

@@ -148,8 +148,8 @@ class PluginCatalogActivity final : public CatalogActivity {
   bool ignoreHubInstallerBackRelease = false;
   OptionPopup pluginHubPopup;
   bool rootMode = false;
-  std::string pickerReturnName;  // plugin identity to reselect after leaving a catalog
-  std::string pickerCategory;    // "" = all plugins; a folder name = that category's submenu
+  std::string pickerReturnName;        // plugin identity to reselect after leaving a catalog
+  std::string pickerCategory;          // "" = all plugins; a folder name = that category's submenu
   std::string pickerCategoryRowLabel;  // owns the "N apps" subtitle text for category rows
   std::vector<Item> items;
   // Row buffer over items/browseLists plus the synthetic pager rows; rebuilt
@@ -217,10 +217,10 @@ class PluginCatalogActivity final : public CatalogActivity {
   // Picker submenu helpers: categories as submenu rows instead of list headers.
   // pickerCategory == "" shows the top level (category rows + uncategorized
   // plugins); pickerCategory == "<folder>" shows that category's plugins only.
-  int pickerCategoryCount() const;      // distinct non-empty categories present
-  int pickerLeafCount() const;          // plugins shown at the current level
-  std::string pickerCategoryAt(int row) const;   // category name for or "" row
-  int pickerTargetIndex(int pickRow) const;      // installedPlugins index or -1
+  int pickerCategoryCount() const;              // distinct non-empty categories present
+  int pickerLeafCount() const;                  // plugins shown at the current level
+  std::string pickerCategoryAt(int row) const;  // category name for or "" row
+  int pickerTargetIndex(int pickRow) const;     // installedPlugins index or -1
   void enterPickerSubmenu(const std::string& category);
   void render(RenderLock&& lock) override;
   void buildScreen(UiScreen& screen) override;

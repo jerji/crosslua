@@ -11,8 +11,9 @@
 #include <cassert>
 
 #ifdef QEMU_SIM
-#include "QemuVfs.h"
 #include <algorithm>
+
+#include "QemuVfs.h"
 #endif
 
 #define SDCard SDCardManager::getInstance()
@@ -248,11 +249,11 @@ class HalFile::Impl {
   int hostId = -1;
   size_t vfsSize = 0;
   size_t vfsPos = 0;
-  size_t vfsEntryHalf = 0;  // unused dir-iteration slot
-  bool vfsIsDir = false;    // the OPEN response's is-dir flag
-  std::string vfsPath;      // the path this handle was opened for (dir iteration)
-  std::string vfsWritePath; // path for a write handle (openFileForWrite)
-  std::vector<uint8_t> vfsWriteBuf; // buffered write data (flushed on close)
+  size_t vfsEntryHalf = 0;           // unused dir-iteration slot
+  bool vfsIsDir = false;             // the OPEN response's is-dir flag
+  std::string vfsPath;               // the path this handle was opened for (dir iteration)
+  std::string vfsWritePath;          // path for a write handle (openFileForWrite)
+  std::vector<uint8_t> vfsWriteBuf;  // buffered write data (flushed on close)
 #endif
   // SdFat is not thread-safe; FsFile::close() touches SD/SPI and must run
   // under StorageLock or it races SdSpiCard::m_spiActive across tasks and
@@ -514,8 +515,8 @@ size_t HalFile::write(const uint8_t* buf, size_t count) {
 #ifdef QEMU_SIM
   if (qemuvfs::enabled() && impl && !impl->vfsWritePath.empty()) {
     impl->vfsWriteBuf.insert(impl->vfsWriteBuf.end(), buf, buf + count);
-    LOG_ERR("VFS", "write buf: path=%s count=%u total=%u", impl->vfsWritePath.c_str(),
-            static_cast<unsigned>(count), static_cast<unsigned>(impl->vfsWriteBuf.size()));
+    LOG_ERR("VFS", "write buf: path=%s count=%u total=%u", impl->vfsWritePath.c_str(), static_cast<unsigned>(count),
+            static_cast<unsigned>(impl->vfsWriteBuf.size()));
     return count;
   }
 #endif

@@ -446,10 +446,10 @@ local function run()
     local ev = input.wait()
 
     if screen == "menu" then
-      if ev == "up" then
+      if ev == "up" or ev == "left" then
         menu_sel = (menu_sel - 2) % 2 + 1
         drawMenu()
-      elseif ev == "down" then
+      elseif ev == "down" or ev == "right" then
         menu_sel = menu_sel % 2 + 1
         drawMenu()
       elseif ev == "confirm" then
@@ -541,10 +541,10 @@ local function run()
       end
 
     elseif screen == "result" then
-      if ev == "up" then
+      if ev == "up" or ev == "left" then
         result_sel = (result_sel - 2) % 2 + 1
         drawResult()
-      elseif ev == "down" then
+      elseif ev == "down" or ev == "right" then
         result_sel = result_sel % 2 + 1
         drawResult()
       elseif ev == "confirm" then

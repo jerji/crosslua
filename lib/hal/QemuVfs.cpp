@@ -37,8 +37,7 @@ bool readPayload(void* out, size_t n) {
       if (have >= n) return true;
     }
     if (millis() - start > RX_TIMEOUT_MS * 4) {
-      LOG_ERR("VFS", "readPayload timeout: got %u of %u bytes", static_cast<unsigned>(have),
-              static_cast<unsigned>(n));
+      LOG_ERR("VFS", "readPayload timeout: got %u of %u bytes", static_cast<unsigned>(have), static_cast<unsigned>(n));
       return false;
     }
     delay(2);
@@ -52,9 +51,18 @@ bool readPayload(void* out, size_t n) {
 int exchange(const char* op, const char* arg1, const char* arg2, const char* arg3, String& value) {
   String req = "VFS ";
   req += op;
-  if (arg1) { req += " "; req += arg1; }
-  if (arg2) { req += " "; req += arg2; }
-  if (arg3) { req += " "; req += arg3; }
+  if (arg1) {
+    req += " ";
+    req += arg1;
+  }
+  if (arg2) {
+    req += " ";
+    req += arg2;
+  }
+  if (arg3) {
+    req += " ";
+    req += arg3;
+  }
   req += "\n";
 
   // A misaligned bus (a stale line from a previous timed-out exchange) makes
@@ -216,8 +224,8 @@ int fileRead(int id, void* out, size_t n) {
       dst[total + i] = static_cast<uint8_t>(strtol(hexPair.c_str(), nullptr, 16));
     }
     if (decoded != chunk) {
-      LOG_ERR("VFS", "fileRead %d wanted %u got %u hex chars (%u bytes) retrying", id,
-              static_cast<unsigned>(chunk), static_cast<unsigned>(hexLen), static_cast<unsigned>(decoded));
+      LOG_ERR("VFS", "fileRead %d wanted %u got %u hex chars (%u bytes) retrying", id, static_cast<unsigned>(chunk),
+              static_cast<unsigned>(hexLen), static_cast<unsigned>(decoded));
       delay(10);
       continue;
     }

@@ -129,8 +129,8 @@ local ok, err = pcall(function()
     local e = input.wait()
     if e == "back" then break end
     if state.stage == "mode" then
-      if e == "up" then state.mode_sel = 1
-      elseif e == "down" then state.mode_sel = 2
+      if e == "up" or e == "left" then state.mode_sel = 1
+      elseif e == "down" or e == "right" then state.mode_sel = 2
       elseif e == "confirm" then
         state.mode = (state.mode_sel == 2) and "teams" or "coop"
         new_round()

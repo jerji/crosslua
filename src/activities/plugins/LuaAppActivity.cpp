@@ -3350,14 +3350,14 @@ void LuaAppActivity::collectInput() {
   if (mappedInput.wasReleased(B::Confirm)) push("confirm");
   if (crosslua::g_inputGridMode) {
     // Grid mode: physical buttons map to left/right for cursor-based games.
-    if (mappedInput.wasReleased(B::Up))   push("left");
+    if (mappedInput.wasReleased(B::Up)) push("left");
     if (mappedInput.wasReleased(B::Down)) push("right");
   } else {
     // Nav mode: physical buttons map to up/down for list scrolling.
-    if (mappedInput.wasReleased(B::Up))   push("up");
+    if (mappedInput.wasReleased(B::Up)) push("up");
     if (mappedInput.wasReleased(B::Down)) push("down");
   }
-  if (mappedInput.wasReleased(B::Left))  push("left");
+  if (mappedInput.wasReleased(B::Left)) push("left");
   if (mappedInput.wasReleased(B::Right)) push("right");
 #if FREEINK_CAP_TOUCH
   if (mappedInput

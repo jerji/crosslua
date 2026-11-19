@@ -610,7 +610,7 @@ void PluginCatalogActivity::enterPluginPicker() {
   state = State::PLUGIN_PICKER;
   for (size_t i = 0; i < installedPlugins.size(); ++i) {
     if (installedPlugins[i].name != pickerReturnName) continue;
-const int prefixRows = (showOpds ? 1 : 0) + (showPluginHubInstallRow ? 1 : 0) + (showStoreInstallRow ? 1 : 0);
+    const int prefixRows = (showOpds ? 1 : 0) + (showPluginHubInstallRow ? 1 : 0) + (showStoreInstallRow ? 1 : 0);
     const PluginRef& ret = installedPlugins[i];
     if (ret.category.empty()) {
       int leaf = 0;
@@ -636,7 +636,7 @@ const int prefixRows = (showOpds ? 1 : 0) + (showPluginHubInstallRow ? 1 : 0) + 
 void PluginCatalogActivity::confirmUninstallPlugin(const int pickerIndex) {
   if (state != State::PLUGIN_PICKER) return;
   //  PluginCatalogActivity.cpp continued — category submenu resolve
-int pluginIndex;
+  int pluginIndex;
   if (!pickerCategory.empty()) {
     if (pickerIndex < 1) return;  // the ".." back row is not a plugin
     pluginIndex = pickerTargetIndex(pickerIndex - 1);
