@@ -71,8 +71,8 @@ local function draw_editor(p, st, cur, adv, msg)
   end
   gfx.text(14, H - 108, adv and "ADVERTISING (transmitting)" or "stopped", "ui12", "b")
   if msg then gfx.text(14, H - 84, tostring(msg):sub(1, 44), "small") end
-  gfx.text(14, H - 60, "left/right: field  up/down: value", "small")
-  gfx.text(14, H - 42, "hold up/down: +/-10", "small")
+  gfx.text(14, H - 60, "prev/next: value -1/+1", "small")
+  gfx.text(14, H - 42, "hold prev/next: field", "small")
   gfx.text(14, H - 24, "confirm: start/stop   back: menu", "small")
   gfx.present()
 end
@@ -88,11 +88,11 @@ local function editor(p, st)
     draw_editor(p, st, cur, adv, msg)
     local e = input.wait()
     if e == "back" then break
-    elseif e == "left" then cur = (cur > 1) and (cur - 1) or #p.fields
-    elseif e == "right" then cur = (cur % #p.fields) + 1
-    elseif e == "up" or e == "down" or e == "up_hold" or e == "down_hold" then
-      local d = (e:sub(1, 2) == "up") and 1 or -1
-      if e:find("hold", 1, true) then d = d * 10 end
+    elseif e == "up_hold" then cur = (cur > 1) and (cur - 1) or #p.fields   -- hold prev: previous field
+    elseif e == "down_hold" then cur = (cur % #p.fields) + 1                 -- hold next: next field
+    elseif e == "left" or e == "up" or e == "right" or e == "down" then
+      -- Physical prev/next arrive as left/right in grid mode (up/down kept as aliases).
+      local d = (e == "right" or e == "down") and 1 or -1
       change(p.fields[cur], st, d)
       if adv then push() end
     elseif e == "confirm" then
@@ -122,13 +122,13 @@ local function menu()
       gfx.text(18, y, p.label, "ui12", sel and "w" or "")
       y = y + 40
     end
-    gfx.text(14, H - 60, "up/down: choose   confirm: open", "small")
+    gfx.text(14, H - 60, "prev/next: choose   confirm: open", "small")
     gfx.text(14, H - 42, "Back = stop everything and exit", "small")
     gfx.present()
     local e = input.wait()
     if e == "back" then return
-    elseif e == "up" then cur = (cur > 1) and (cur - 1) or #PRESETS
-    elseif e == "down" then cur = (cur % #PRESETS) + 1
+    elseif e == "left" or e == "up" then cur = (cur > 1) and (cur - 1) or #PRESETS
+    elseif e == "right" or e == "down" then cur = (cur % #PRESETS) + 1
     elseif e == "confirm" then editor(PRESETS[cur], states[PRESETS[cur].id]) end
   end
 end
