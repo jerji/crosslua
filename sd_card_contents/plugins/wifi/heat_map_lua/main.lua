@@ -10,6 +10,7 @@ local SAMPLE_MS = 3000
 local ROWS, COLS = 6, 8
 local MAX_APS = 30
 local LH = 22
+local GRID_TOP, GRID_LEFT, CELL_W, CELL_H = 70, 24, 40, 40   -- on-screen grid geometry (also used for taps)
 
 local W, H = 0, 0
 local aps, ap_list = {}, {}
@@ -69,12 +70,17 @@ local function pick_ap()
       else gfx.text(16, y, label, "small") end
       y = y + LH
     end
-    gfx.text(14, H - 34, "Up/Down, Confirm = pick, Back = quit", "small")
+    gfx.text(14, H - 34, "Left/Right, Confirm or tap = pick, Back = quit", "small")
     gfx.present()
     local e = input.poll()
-    if e == "up" then sel = sel > 1 and sel - 1 or math.max(1, #ap_list)
-    elseif e == "down" then sel = sel < #ap_list and sel + 1 or 1
-    elseif e == "confirm" and #ap_list > 0 then return ap_list[sel]
+    -- grid mode (X4 Pro) sends left/right from the physical buttons, so accept both pairs
+    if e == "up" or e == "left" then sel = sel > 1 and sel - 1 or math.max(1, #ap_list)
+    elseif e == "down" or e == "right" then sel = sel < #ap_list and sel + 1 or 1
+    elseif e == "confirm" and #ap_list > 0 then
+      local px, py = input.pos()          -- a touch picks the row it landed on; a button picks the highlight
+      if not px then return ap_list[sel] end
+      local idx = (py - 56) // LH + 1
+      if py >= 56 and idx >= 1 and idx <= #ap_list then return ap_list[idx] end
     elseif e == "back" then return nil end
     app.sleep(20)
   end
@@ -108,25 +114,24 @@ local function draw()
   gfx.clear(); W, H = gfx.size()
   gfx.rect(0, 0, W, 40, true)
   gfx.text(14, 10, "Heat map: " .. clip(target.ssid ~= "" and target.ssid or "<hidden>", 18), "ui12", "bw")
-  local top, left, cw, rh = 70, 24, 40, 40
   for r = 1, ROWS do
     for c = 1, COLS do
-      local x, y = left + (c - 1) * cw, top + (r - 1) * rh
+      local x, y = GRID_LEFT + (c - 1) * CELL_W, GRID_TOP + (r - 1) * CELL_H
       local cell = grid[r][c]
       local avg = cell and cell.n > 0 and (cell.sum / cell.n) or nil
-      gfx.rect(x, y, cw, rh, false)
-      if r == cur_r and c == cur_c then gfx.rect(x + 3, y + 3, cw - 6, rh - 6, false) end
-      gfx.text(x + cw // 2, y + 8, band(avg), "ui12", "c")
+      gfx.rect(x, y, CELL_W, CELL_H, false)
+      if r == cur_r and c == cur_c then gfx.rect(x + 3, y + 3, CELL_W - 6, CELL_H - 6, false) end
+      gfx.text(x + CELL_W // 2, y + 8, band(avg), "ui12", "c")
     end
   end
-  local y = top + ROWS * rh + 14
+  local y = GRID_TOP + ROWS * CELL_H + 14
   local cell = grid[cur_r][cur_c]
   local detail = cell and cell.n > 0 and string.format("cell %d,%d  avg %d dBm  (%d samples)", cur_r, cur_c, cell.sum / cell.n, cell.n)
     or string.format("cell %d,%d  not sampled", cur_r, cur_c)
   gfx.text(14, y, detail, "small")
   gfx.text(14, y + 24, "digits: 9 strongest .. 0 weakest, . = none", "small")
   gfx.text(14, H - 60, status, "small")
-  gfx.text(14, H - 34, "Arrows move, Confirm = sample here, Back = save & exit", "small")
+  gfx.text(14, H - 34, "Left/Right walk the grid, Confirm or tap = sample, Back = save", "small")
   gfx.present()
 end
 
@@ -153,23 +158,44 @@ local function main()
   target = pick_ap()
   if not target then wifi.monitor_stop(); return end
   draw()
+  -- Grid mode on X4 Pro: the two physical buttons send left/right only. Left/right walk the cells in
+  -- reading order (row by row), so every cell is reachable; up/down still move one row when they arrive.
+  local function step(d)
+    local k = math.max(1, math.min(ROWS * COLS, (cur_r - 1) * COLS + cur_c + d))
+    cur_r, cur_c = (k - 1) // COLS + 1, (k - 1) % COLS + 1
+  end
+  -- cell under a touch point, or nil if the touch missed the grid
+  local function cell_at(x, y)
+    local c = (x - GRID_LEFT) // CELL_W + 1
+    local r = (y - GRID_TOP) // CELL_H + 1
+    if x < GRID_LEFT or y < GRID_TOP or c > COLS or r > ROWS then return nil end
+    return r, c
+  end
   while true do
     local e = input.wait()
     if e == "back" then break
+    elseif e == "left" then step(-1)
+    elseif e == "right" then step(1)
     elseif e == "up" then if cur_r > 1 then cur_r = cur_r - 1 end
     elseif e == "down" then if cur_r < ROWS then cur_r = cur_r + 1 end
-    elseif e == "left" then if cur_c > 1 then cur_c = cur_c - 1 end
-    elseif e == "right" then if cur_c < COLS then cur_c = cur_c + 1 end
     elseif e == "confirm" then
-      status = "sampling " .. (SAMPLE_MS // 1000) .. " s..."
-      draw()
-      local sum, n = sample()
-      if n > 0 then
-        local cell = grid[cur_r][cur_c]
-        cell.sum = cell.sum + sum; cell.n = cell.n + n
-        status = string.format("saved %d beacons at %d,%d", n, cur_r, cur_c)
-      else
-        status = "no beacons heard here; move closer or try again"
+      local px, py = input.pos()          -- a tap on a cell moves there first; a tap off the grid does nothing
+      local skip = false
+      if px then
+        local r, c = cell_at(px, py)
+        if r then cur_r, cur_c = r, c else skip = true end
+      end
+      if not skip then
+        status = "sampling " .. (SAMPLE_MS // 1000) .. " s..."
+        draw()
+        local sum, n = sample()
+        if n > 0 then
+          local cell = grid[cur_r][cur_c]
+          cell.sum = cell.sum + sum; cell.n = cell.n + n
+          status = string.format("saved %d beacons at %d,%d", n, cur_r, cur_c)
+        else
+          status = "no beacons heard here; move closer or try again"
+        end
       end
     end
     draw()
