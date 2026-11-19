@@ -5,7 +5,7 @@
 -- Push + fetch only: there is no binding to write a position back into the
 -- firmware yet, so a remote position is shown, never applied.
 
-device.input_mode("grid")
+device.input_mode("nav")   -- list cursor = up/down (grid mode has no vertical axis)
 local W, H = gfx.size()
 local CFG = "data:kosync.txt"   -- line 1: server URL, line 2: username
 local PW = "data:kosync.pw"     -- 12-byte nonce .. AES-GCM sealed password
@@ -77,7 +77,7 @@ local function is_https() return cfg.url:sub(1, 8) == "https://" end
 -- One request to the sync server. Returns the http result, or nil, err.
 local function api(method, path, body)
   local pw = load_secret()
-  if not cfg or not pw then return nil, "not set up (press Right)" end
+  if not cfg or not pw then return nil, "not set up (press Confirm)" end
   local opts = {
     url = cfg.url:gsub("/+$", "") .. path,
     method = method,
@@ -123,7 +123,7 @@ local function draw()
   end
   if not cfg then
     gfx.text(16, 90, "Not set up yet.", "sans16", "b")
-    gfx.text(16, 124, "Press Right to enter the server,", "ui12")
+    gfx.text(16, 124, "Press Confirm to enter the server,", "ui12")
     gfx.text(16, 144, "username and password.", "ui12")
   elseif #books == 0 then
     gfx.text(16, 90, "No books on the shelf yet.", "sans16", "b")
@@ -145,7 +145,7 @@ local function draw()
   end
 
   if msg then gfx.text(14, H - 64, clip(msg, W - 28, "ui12"), "ui12", "b") end
-  gfx.text(14, H - 30, "Confirm: push  Left: fetch  Right: setup  Back: exit", "ui12")
+  gfx.text(14, H - 30, "Up/Down: pick  Confirm: push + fetch  Back: exit", "ui12")
   gfx.present()
 end
 
@@ -189,7 +189,7 @@ local function setup()
 end
 
 local function push(b)
-  if not cfg then msg = "Not set up (press Right)"; return end
+  if not cfg then msg = "Not set up (press Confirm)"; return end
   if not b.pct then msg = "No local progress for this book"; return end
   busy("Uploading...")
   local doc, derr = doc_id(b.path)
@@ -206,7 +206,7 @@ local function push(b)
 end
 
 local function fetch(b)
-  if not cfg then msg = "Not set up (press Right)"; return end
+  if not cfg then msg = "Not set up (press Confirm)"; return end
   busy("Checking server...")
   local doc, derr = doc_id(b.path)
   if not doc then msg = "Could not hash book: " .. tostring(derr); return end
@@ -239,9 +239,12 @@ local function __main()
     if e == "back" then break
     elseif e == "up" and #books > 0 then cur = (cur > 1) and (cur - 1) or #books; msg = nil
     elseif e == "down" and #books > 0 then cur = (cur < #books) and (cur + 1) or 1; msg = nil
-    elseif e == "confirm" and #books > 0 then push(books[cur])
-    elseif e == "left" and #books > 0 then fetch(books[cur])
-    elseif e == "right" then setup()
+    elseif e == "confirm" then
+      if not cfg then setup()
+      elseif #books > 0 then
+        push(books[cur])
+        if books[cur].pct then fetch(books[cur]) end
+      end
     end
     draw()
   end
