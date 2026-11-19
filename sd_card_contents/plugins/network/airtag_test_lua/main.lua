@@ -55,7 +55,7 @@ local function draw(st, msg)
   gfx.text(18, y, "Interval: " .. INTERVAL_MS .. " ms", "ui12"); y = y + 40
   if msg then gfx.text(14, H - 108, tostring(msg):sub(1, 44), "small") end
   gfx.text(14, H - 84, "left/right: mode (stopped)", "small")
-  gfx.text(14, H - 66, "up: new key now", "small")
+  gfx.text(14, H - 66, "hold prev: new key now", "small")
   gfx.text(14, H - 48, "confirm: start/stop", "small")
   gfx.text(14, H - 30, "back: stop and exit", "small")
   gfx.present()
@@ -97,7 +97,7 @@ local function run()
         st.mode = (st.mode == MODES[1]) and MODES[2] or MODES[1]
         dirty = true
       end
-    elseif e == "up" then
+    elseif e == "up_hold" or e == "up" then  -- physical prev is "left" in grid mode; hold it for a new key
       new_key(); st.rotations = st.rotations + 1
       if st.adv then push() end
       dirty = true
