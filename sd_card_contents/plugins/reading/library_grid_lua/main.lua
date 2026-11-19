@@ -3,7 +3,7 @@
 --   empty square = new (no progress saved), half-filled = reading,
 --   filled square = finished (>= 99%). Confirm opens the book at its saved place.
 
-device.input_mode("grid")
+device.input_mode("nav")   -- nav: physical buttons = up/down; cursor moves linearly through the grid
 local TITLE_H = 44
 local COLS, ROWS = 3, 4
 local PER = COLS * ROWS
@@ -136,7 +136,7 @@ local function draw()
 
   if msg then gfx.text(14, H - 106, clip(msg, W - 28, "ui12"), "ui12", "b") end
   gfx.text(14, H - 80, "Glyph: empty=new  half=reading  filled=finished", "ui12")
-  gfx.text(14, H - 30, "Arrows: move   Confirm: open   Back: exit", "ui12")
+  gfx.text(14, H - 30, "Prev/Next: move   Confirm: open   Back: exit", "ui12")
 end
 
 local function __main()
@@ -149,8 +149,8 @@ local function __main()
       local old = sel
       if e == "left" then sel = math.max(1, sel - 1)
       elseif e == "right" then sel = math.min(total, sel + 1)
-      elseif e == "up" then sel = math.max(1, sel - COLS)
-      elseif e == "down" then sel = math.min(total, sel + COLS)
+      elseif e == "up" then sel = math.max(1, sel - 1)
+      elseif e == "down" then sel = math.min(total, sel + 1)
       elseif e == "confirm" then
         local b = items[(sel - 1) % PER + 1]
         if b then
