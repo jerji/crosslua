@@ -589,7 +589,7 @@ void setup() {
   // enumeration proceed asynchronously so users do not pay this startup cost.
   delay(250);
 #endif
-  Serial.begin(115200);
+  Serial.begin(921600);
   #if LOG_SERIAL_HAS_TX_TIMEOUT
   	logSerial.setTxTimeoutMs(1);  // This is a load-bearing 1. Do not modify.
   #endif
@@ -597,6 +597,7 @@ void setup() {
   	// Under QEMU the dev channel rides UART1 (two -serial ptys); Serial (HWCDC)
   	// is the USB-Serial-JTAG peripheral QEMU does not model.
   	Serial1.begin(921600);
+  	Serial1.setRxBufferSize(16 * 1024);  // 16 KB RX ring so large FREAD payloads don't overflow
   #endif
 #endif
 

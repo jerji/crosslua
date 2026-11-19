@@ -14,7 +14,12 @@ extern "C" {
 #include "lualib.h"
 }
 
+// Input mode: false = nav mode (Left->up, Right->down), true = grid mode (Left->left, Right->right).
+// Set via device.input_mode("nav"|"grid") from Lua apps. Reset on each app start.
 namespace crosslua {
+
+bool g_inputGridMode = false;
+int dev_input_mode(lua_State* L);
 namespace {
 
 // Coordinates may arrive as floats (x/2); accept any number.
@@ -995,7 +1000,7 @@ void loadTime(lua_State* L, Ctx* c) {
 void loadDevice(lua_State* L, Ctx* c) {
   static const luaL_Reg devFns[] = {
       {"frontlight", dev_frontlight},   {"caps", dev_caps}, {"haptic", dev_haptic}, {"motion", dev_motion},
-      {"environment", dev_environment}, {"tone", dev_tone}, {nullptr, nullptr}};
+      {"environment", dev_environment}, {"tone", dev_tone}, {"input_mode", dev_input_mode}, {nullptr, nullptr}};
   regTable(L, c, "device", devFns);
 }
 void loadLed(lua_State* L, Ctx* c) {
@@ -1117,6 +1122,19 @@ void registerApi(LuaVm& vm, Backend& backend) {
 
   lua_pushcfunction(L, api_print);
   lua_setglobal(L, "print");
+}
+
+// device.input_mode("nav"|"grid") -> nil.  Switch between navigation mode
+// (physical Left/Right -> up/down) and grid mode (Left/Right -> left/right).
+// X4 Pro only has two physical nav buttons; apps that need a 2D cursor for
+// grid-based games call grid mode.  Reset to nav on each app start.
+int dev_input_mode(lua_State* L) {
+  const char* mode = luaL_checkstring(L, 1);
+  g_inputGridMode = false;
+  if (strcmp(mode, "grid") == 0) g_inputGridMode = true;
+  else if (strcmp(mode, "nav") != 0)
+    return luaL_error(L, "input_mode must be 'nav' or 'grid'");
+  return 0;
 }
 
 }  // namespace crosslua

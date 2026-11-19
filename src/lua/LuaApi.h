@@ -552,4 +552,9 @@ class Backend {
 // Registers print + gfx/input/app/system tables into vm.state(). Call after open(), before load().
 void registerApi(LuaVm& vm, Backend& backend);
 
+// Input mode: set by device.input_mode("grid") for cursor-based Lua apps on
+// X4 Pro (2 physical nav buttons mapped to up/down — grid mode remaps to
+// left/right). Reset to false on each app start.
+extern bool g_inputGridMode;
+
 }  // namespace crosslua

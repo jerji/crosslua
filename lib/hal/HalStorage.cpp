@@ -248,6 +248,8 @@ class HalFile::Impl {
   size_t vfsEntryHalf = 0;  // unused dir-iteration slot
   bool vfsIsDir = false;    // the OPEN response's is-dir flag
   std::string vfsPath;      // the path this handle was opened for (dir iteration)
+  std::string vfsWritePath; // path for a write handle (openFileForWrite)
+  std::vector<uint8_t> vfsWriteBuf; // buffered write data (flushed on close)
 #endif
   // SdFat is not thread-safe; FsFile::close() touches SD/SPI and must run
   // under StorageLock or it races SdSpiCard::m_spiActive across tasks and
@@ -361,6 +363,16 @@ bool HalStorage::openFileForRead(const char* moduleName, const String& path, Hal
 
 bool HalStorage::openFileForWrite(const char* moduleName, const char* path, HalFile& file) {
   StorageLock lock;  // ensure thread safety for the duration of this function
+#ifdef QEMU_SIM
+  if (qemuvfs::enabled()) {
+    auto impl = std::make_unique<HalFile::Impl>();
+    impl->vfsWritePath = path;
+    impl->vfsWriteBuf.clear();
+    impl->hostId = -1;  // not a read handle
+    file = HalFile(std::move(impl));
+    return true;
+  }
+#endif
   FsFile fsFile;
   bool ok = SDCard.openFileForWrite(moduleName, path, fsFile);
   file = HalFile(std::make_unique<HalFile::Impl>(std::move(fsFile)));
@@ -487,9 +499,6 @@ int HalFile::read() {
 #endif
   HAL_FILE_WRAPPED_CALL(read, );
 }
-size_t HalFile::write(const uint8_t* buf, size_t count) { HAL_FILE_WRAPPED_CALL(write, buf, count); }
-size_t HalFile::write(const void* buf, size_t count) { HAL_FILE_WRAPPED_CALL(write, buf, count); }
-size_t HalFile::write(uint8_t b) { HAL_FILE_WRAPPED_CALL(write, b); }
 bool HalFile::rename(const char* newPath) { HAL_FILE_WRAPPED_CALL(rename, newPath); }
 bool HalFile::isDirectory() const {
 #ifdef QEMU_SIM
@@ -501,8 +510,30 @@ bool HalFile::isDirectory() const {
   HAL_FILE_FORWARD_CALL(isDirectory, );
 }  // already thread-safe, no need to wrap
 void HalFile::rewindDirectory() { HAL_FILE_WRAPPED_CALL(rewindDirectory, ); }
+size_t HalFile::write(const uint8_t* buf, size_t count) {
+#ifdef QEMU_SIM
+  if (qemuvfs::enabled() && impl && !impl->vfsWritePath.empty()) {
+    impl->vfsWriteBuf.insert(impl->vfsWriteBuf.end(), buf, buf + count);
+    LOG_ERR("VFS", "write buf: path=%s count=%u total=%u", impl->vfsWritePath.c_str(),
+            static_cast<unsigned>(count), static_cast<unsigned>(impl->vfsWriteBuf.size()));
+    return count;
+  }
+#endif
+  HAL_FILE_WRAPPED_CALL(write, buf, count);
+}
+size_t HalFile::write(const void* buf, size_t count) { return write(static_cast<const uint8_t*>(buf), count); }
+size_t HalFile::write(uint8_t b) { return write(&b, 1); }
 bool HalFile::close() {
 #ifdef QEMU_SIM
+  if (qemuvfs::enabled() && impl && !impl->vfsWritePath.empty()) {
+    if (!impl->vfsWriteBuf.empty()) {
+      qemuvfs::write(impl->vfsWritePath.c_str(), impl->vfsWriteBuf.data(), impl->vfsWriteBuf.size());
+      impl->vfsWriteBuf.clear();
+    }
+    impl->vfsWritePath.clear();
+    impl->hostId = -1;
+    return true;
+  }
   if (qemuvfs::enabled() && impl) {
     if (impl->hostId >= 0) qemuvfs::fileClose(impl->hostId);
     impl->hostId = -1;
@@ -511,6 +542,7 @@ bool HalFile::close() {
 #endif
   HAL_FILE_WRAPPED_CALL(close, );
 }
+
 HalFile HalFile::openNextFile() {
   HalStorage::StorageLock lock;
 #ifdef QEMU_SIM

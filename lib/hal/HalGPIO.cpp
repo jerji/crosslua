@@ -158,6 +158,12 @@ bool HalGPIO::isPressed(uint8_t buttonIndex) const {
 #ifdef CROSSLUA_DEV
   if (injActive(buttonIndex)) return true;
 #endif
+#ifdef QEMU_SIM
+  // The QEMU's GPIO matrix is unmodeled, so every physical button reads as
+  // permanently pressed. Accept only injected button states (CMD:BTN:).
+  // Without this, every app sees a held Back press and exits immediately.
+  return false;
+#endif
   return inputMgr.isPressed(buttonIndex);
 }
 
@@ -169,21 +175,30 @@ bool HalGPIO::wasPressed(uint8_t buttonIndex) const {
 #ifdef CROSSLUA_DEV
   if (injPressedEdge && injIndex == buttonIndex) return true;
 #endif
-  return inputMgr.wasPressed(buttonIndex);
-}
-
-bool HalGPIO::wasAnyPressed() const {
-#ifdef CROSSLUA_DEV
-  if (injPressedEdge) return true;
+#ifdef QEMU_SIM
+  return false;
 #endif
-  return inputMgr.wasAnyPressed();
+  return inputMgr.wasPressed(buttonIndex);
 }
 
 bool HalGPIO::wasReleased(uint8_t buttonIndex) const {
 #ifdef CROSSLUA_DEV
   if (injReleasedEdge && injIndex == buttonIndex) return true;
 #endif
+#ifdef QEMU_SIM
+  return false;
+#endif
   return inputMgr.wasReleased(buttonIndex);
+}
+
+bool HalGPIO::wasAnyPressed() const {
+#ifdef CROSSLUA_DEV
+  if (injPressedEdge) return true;
+#endif
+#ifdef QEMU_SIM
+  return false;
+#endif
+  return inputMgr.wasAnyPressed();
 }
 
 bool HalGPIO::wasAnyReleased() const {

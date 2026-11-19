@@ -3141,6 +3141,8 @@ void LuaAppActivity::startApp() {
 
 // Second half of the start: size the Lua heap, load the entry script, register the API.
 void LuaAppActivity::startVm() {
+  // Reset input mode to nav; apps opt into grid mode via device.input_mode("grid") in their main().
+  crosslua::g_inputGridMode = false;
   RenderLock lock;
   const auto heap = HalMemory::getInternalHeap();
   logMemory("start");
@@ -3331,12 +3333,32 @@ void LuaAppActivity::collectInput() {
   if (mappedInput.wasLongPressed(B::Up, BUTTON_HOLD_MS)) push("up_hold");
   if (mappedInput.wasLongPressed(B::Down, BUTTON_HOLD_MS)) push("down_hold");
   // Back has no "<name>_hold": holding Back past EXIT_HOLD_MS is the force-quit escape, not an app gesture.
+
+  // Touch tap: classify as confirm (main area) or back (header zone).
+  // This must come before the wasReleased(Back) check because back-gesture's
+  // wasTouchTap() consumes every tap, starving the confirm path below it.
+  // The header-zone branch replaces the touch portion of wasBackGesture for
+  // Lua apps; the swipe-back check after it still works (edge swipe doesn't
+  // use wasTouchTap).
+  {
+    int tapX = 0, tapY = 0;
+    if (mappedInput.wasScreenTapped(tapX, tapY)) {
+      push("confirm", tapX, tapY);
+    }
+  }
   if (mappedInput.wasReleased(B::Back)) push("back");
   if (mappedInput.wasReleased(B::Confirm)) push("confirm");
-  if (mappedInput.wasReleased(B::Left)) push("left");
+  if (crosslua::g_inputGridMode) {
+    // Grid mode: physical buttons map to left/right for cursor-based games.
+    if (mappedInput.wasReleased(B::Up))   push("left");
+    if (mappedInput.wasReleased(B::Down)) push("right");
+  } else {
+    // Nav mode: physical buttons map to up/down for list scrolling.
+    if (mappedInput.wasReleased(B::Up))   push("up");
+    if (mappedInput.wasReleased(B::Down)) push("down");
+  }
+  if (mappedInput.wasReleased(B::Left))  push("left");
   if (mappedInput.wasReleased(B::Right)) push("right");
-  if (mappedInput.wasReleased(B::Up)) push("up");
-  if (mappedInput.wasReleased(B::Down)) push("down");
 #if FREEINK_CAP_TOUCH
   if (mappedInput
           .hasTouch()) {  // touch boards: "press" (finger down), "long", "tap", "release" with input.pos() = x, y

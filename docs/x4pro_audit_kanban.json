@@ -1,0 +1,2502 @@
+{
+  "title": "X4 Pro Lua App Control Audit \u2014 Grid Mode Applied",
+  "description": "46 apps using left/right events have been patched with device.input_mode(\"grid\"). The firmware change adds device.input_mode(\"nav\"|\"grid\") to the Lua API. In grid mode, the physical Left/Right buttons fire left/right events for cursor-based apps. In nav mode (default), they fire up/down for list scrolling.\n\nRemaining work: SUnny should test each app on hardware to verify the controls make sense on the X4 Pro. Specific things to check:\n  1. Grid cursor moves left/right with physical buttons\n  2. Confirm via touch/power works\n  3. Back via left-edge swipe works\n  4. No confirm_hold or back_hold needed (only ble_beacon has up_hold/down_hold, fine)\n  5. Touch tap fires confirm (with position via input.pos())\n  6. Some apps may still need vertical cursor movement (up/down not available in grid mode)",
+  "columns": {
+    "untested": [],
+    "needs_fix": [],
+    "works": [
+      {
+        "id": "games/forehead_lua",
+        "title": "forehead_lua",
+        "category": "games",
+        "events_used": [
+          "up",
+          "down",
+          "confirm",
+          "back"
+        ],
+        "issues": [],
+        "severity": "ok",
+        "notes": ""
+      },
+      {
+        "id": "games/grimoire_lua",
+        "title": "grimoire_lua",
+        "category": "games",
+        "events_used": [
+          "up",
+          "down",
+          "confirm",
+          "back"
+        ],
+        "issues": [],
+        "severity": "ok",
+        "notes": ""
+      },
+      {
+        "id": "network/ble_remote_lua",
+        "title": "ble_remote_lua",
+        "category": "network",
+        "events_used": [
+          "up",
+          "down",
+          "confirm",
+          "back"
+        ],
+        "issues": [],
+        "severity": "ok",
+        "notes": ""
+      },
+      {
+        "id": "network/ble_scanner_lua",
+        "title": "ble_scanner_lua",
+        "category": "network",
+        "events_used": [
+          "back"
+        ],
+        "issues": [],
+        "severity": "ok",
+        "notes": ""
+      },
+      {
+        "id": "network/ble_sensor_lua",
+        "title": "ble_sensor_lua",
+        "category": "network",
+        "events_used": [
+          "up",
+          "down",
+          "confirm",
+          "back"
+        ],
+        "issues": [],
+        "severity": "ok",
+        "notes": ""
+      },
+      {
+        "id": "network/ble_spam_lua",
+        "title": "ble_spam_lua",
+        "category": "network",
+        "events_used": [
+          "up",
+          "down",
+          "confirm",
+          "back"
+        ],
+        "issues": [],
+        "severity": "ok",
+        "notes": ""
+      },
+      {
+        "id": "network/bulletin_board_lua",
+        "title": "bulletin_board_lua",
+        "category": "network",
+        "events_used": [
+          "confirm",
+          "back"
+        ],
+        "issues": [],
+        "severity": "ok",
+        "notes": ""
+      },
+      {
+        "id": "network/captive_portal_lua",
+        "title": "captive_portal_lua",
+        "category": "network",
+        "events_used": [
+          "back"
+        ],
+        "issues": [],
+        "severity": "ok",
+        "notes": ""
+      },
+      {
+        "id": "network/dead_drop_lua",
+        "title": "dead_drop_lua",
+        "category": "network",
+        "events_used": [
+          "back"
+        ],
+        "issues": [],
+        "severity": "ok",
+        "notes": ""
+      },
+      {
+        "id": "network/dns_lookup_lua",
+        "title": "dns_lookup_lua",
+        "category": "network",
+        "events_used": [
+          "confirm",
+          "back"
+        ],
+        "issues": [],
+        "severity": "ok",
+        "notes": ""
+      },
+      {
+        "id": "network/emergency_sos_lua",
+        "title": "emergency_sos_lua",
+        "category": "network",
+        "events_used": [
+          "up",
+          "down",
+          "back"
+        ],
+        "issues": [],
+        "severity": "ok",
+        "notes": ""
+      },
+      {
+        "id": "network/host_scanner_lua",
+        "title": "host_scanner_lua",
+        "category": "network",
+        "events_used": [
+          "up",
+          "down",
+          "confirm",
+          "back"
+        ],
+        "issues": [],
+        "severity": "ok",
+        "notes": ""
+      },
+      {
+        "id": "network/http_client_lua",
+        "title": "http_client_lua",
+        "category": "network",
+        "events_used": [
+          "up",
+          "down",
+          "confirm",
+          "back"
+        ],
+        "issues": [],
+        "severity": "ok",
+        "notes": ""
+      },
+      {
+        "id": "network/mdns_browser_lua",
+        "title": "mdns_browser_lua",
+        "category": "network",
+        "events_used": [
+          "up",
+          "down",
+          "confirm",
+          "back"
+        ],
+        "issues": [],
+        "severity": "ok",
+        "notes": ""
+      },
+      {
+        "id": "network/mesh_chat_lua",
+        "title": "mesh_chat_lua",
+        "category": "network",
+        "events_used": [
+          "confirm",
+          "back"
+        ],
+        "issues": [],
+        "severity": "ok",
+        "notes": ""
+      },
+      {
+        "id": "network/port_knocker_lua",
+        "title": "port_knocker_lua",
+        "category": "network",
+        "events_used": [
+          "back"
+        ],
+        "issues": [],
+        "severity": "ok",
+        "notes": ""
+      },
+      {
+        "id": "network/softap_files_lua",
+        "title": "softap_files_lua",
+        "category": "network",
+        "events_used": [
+          "back"
+        ],
+        "issues": [],
+        "severity": "ok",
+        "notes": ""
+      },
+      {
+        "id": "network/ssid_channel_lua",
+        "title": "ssid_channel_lua",
+        "category": "network",
+        "events_used": [
+          "back"
+        ],
+        "issues": [],
+        "severity": "ok",
+        "notes": ""
+      },
+      {
+        "id": "network/tcp_ping_lua",
+        "title": "tcp_ping_lua",
+        "category": "network",
+        "events_used": [
+          "back"
+        ],
+        "issues": [],
+        "severity": "ok",
+        "notes": ""
+      },
+      {
+        "id": "network/udp_discovery_lua",
+        "title": "udp_discovery_lua",
+        "category": "network",
+        "events_used": [
+          "up",
+          "down",
+          "confirm",
+          "back"
+        ],
+        "issues": [],
+        "severity": "ok",
+        "notes": ""
+      },
+      {
+        "id": "reading/ao3_lua",
+        "title": "ao3_lua",
+        "category": "reading",
+        "events_used": [
+          "back"
+        ],
+        "issues": [],
+        "severity": "ok",
+        "notes": ""
+      },
+      {
+        "id": "reading/file_browser_lua",
+        "title": "file_browser_lua",
+        "category": "reading",
+        "events_used": [
+          "up",
+          "down",
+          "confirm",
+          "back"
+        ],
+        "issues": [],
+        "severity": "ok",
+        "notes": ""
+      },
+      {
+        "id": "reading/stardict_lua",
+        "title": "stardict_lua",
+        "category": "reading",
+        "events_used": [
+          "confirm",
+          "back"
+        ],
+        "issues": [],
+        "severity": "ok",
+        "notes": ""
+      },
+      {
+        "id": "security/credential_viewer_lua",
+        "title": "credential_viewer_lua",
+        "category": "security",
+        "events_used": [
+          "up",
+          "down",
+          "back"
+        ],
+        "issues": [],
+        "severity": "ok",
+        "notes": ""
+      },
+      {
+        "id": "security/password_manager_lua",
+        "title": "password_manager_lua",
+        "category": "security",
+        "events_used": [
+          "up",
+          "down",
+          "confirm",
+          "back"
+        ],
+        "issues": [],
+        "severity": "ok",
+        "notes": ""
+      },
+      {
+        "id": "security/pin_lock_lua",
+        "title": "pin_lock_lua",
+        "category": "security",
+        "events_used": [
+          "back"
+        ],
+        "issues": [],
+        "severity": "ok",
+        "notes": ""
+      },
+      {
+        "id": "security/qr_family_lua",
+        "title": "qr_family_lua",
+        "category": "security",
+        "events_used": [
+          "up",
+          "down",
+          "confirm",
+          "back"
+        ],
+        "issues": [],
+        "severity": "ok",
+        "notes": ""
+      },
+      {
+        "id": "security/rf_kill_lua",
+        "title": "rf_kill_lua",
+        "category": "security",
+        "events_used": [
+          "confirm",
+          "back"
+        ],
+        "issues": [],
+        "severity": "ok",
+        "notes": ""
+      },
+      {
+        "id": "security/sd_encrypt_lua",
+        "title": "sd_encrypt_lua",
+        "category": "security",
+        "events_used": [
+          "back"
+        ],
+        "issues": [],
+        "severity": "ok",
+        "notes": ""
+      },
+      {
+        "id": "security/stego_bmp_lua",
+        "title": "stego_bmp_lua",
+        "category": "security",
+        "events_used": [
+          "back"
+        ],
+        "issues": [],
+        "severity": "ok",
+        "notes": ""
+      },
+      {
+        "id": "security/vendor_oui_lua",
+        "title": "vendor_oui_lua",
+        "category": "security",
+        "events_used": [
+          "confirm",
+          "back"
+        ],
+        "issues": [],
+        "severity": "ok",
+        "notes": ""
+      },
+      {
+        "id": "system/demo_lua",
+        "title": "demo_lua",
+        "category": "system",
+        "events_used": [
+          "back"
+        ],
+        "issues": [],
+        "severity": "ok",
+        "notes": ""
+      },
+      {
+        "id": "system/grants_lua",
+        "title": "grants_lua",
+        "category": "system",
+        "events_used": [
+          "back"
+        ],
+        "issues": [],
+        "severity": "ok",
+        "notes": ""
+      },
+      {
+        "id": "system/lua_tests_lua",
+        "title": "lua_tests_lua",
+        "category": "system",
+        "events_used": [
+          "up",
+          "down",
+          "confirm",
+          "back"
+        ],
+        "issues": [],
+        "severity": "ok",
+        "notes": ""
+      },
+      {
+        "id": "tools/app_store_lua",
+        "title": "app_store_lua",
+        "category": "tools",
+        "events_used": [],
+        "issues": [],
+        "severity": "ok",
+        "notes": ""
+      },
+      {
+        "id": "tools/archive_browser_lua",
+        "title": "archive_browser_lua",
+        "category": "tools",
+        "events_used": [
+          "up",
+          "down",
+          "confirm",
+          "back"
+        ],
+        "issues": [],
+        "severity": "ok",
+        "notes": ""
+      },
+      {
+        "id": "tools/clock_lua",
+        "title": "clock_lua",
+        "category": "tools",
+        "events_used": [
+          "back"
+        ],
+        "issues": [],
+        "severity": "ok",
+        "notes": ""
+      },
+      {
+        "id": "tools/diagnostics_lua",
+        "title": "diagnostics_lua",
+        "category": "tools",
+        "events_used": [
+          "confirm",
+          "back"
+        ],
+        "issues": [],
+        "severity": "ok",
+        "notes": ""
+      },
+      {
+        "id": "tools/event_logger_lua",
+        "title": "event_logger_lua",
+        "category": "tools",
+        "events_used": [
+          "back"
+        ],
+        "issues": [],
+        "severity": "ok",
+        "notes": ""
+      },
+      {
+        "id": "tools/network_mode_lua",
+        "title": "network_mode_lua",
+        "category": "tools",
+        "events_used": [
+          "confirm",
+          "back"
+        ],
+        "issues": [],
+        "severity": "ok",
+        "notes": ""
+      },
+      {
+        "id": "tools/ntp_clock_lua",
+        "title": "ntp_clock_lua",
+        "category": "tools",
+        "events_used": [
+          "confirm",
+          "back"
+        ],
+        "issues": [],
+        "severity": "ok",
+        "notes": ""
+      },
+      {
+        "id": "tools/timers_lua",
+        "title": "timers_lua",
+        "category": "tools",
+        "events_used": [
+          "up",
+          "down",
+          "confirm",
+          "back"
+        ],
+        "issues": [],
+        "severity": "ok",
+        "notes": ""
+      },
+      {
+        "id": "wifi/ap_cloner_lua",
+        "title": "ap_cloner_lua",
+        "category": "wifi",
+        "events_used": [
+          "up",
+          "down",
+          "confirm",
+          "back"
+        ],
+        "issues": [],
+        "severity": "ok",
+        "notes": ""
+      },
+      {
+        "id": "wifi/ap_history_lua",
+        "title": "ap_history_lua",
+        "category": "wifi",
+        "events_used": [
+          "back"
+        ],
+        "issues": [],
+        "severity": "ok",
+        "notes": ""
+      },
+      {
+        "id": "wifi/beacon_flood_lua",
+        "title": "beacon_flood_lua",
+        "category": "wifi",
+        "events_used": [
+          "back"
+        ],
+        "issues": [],
+        "severity": "ok",
+        "notes": ""
+      },
+      {
+        "id": "wifi/beacon_test_lua",
+        "title": "beacon_test_lua",
+        "category": "wifi",
+        "events_used": [
+          "back"
+        ],
+        "issues": [],
+        "severity": "ok",
+        "notes": ""
+      },
+      {
+        "id": "wifi/breadcrumb_lua",
+        "title": "breadcrumb_lua",
+        "category": "wifi",
+        "events_used": [
+          "back"
+        ],
+        "issues": [],
+        "severity": "ok",
+        "notes": ""
+      },
+      {
+        "id": "wifi/crowd_density_lua",
+        "title": "crowd_density_lua",
+        "category": "wifi",
+        "events_used": [
+          "back"
+        ],
+        "issues": [],
+        "severity": "ok",
+        "notes": ""
+      },
+      {
+        "id": "wifi/deauth_detector_lua",
+        "title": "deauth_detector_lua",
+        "category": "wifi",
+        "events_used": [
+          "back"
+        ],
+        "issues": [],
+        "severity": "ok",
+        "notes": ""
+      },
+      {
+        "id": "wifi/deauth_test_lua",
+        "title": "deauth_test_lua",
+        "category": "wifi",
+        "events_used": [
+          "up",
+          "down",
+          "confirm",
+          "back"
+        ],
+        "issues": [],
+        "severity": "ok",
+        "notes": ""
+      },
+      {
+        "id": "wifi/eapol_hunt_lua",
+        "title": "eapol_hunt_lua",
+        "category": "wifi",
+        "events_used": [
+          "up",
+          "down",
+          "confirm",
+          "back"
+        ],
+        "issues": [],
+        "severity": "ok",
+        "notes": ""
+      },
+      {
+        "id": "wifi/fire_lua",
+        "title": "fire_lua",
+        "category": "wifi",
+        "events_used": [
+          "back"
+        ],
+        "issues": [],
+        "severity": "ok",
+        "notes": ""
+      },
+      {
+        "id": "wifi/network_change_lua",
+        "title": "network_change_lua",
+        "category": "wifi",
+        "events_used": [
+          "confirm",
+          "back"
+        ],
+        "issues": [],
+        "severity": "ok",
+        "notes": ""
+      },
+      {
+        "id": "wifi/passive_sniffer_lua",
+        "title": "passive_sniffer_lua",
+        "category": "wifi",
+        "events_used": [
+          "up",
+          "down",
+          "confirm",
+          "back"
+        ],
+        "issues": [],
+        "severity": "ok",
+        "notes": ""
+      },
+      {
+        "id": "wifi/perimeter_watch_lua",
+        "title": "perimeter_watch_lua",
+        "category": "wifi",
+        "events_used": [
+          "back"
+        ],
+        "issues": [],
+        "severity": "ok",
+        "notes": ""
+      },
+      {
+        "id": "wifi/probe_sniffer_lua",
+        "title": "probe_sniffer_lua",
+        "category": "wifi",
+        "events_used": [
+          "up",
+          "down",
+          "confirm",
+          "back"
+        ],
+        "issues": [],
+        "severity": "ok",
+        "notes": ""
+      },
+      {
+        "id": "wifi/signal_locator_lua",
+        "title": "signal_locator_lua",
+        "category": "wifi",
+        "events_used": [
+          "up",
+          "down",
+          "confirm",
+          "back"
+        ],
+        "issues": [],
+        "severity": "ok",
+        "notes": ""
+      },
+      {
+        "id": "wifi/transit_alert_lua",
+        "title": "transit_alert_lua",
+        "category": "wifi",
+        "events_used": [
+          "up",
+          "down",
+          "confirm",
+          "back"
+        ],
+        "issues": [],
+        "severity": "ok",
+        "notes": ""
+      },
+      {
+        "id": "wifi/vehicle_finder_lua",
+        "title": "vehicle_finder_lua",
+        "category": "wifi",
+        "events_used": [
+          "up",
+          "down",
+          "confirm",
+          "back"
+        ],
+        "issues": [],
+        "severity": "ok",
+        "notes": ""
+      },
+      {
+        "id": "wifi/wifi_spectrum_lua",
+        "title": "wifi_spectrum_lua",
+        "category": "wifi",
+        "events_used": [
+          "confirm",
+          "back"
+        ],
+        "issues": [],
+        "severity": "ok",
+        "notes": ""
+      }
+    ],
+    "n/a": [],
+    "patched": [
+      {
+        "id": "games/checkers_lua",
+        "title": "checkers_lua",
+        "category": "games",
+        "events_used": [
+          "up",
+          "down",
+          "left",
+          "right",
+          "confirm",
+          "back"
+        ],
+        "issues": [
+          "left+right: no physical mapping (remap needed)"
+        ],
+        "severity": "critical",
+        "notes": "Added device.input_mode(\"grid\"). Test on X4 Pro: verify cursor movement, confirm, back.",
+        "status": "patched - needs testing"
+      },
+      {
+        "id": "games/chess_lua",
+        "title": "chess_lua",
+        "category": "games",
+        "events_used": [
+          "up",
+          "down",
+          "left",
+          "right",
+          "confirm",
+          "back"
+        ],
+        "issues": [
+          "left+right: no physical mapping (remap needed)"
+        ],
+        "severity": "critical",
+        "notes": "Added device.input_mode(\"grid\"). Test on X4 Pro: verify cursor movement, confirm, back.",
+        "status": "patched - needs testing"
+      },
+      {
+        "id": "games/connectfour_lua",
+        "title": "connectfour_lua",
+        "category": "games",
+        "events_used": [
+          "up",
+          "down",
+          "left",
+          "right",
+          "confirm",
+          "back"
+        ],
+        "issues": [
+          "left+right: no physical mapping (remap needed)"
+        ],
+        "severity": "critical",
+        "notes": "Added device.input_mode(\"grid\"). Test on X4 Pro: verify cursor movement, confirm, back.",
+        "status": "patched - needs testing"
+      },
+      {
+        "id": "games/dungeon_lua",
+        "title": "dungeon_lua",
+        "category": "games",
+        "events_used": [
+          "up",
+          "down",
+          "left",
+          "right",
+          "confirm",
+          "back"
+        ],
+        "issues": [
+          "left+right: no physical mapping (remap needed)"
+        ],
+        "severity": "critical",
+        "notes": "Added device.input_mode(\"grid\"). Test on X4 Pro: verify cursor movement, confirm, back.",
+        "status": "patched - needs testing"
+      },
+      {
+        "id": "games/game2048_lua",
+        "title": "game2048_lua",
+        "category": "games",
+        "events_used": [
+          "up",
+          "down",
+          "left",
+          "right",
+          "confirm",
+          "back"
+        ],
+        "issues": [
+          "left+right: no physical mapping (remap needed)"
+        ],
+        "severity": "critical",
+        "notes": "Added device.input_mode(\"grid\"). Test on X4 Pro: verify cursor movement, confirm, back.",
+        "status": "patched - needs testing"
+      },
+      {
+        "id": "games/go_lua",
+        "title": "go_lua",
+        "category": "games",
+        "events_used": [
+          "up",
+          "down",
+          "left",
+          "right",
+          "confirm",
+          "back"
+        ],
+        "issues": [
+          "left+right: no physical mapping (remap needed)"
+        ],
+        "severity": "critical",
+        "notes": "Added device.input_mode(\"grid\"). Test on X4 Pro: verify cursor movement, confirm, back.",
+        "status": "patched - needs testing"
+      },
+      {
+        "id": "games/guesswho_lua",
+        "title": "guesswho_lua",
+        "category": "games",
+        "events_used": [
+          "up",
+          "down",
+          "left",
+          "right",
+          "confirm",
+          "back"
+        ],
+        "issues": [
+          "left+right: no physical mapping (remap needed)"
+        ],
+        "severity": "critical",
+        "notes": "Added device.input_mode(\"grid\"). Test on X4 Pro: verify cursor movement, confirm, back.",
+        "status": "patched - needs testing"
+      },
+      {
+        "id": "games/hearts_lua",
+        "title": "hearts_lua",
+        "category": "games",
+        "events_used": [
+          "up",
+          "down",
+          "left",
+          "right",
+          "confirm",
+          "back"
+        ],
+        "issues": [
+          "left+right: no physical mapping (remap needed)"
+        ],
+        "severity": "critical",
+        "notes": "Added device.input_mode(\"grid\"). Test on X4 Pro: verify cursor movement, confirm, back.",
+        "status": "patched - needs testing"
+      },
+      {
+        "id": "games/hex_lua",
+        "title": "hex_lua",
+        "category": "games",
+        "events_used": [
+          "up",
+          "down",
+          "left",
+          "right",
+          "confirm",
+          "back"
+        ],
+        "issues": [
+          "left+right: no physical mapping (remap needed)"
+        ],
+        "severity": "critical",
+        "notes": "Added device.input_mode(\"grid\"). Test on X4 Pro: verify cursor movement, confirm, back.",
+        "status": "patched - needs testing"
+      },
+      {
+        "id": "games/jaipur_lua",
+        "title": "jaipur_lua",
+        "category": "games",
+        "events_used": [
+          "up",
+          "down",
+          "left",
+          "right",
+          "confirm",
+          "back"
+        ],
+        "issues": [
+          "left+right: no physical mapping (remap needed)"
+        ],
+        "severity": "critical",
+        "notes": "Added device.input_mode(\"grid\"). Test on X4 Pro: verify cursor movement, confirm, back.",
+        "status": "patched - needs testing"
+      },
+      {
+        "id": "games/knucklebones_lua",
+        "title": "knucklebones_lua",
+        "category": "games",
+        "events_used": [
+          "up",
+          "down",
+          "left",
+          "right",
+          "confirm",
+          "back"
+        ],
+        "issues": [
+          "left+right: no physical mapping (remap needed)"
+        ],
+        "severity": "critical",
+        "notes": "Added device.input_mode(\"grid\"). Test on X4 Pro: verify cursor movement, confirm, back.",
+        "status": "patched - needs testing"
+      },
+      {
+        "id": "games/minesweeper_lua",
+        "title": "minesweeper_lua",
+        "category": "games",
+        "events_used": [
+          "up",
+          "down",
+          "left",
+          "right",
+          "confirm",
+          "back"
+        ],
+        "issues": [
+          "left+right: no physical mapping (remap needed)"
+        ],
+        "severity": "critical",
+        "notes": "Added device.input_mode(\"grid\"). Test on X4 Pro: verify cursor movement, confirm, back.",
+        "status": "patched - needs testing"
+      },
+      {
+        "id": "games/murdle_lua",
+        "title": "murdle_lua",
+        "category": "games",
+        "events_used": [
+          "up",
+          "down",
+          "left",
+          "right",
+          "confirm",
+          "back"
+        ],
+        "issues": [
+          "left+right: no physical mapping (remap needed)"
+        ],
+        "severity": "critical",
+        "notes": "Added device.input_mode(\"grid\"). Test on X4 Pro: verify cursor movement, confirm, back.",
+        "status": "patched - needs testing"
+      },
+      {
+        "id": "games/picross_lua",
+        "title": "picross_lua",
+        "category": "games",
+        "events_used": [
+          "up",
+          "down",
+          "left",
+          "right",
+          "confirm",
+          "back"
+        ],
+        "issues": [
+          "left+right: no physical mapping (remap needed)"
+        ],
+        "severity": "critical",
+        "notes": "Added device.input_mode(\"grid\"). Test on X4 Pro: verify cursor movement, confirm, back.",
+        "status": "patched - needs testing"
+      },
+      {
+        "id": "games/play_nearby_ttt_lua",
+        "title": "play_nearby_ttt_lua",
+        "category": "games",
+        "events_used": [
+          "up",
+          "down",
+          "left",
+          "right",
+          "confirm",
+          "back"
+        ],
+        "issues": [
+          "left+right: no physical mapping (remap needed)"
+        ],
+        "severity": "critical",
+        "notes": "Added device.input_mode(\"grid\"). Test on X4 Pro: verify cursor movement, confirm, back.",
+        "status": "patched - needs testing"
+      },
+      {
+        "id": "games/seasalt_lua",
+        "title": "seasalt_lua",
+        "category": "games",
+        "events_used": [
+          "up",
+          "down",
+          "left",
+          "right",
+          "confirm",
+          "back"
+        ],
+        "issues": [
+          "left+right: no physical mapping (remap needed)"
+        ],
+        "severity": "critical",
+        "notes": "Added device.input_mode(\"grid\"). Test on X4 Pro: verify cursor movement, confirm, back.",
+        "status": "patched - needs testing"
+      },
+      {
+        "id": "games/sudoku_lua",
+        "title": "sudoku_lua",
+        "category": "games",
+        "events_used": [
+          "up",
+          "down",
+          "left",
+          "right",
+          "confirm",
+          "back"
+        ],
+        "issues": [
+          "left+right: no physical mapping (remap needed)"
+        ],
+        "severity": "critical",
+        "notes": "Added device.input_mode(\"grid\"). Test on X4 Pro: verify cursor movement, confirm, back.",
+        "status": "patched - needs testing"
+      },
+      {
+        "id": "games/underhand_lua",
+        "title": "underhand_lua",
+        "category": "games",
+        "events_used": [
+          "up",
+          "down",
+          "left",
+          "right",
+          "confirm",
+          "back"
+        ],
+        "issues": [
+          "left+right: no physical mapping (remap needed)"
+        ],
+        "severity": "critical",
+        "notes": "Added device.input_mode(\"grid\"). Test on X4 Pro: verify cursor movement, confirm, back.",
+        "status": "patched - needs testing"
+      },
+      {
+        "id": "games/wavelength_lua",
+        "title": "wavelength_lua",
+        "category": "games",
+        "events_used": [
+          "up",
+          "down",
+          "left",
+          "right",
+          "confirm",
+          "back"
+        ],
+        "issues": [
+          "left+right: no physical mapping (remap needed)"
+        ],
+        "severity": "critical",
+        "notes": "Added device.input_mode(\"grid\"). Test on X4 Pro: verify cursor movement, confirm, back.",
+        "status": "patched - needs testing"
+      },
+      {
+        "id": "games/wordle_lua",
+        "title": "wordle_lua",
+        "category": "games",
+        "events_used": [
+          "up",
+          "down",
+          "left",
+          "right",
+          "confirm",
+          "back"
+        ],
+        "issues": [
+          "left+right: no physical mapping (remap needed)"
+        ],
+        "severity": "critical",
+        "notes": "Added device.input_mode(\"grid\"). Test on X4 Pro: verify cursor movement, confirm, back.",
+        "status": "patched - needs testing"
+      },
+      {
+        "id": "games/yahtzee_lua",
+        "title": "yahtzee_lua",
+        "category": "games",
+        "events_used": [
+          "up",
+          "down",
+          "left",
+          "right",
+          "confirm",
+          "back"
+        ],
+        "issues": [
+          "left+right: no physical mapping (remap needed)"
+        ],
+        "severity": "critical",
+        "notes": "Added device.input_mode(\"grid\"). Test on X4 Pro: verify cursor movement, confirm, back.",
+        "status": "patched - needs testing"
+      },
+      {
+        "id": "media/player_lua",
+        "title": "player_lua",
+        "category": "media",
+        "events_used": [
+          "up",
+          "down",
+          "left",
+          "right",
+          "confirm",
+          "back"
+        ],
+        "issues": [
+          "left+right: no physical mapping (remap needed)"
+        ],
+        "severity": "critical",
+        "notes": "Added device.input_mode(\"grid\"). Test on X4 Pro: verify cursor movement, confirm, back.",
+        "status": "patched - needs testing"
+      },
+      {
+        "id": "network/airtag_test_lua",
+        "title": "airtag_test_lua",
+        "category": "network",
+        "events_used": [
+          "up",
+          "left",
+          "right",
+          "confirm",
+          "back"
+        ],
+        "issues": [
+          "left+right: no physical mapping (remap needed)"
+        ],
+        "severity": "critical",
+        "notes": "Added device.input_mode(\"grid\"). Test on X4 Pro: verify cursor movement, confirm, back.",
+        "status": "patched - needs testing"
+      },
+      {
+        "id": "network/ble_beacon_lua",
+        "title": "ble_beacon_lua",
+        "category": "network",
+        "events_used": [
+          "up",
+          "down",
+          "left",
+          "right",
+          "confirm",
+          "back",
+          "up_hold",
+          "down_hold"
+        ],
+        "issues": [
+          "up/down_hold: works physically but check if confirm_hold also needed",
+          "left+right: no physical mapping (remap needed)"
+        ],
+        "severity": "critical",
+        "notes": "Added device.input_mode(\"grid\"). Test on X4 Pro: verify cursor movement, confirm, back.",
+        "status": "patched - needs testing"
+      },
+      {
+        "id": "network/gatt_browser_lua",
+        "title": "gatt_browser_lua",
+        "category": "network",
+        "events_used": [
+          "up",
+          "down",
+          "right",
+          "confirm",
+          "back"
+        ],
+        "issues": [
+          "right: no physical mapping"
+        ],
+        "severity": "critical",
+        "notes": "Added device.input_mode(\"grid\"). Test on X4 Pro: verify cursor movement, confirm, back.",
+        "status": "patched - needs testing"
+      },
+      {
+        "id": "network/ha_frontend_lua",
+        "title": "ha_frontend_lua",
+        "category": "network",
+        "events_used": [
+          "up",
+          "down",
+          "left",
+          "right",
+          "confirm",
+          "back"
+        ],
+        "issues": [
+          "left+right: no physical mapping (remap needed)"
+        ],
+        "severity": "critical",
+        "notes": "Added device.input_mode(\"grid\"). Test on X4 Pro: verify cursor movement, confirm, back.",
+        "status": "patched - needs testing"
+      },
+      {
+        "id": "reading/cover_grid_lua",
+        "title": "cover_grid_lua",
+        "category": "reading",
+        "events_used": [
+          "up",
+          "down",
+          "left",
+          "right",
+          "confirm",
+          "back"
+        ],
+        "issues": [
+          "left+right: no physical mapping (remap needed)"
+        ],
+        "severity": "critical",
+        "notes": "Added device.input_mode(\"grid\"). Test on X4 Pro: verify cursor movement, confirm, back.",
+        "status": "patched - needs testing"
+      },
+      {
+        "id": "reading/hackernews_lua",
+        "title": "hackernews_lua",
+        "category": "reading",
+        "events_used": [
+          "up",
+          "down",
+          "left",
+          "right",
+          "confirm",
+          "back"
+        ],
+        "issues": [
+          "left+right: no physical mapping (remap needed)"
+        ],
+        "severity": "critical",
+        "notes": "Added device.input_mode(\"grid\"). Test on X4 Pro: verify cursor movement, confirm, back.",
+        "status": "patched - needs testing"
+      },
+      {
+        "id": "reading/koreader_sync_lua",
+        "title": "koreader_sync_lua",
+        "category": "reading",
+        "events_used": [
+          "up",
+          "down",
+          "left",
+          "right",
+          "confirm",
+          "back"
+        ],
+        "issues": [
+          "left+right: no physical mapping (remap needed)"
+        ],
+        "severity": "critical",
+        "notes": "Added device.input_mode(\"grid\"). Test on X4 Pro: verify cursor movement, confirm, back.",
+        "status": "patched - needs testing"
+      },
+      {
+        "id": "reading/library_grid_lua",
+        "title": "library_grid_lua",
+        "category": "reading",
+        "events_used": [
+          "up",
+          "down",
+          "left",
+          "right",
+          "confirm",
+          "back"
+        ],
+        "issues": [
+          "left+right: no physical mapping (remap needed)"
+        ],
+        "severity": "critical",
+        "notes": "Added device.input_mode(\"grid\"). Test on X4 Pro: verify cursor movement, confirm, back.",
+        "status": "patched - needs testing"
+      },
+      {
+        "id": "reading/notes_lua",
+        "title": "notes_lua",
+        "category": "reading",
+        "events_used": [
+          "up",
+          "down",
+          "left",
+          "right",
+          "confirm",
+          "back"
+        ],
+        "issues": [
+          "left+right: no physical mapping (remap needed)"
+        ],
+        "severity": "critical",
+        "notes": "Added device.input_mode(\"grid\"). Test on X4 Pro: verify cursor movement, confirm, back.",
+        "status": "patched - needs testing"
+      },
+      {
+        "id": "reading/opds_lua",
+        "title": "opds_lua",
+        "category": "reading",
+        "events_used": [
+          "up",
+          "down",
+          "left",
+          "right",
+          "confirm",
+          "back"
+        ],
+        "issues": [
+          "left+right: no physical mapping (remap needed)"
+        ],
+        "severity": "critical",
+        "notes": "Added device.input_mode(\"grid\"). Test on X4 Pro: verify cursor movement, confirm, back.",
+        "status": "patched - needs testing"
+      },
+      {
+        "id": "reading/study_lua",
+        "title": "study_lua",
+        "category": "reading",
+        "events_used": [
+          "up",
+          "down",
+          "left",
+          "right",
+          "confirm",
+          "back"
+        ],
+        "issues": [
+          "left+right: no physical mapping (remap needed)"
+        ],
+        "severity": "critical",
+        "notes": "Added device.input_mode(\"grid\"). Test on X4 Pro: verify cursor movement, confirm, back.",
+        "status": "patched - needs testing"
+      },
+      {
+        "id": "reading/trivia_lua",
+        "title": "trivia_lua",
+        "category": "reading",
+        "events_used": [
+          "up",
+          "down",
+          "left",
+          "right",
+          "confirm",
+          "back"
+        ],
+        "issues": [
+          "left+right: no physical mapping (remap needed)"
+        ],
+        "severity": "critical",
+        "notes": "Added device.input_mode(\"grid\"). Test on X4 Pro: verify cursor movement, confirm, back.",
+        "status": "patched - needs testing"
+      },
+      {
+        "id": "reading/txt_reader_lua",
+        "title": "txt_reader_lua",
+        "category": "reading",
+        "events_used": [
+          "up",
+          "down",
+          "left",
+          "right",
+          "confirm",
+          "back"
+        ],
+        "issues": [
+          "left+right: no physical mapping (remap needed)"
+        ],
+        "severity": "critical",
+        "notes": "Added device.input_mode(\"grid\"). Test on X4 Pro: verify cursor movement, confirm, back.",
+        "status": "patched - needs testing"
+      },
+      {
+        "id": "reading/xkcd_lua",
+        "title": "xkcd_lua",
+        "category": "reading",
+        "events_used": [
+          "up",
+          "down",
+          "left",
+          "right",
+          "confirm",
+          "back"
+        ],
+        "issues": [
+          "left+right: no physical mapping (remap needed)"
+        ],
+        "severity": "critical",
+        "notes": "Added device.input_mode(\"grid\"). Test on X4 Pro: verify cursor movement, confirm, back.",
+        "status": "patched - needs testing"
+      },
+      {
+        "id": "security/medical_id_lua",
+        "title": "medical_id_lua",
+        "category": "security",
+        "events_used": [
+          "up",
+          "down",
+          "right",
+          "confirm",
+          "back"
+        ],
+        "issues": [
+          "right: no physical mapping"
+        ],
+        "severity": "critical",
+        "notes": "Added device.input_mode(\"grid\"). Test on X4 Pro: verify cursor movement, confirm, back.",
+        "status": "patched - needs testing"
+      },
+      {
+        "id": "security/quick_wipe_lua",
+        "title": "quick_wipe_lua",
+        "category": "security",
+        "events_used": [
+          "up",
+          "down",
+          "left",
+          "confirm",
+          "back"
+        ],
+        "issues": [
+          "left: no physical mapping"
+        ],
+        "severity": "critical",
+        "notes": "Added device.input_mode(\"grid\"). Test on X4 Pro: verify cursor movement, confirm, back.",
+        "status": "patched - needs testing"
+      },
+      {
+        "id": "security/screen_decoy_lua",
+        "title": "screen_decoy_lua",
+        "category": "security",
+        "events_used": [
+          "up",
+          "down",
+          "left",
+          "right",
+          "confirm",
+          "back"
+        ],
+        "issues": [
+          "left+right: no physical mapping (remap needed)"
+        ],
+        "severity": "critical",
+        "notes": "Added device.input_mode(\"grid\"). Test on X4 Pro: verify cursor movement, confirm, back.",
+        "status": "patched - needs testing"
+      },
+      {
+        "id": "security/totp_lua",
+        "title": "totp_lua",
+        "category": "security",
+        "events_used": [
+          "up",
+          "down",
+          "left",
+          "right",
+          "confirm",
+          "back"
+        ],
+        "issues": [
+          "left+right: no physical mapping (remap needed)"
+        ],
+        "severity": "critical",
+        "notes": "Added device.input_mode(\"grid\"). Test on X4 Pro: verify cursor movement, confirm, back.",
+        "status": "patched - needs testing"
+      },
+      {
+        "id": "tools/calculator_lua",
+        "title": "calculator_lua",
+        "category": "tools",
+        "events_used": [
+          "up",
+          "down",
+          "left",
+          "right",
+          "confirm",
+          "back"
+        ],
+        "issues": [
+          "left+right: no physical mapping (remap needed)"
+        ],
+        "severity": "critical",
+        "notes": "Added device.input_mode(\"grid\"). Test on X4 Pro: verify cursor movement, confirm, back.",
+        "status": "patched - needs testing"
+      },
+      {
+        "id": "tools/counter_lua",
+        "title": "counter_lua",
+        "category": "tools",
+        "events_used": [
+          "up",
+          "left",
+          "right",
+          "confirm",
+          "back"
+        ],
+        "issues": [
+          "left+right: no physical mapping (remap needed)"
+        ],
+        "severity": "critical",
+        "notes": "Added device.input_mode(\"grid\"). Test on X4 Pro: verify cursor movement, confirm, back.",
+        "status": "patched - needs testing"
+      },
+      {
+        "id": "wifi/ap_picker_lua",
+        "title": "ap_picker_lua",
+        "category": "wifi",
+        "events_used": [
+          "up",
+          "down",
+          "left",
+          "right",
+          "confirm",
+          "back"
+        ],
+        "issues": [
+          "left+right: no physical mapping (remap needed)"
+        ],
+        "severity": "critical",
+        "notes": "Added device.input_mode(\"grid\"). Test on X4 Pro: verify cursor movement, confirm, back.",
+        "status": "patched - needs testing"
+      },
+      {
+        "id": "wifi/capture_sessions_lua",
+        "title": "capture_sessions_lua",
+        "category": "wifi",
+        "events_used": [
+          "up",
+          "down",
+          "left",
+          "right",
+          "confirm",
+          "back"
+        ],
+        "issues": [
+          "left+right: no physical mapping (remap needed)"
+        ],
+        "severity": "critical",
+        "notes": "Added device.input_mode(\"grid\"). Test on X4 Pro: verify cursor movement, confirm, back.",
+        "status": "patched - needs testing"
+      },
+      {
+        "id": "wifi/heat_map_lua",
+        "title": "heat_map_lua",
+        "category": "wifi",
+        "events_used": [
+          "up",
+          "down",
+          "left",
+          "right",
+          "confirm",
+          "back"
+        ],
+        "issues": [
+          "left+right: no physical mapping (remap needed)"
+        ],
+        "severity": "critical",
+        "notes": "Added device.input_mode(\"grid\"). Test on X4 Pro: verify cursor movement, confirm, back.",
+        "status": "patched - needs testing"
+      },
+      {
+        "id": "wifi/ruby_capture_browser_lua",
+        "title": "ruby_capture_browser_lua",
+        "category": "wifi",
+        "events_used": [
+          "up",
+          "down",
+          "left",
+          "right",
+          "confirm",
+          "back"
+        ],
+        "issues": [
+          "left+right: no physical mapping (remap needed)"
+        ],
+        "severity": "critical",
+        "notes": "Added device.input_mode(\"grid\"). Test on X4 Pro: verify cursor movement, confirm, back.",
+        "status": "patched - needs testing"
+      }
+    ],
+    "needs_testing": [
+      {
+        "id": "games/checkers_lua",
+        "title": "checkers_lua",
+        "category": "games",
+        "events_used": [
+          "up",
+          "down",
+          "left",
+          "right",
+          "confirm",
+          "back"
+        ],
+        "issues": [
+          "left+right: no physical mapping (remap needed)"
+        ],
+        "severity": "critical",
+        "notes": "Added device.input_mode(\"grid\"). Test on X4 Pro: verify cursor movement, confirm, back.",
+        "status": "patched - needs testing"
+      },
+      {
+        "id": "games/chess_lua",
+        "title": "chess_lua",
+        "category": "games",
+        "events_used": [
+          "up",
+          "down",
+          "left",
+          "right",
+          "confirm",
+          "back"
+        ],
+        "issues": [
+          "left+right: no physical mapping (remap needed)"
+        ],
+        "severity": "critical",
+        "notes": "Added device.input_mode(\"grid\"). Test on X4 Pro: verify cursor movement, confirm, back.",
+        "status": "patched - needs testing"
+      },
+      {
+        "id": "games/connectfour_lua",
+        "title": "connectfour_lua",
+        "category": "games",
+        "events_used": [
+          "up",
+          "down",
+          "left",
+          "right",
+          "confirm",
+          "back"
+        ],
+        "issues": [
+          "left+right: no physical mapping (remap needed)"
+        ],
+        "severity": "critical",
+        "notes": "Added device.input_mode(\"grid\"). Test on X4 Pro: verify cursor movement, confirm, back.",
+        "status": "patched - needs testing"
+      },
+      {
+        "id": "games/dungeon_lua",
+        "title": "dungeon_lua",
+        "category": "games",
+        "events_used": [
+          "up",
+          "down",
+          "left",
+          "right",
+          "confirm",
+          "back"
+        ],
+        "issues": [
+          "left+right: no physical mapping (remap needed)"
+        ],
+        "severity": "critical",
+        "notes": "Added device.input_mode(\"grid\"). Test on X4 Pro: verify cursor movement, confirm, back.",
+        "status": "patched - needs testing"
+      },
+      {
+        "id": "games/game2048_lua",
+        "title": "game2048_lua",
+        "category": "games",
+        "events_used": [
+          "up",
+          "down",
+          "left",
+          "right",
+          "confirm",
+          "back"
+        ],
+        "issues": [
+          "left+right: no physical mapping (remap needed)"
+        ],
+        "severity": "critical",
+        "notes": "Added device.input_mode(\"grid\"). Test on X4 Pro: verify cursor movement, confirm, back.",
+        "status": "patched - needs testing"
+      },
+      {
+        "id": "games/go_lua",
+        "title": "go_lua",
+        "category": "games",
+        "events_used": [
+          "up",
+          "down",
+          "left",
+          "right",
+          "confirm",
+          "back"
+        ],
+        "issues": [
+          "left+right: no physical mapping (remap needed)"
+        ],
+        "severity": "critical",
+        "notes": "Added device.input_mode(\"grid\"). Test on X4 Pro: verify cursor movement, confirm, back.",
+        "status": "patched - needs testing"
+      },
+      {
+        "id": "games/guesswho_lua",
+        "title": "guesswho_lua",
+        "category": "games",
+        "events_used": [
+          "up",
+          "down",
+          "left",
+          "right",
+          "confirm",
+          "back"
+        ],
+        "issues": [
+          "left+right: no physical mapping (remap needed)"
+        ],
+        "severity": "critical",
+        "notes": "Added device.input_mode(\"grid\"). Test on X4 Pro: verify cursor movement, confirm, back.",
+        "status": "patched - needs testing"
+      },
+      {
+        "id": "games/hearts_lua",
+        "title": "hearts_lua",
+        "category": "games",
+        "events_used": [
+          "up",
+          "down",
+          "left",
+          "right",
+          "confirm",
+          "back"
+        ],
+        "issues": [
+          "left+right: no physical mapping (remap needed)"
+        ],
+        "severity": "critical",
+        "notes": "Added device.input_mode(\"grid\"). Test on X4 Pro: verify cursor movement, confirm, back.",
+        "status": "patched - needs testing"
+      },
+      {
+        "id": "games/hex_lua",
+        "title": "hex_lua",
+        "category": "games",
+        "events_used": [
+          "up",
+          "down",
+          "left",
+          "right",
+          "confirm",
+          "back"
+        ],
+        "issues": [
+          "left+right: no physical mapping (remap needed)"
+        ],
+        "severity": "critical",
+        "notes": "Added device.input_mode(\"grid\"). Test on X4 Pro: verify cursor movement, confirm, back.",
+        "status": "patched - needs testing"
+      },
+      {
+        "id": "games/jaipur_lua",
+        "title": "jaipur_lua",
+        "category": "games",
+        "events_used": [
+          "up",
+          "down",
+          "left",
+          "right",
+          "confirm",
+          "back"
+        ],
+        "issues": [
+          "left+right: no physical mapping (remap needed)"
+        ],
+        "severity": "critical",
+        "notes": "Added device.input_mode(\"grid\"). Test on X4 Pro: verify cursor movement, confirm, back.",
+        "status": "patched - needs testing"
+      },
+      {
+        "id": "games/knucklebones_lua",
+        "title": "knucklebones_lua",
+        "category": "games",
+        "events_used": [
+          "up",
+          "down",
+          "left",
+          "right",
+          "confirm",
+          "back"
+        ],
+        "issues": [
+          "left+right: no physical mapping (remap needed)"
+        ],
+        "severity": "critical",
+        "notes": "Added device.input_mode(\"grid\"). Test on X4 Pro: verify cursor movement, confirm, back.",
+        "status": "patched - needs testing"
+      },
+      {
+        "id": "games/minesweeper_lua",
+        "title": "minesweeper_lua",
+        "category": "games",
+        "events_used": [
+          "up",
+          "down",
+          "left",
+          "right",
+          "confirm",
+          "back"
+        ],
+        "issues": [
+          "left+right: no physical mapping (remap needed)"
+        ],
+        "severity": "critical",
+        "notes": "Added device.input_mode(\"grid\"). Test on X4 Pro: verify cursor movement, confirm, back.",
+        "status": "patched - needs testing"
+      },
+      {
+        "id": "games/murdle_lua",
+        "title": "murdle_lua",
+        "category": "games",
+        "events_used": [
+          "up",
+          "down",
+          "left",
+          "right",
+          "confirm",
+          "back"
+        ],
+        "issues": [
+          "left+right: no physical mapping (remap needed)"
+        ],
+        "severity": "critical",
+        "notes": "Added device.input_mode(\"grid\"). Test on X4 Pro: verify cursor movement, confirm, back.",
+        "status": "patched - needs testing"
+      },
+      {
+        "id": "games/picross_lua",
+        "title": "picross_lua",
+        "category": "games",
+        "events_used": [
+          "up",
+          "down",
+          "left",
+          "right",
+          "confirm",
+          "back"
+        ],
+        "issues": [
+          "left+right: no physical mapping (remap needed)"
+        ],
+        "severity": "critical",
+        "notes": "Added device.input_mode(\"grid\"). Test on X4 Pro: verify cursor movement, confirm, back.",
+        "status": "patched - needs testing"
+      },
+      {
+        "id": "games/play_nearby_ttt_lua",
+        "title": "play_nearby_ttt_lua",
+        "category": "games",
+        "events_used": [
+          "up",
+          "down",
+          "left",
+          "right",
+          "confirm",
+          "back"
+        ],
+        "issues": [
+          "left+right: no physical mapping (remap needed)"
+        ],
+        "severity": "critical",
+        "notes": "Added device.input_mode(\"grid\"). Test on X4 Pro: verify cursor movement, confirm, back.",
+        "status": "patched - needs testing"
+      },
+      {
+        "id": "games/seasalt_lua",
+        "title": "seasalt_lua",
+        "category": "games",
+        "events_used": [
+          "up",
+          "down",
+          "left",
+          "right",
+          "confirm",
+          "back"
+        ],
+        "issues": [
+          "left+right: no physical mapping (remap needed)"
+        ],
+        "severity": "critical",
+        "notes": "Added device.input_mode(\"grid\"). Test on X4 Pro: verify cursor movement, confirm, back.",
+        "status": "patched - needs testing"
+      },
+      {
+        "id": "games/sudoku_lua",
+        "title": "sudoku_lua",
+        "category": "games",
+        "events_used": [
+          "up",
+          "down",
+          "left",
+          "right",
+          "confirm",
+          "back"
+        ],
+        "issues": [
+          "left+right: no physical mapping (remap needed)"
+        ],
+        "severity": "critical",
+        "notes": "Added device.input_mode(\"grid\"). Test on X4 Pro: verify cursor movement, confirm, back.",
+        "status": "patched - needs testing"
+      },
+      {
+        "id": "games/underhand_lua",
+        "title": "underhand_lua",
+        "category": "games",
+        "events_used": [
+          "up",
+          "down",
+          "left",
+          "right",
+          "confirm",
+          "back"
+        ],
+        "issues": [
+          "left+right: no physical mapping (remap needed)"
+        ],
+        "severity": "critical",
+        "notes": "Added device.input_mode(\"grid\"). Test on X4 Pro: verify cursor movement, confirm, back.",
+        "status": "patched - needs testing"
+      },
+      {
+        "id": "games/wavelength_lua",
+        "title": "wavelength_lua",
+        "category": "games",
+        "events_used": [
+          "up",
+          "down",
+          "left",
+          "right",
+          "confirm",
+          "back"
+        ],
+        "issues": [
+          "left+right: no physical mapping (remap needed)"
+        ],
+        "severity": "critical",
+        "notes": "Added device.input_mode(\"grid\"). Test on X4 Pro: verify cursor movement, confirm, back.",
+        "status": "patched - needs testing"
+      },
+      {
+        "id": "games/wordle_lua",
+        "title": "wordle_lua",
+        "category": "games",
+        "events_used": [
+          "up",
+          "down",
+          "left",
+          "right",
+          "confirm",
+          "back"
+        ],
+        "issues": [
+          "left+right: no physical mapping (remap needed)"
+        ],
+        "severity": "critical",
+        "notes": "Added device.input_mode(\"grid\"). Test on X4 Pro: verify cursor movement, confirm, back.",
+        "status": "patched - needs testing"
+      },
+      {
+        "id": "games/yahtzee_lua",
+        "title": "yahtzee_lua",
+        "category": "games",
+        "events_used": [
+          "up",
+          "down",
+          "left",
+          "right",
+          "confirm",
+          "back"
+        ],
+        "issues": [
+          "left+right: no physical mapping (remap needed)"
+        ],
+        "severity": "critical",
+        "notes": "Added device.input_mode(\"grid\"). Test on X4 Pro: verify cursor movement, confirm, back.",
+        "status": "patched - needs testing"
+      },
+      {
+        "id": "media/player_lua",
+        "title": "player_lua",
+        "category": "media",
+        "events_used": [
+          "up",
+          "down",
+          "left",
+          "right",
+          "confirm",
+          "back"
+        ],
+        "issues": [
+          "left+right: no physical mapping (remap needed)"
+        ],
+        "severity": "critical",
+        "notes": "Added device.input_mode(\"grid\"). Test on X4 Pro: verify cursor movement, confirm, back.",
+        "status": "patched - needs testing"
+      },
+      {
+        "id": "network/airtag_test_lua",
+        "title": "airtag_test_lua",
+        "category": "network",
+        "events_used": [
+          "up",
+          "left",
+          "right",
+          "confirm",
+          "back"
+        ],
+        "issues": [
+          "left+right: no physical mapping (remap needed)"
+        ],
+        "severity": "critical",
+        "notes": "Added device.input_mode(\"grid\"). Test on X4 Pro: verify cursor movement, confirm, back.",
+        "status": "patched - needs testing"
+      },
+      {
+        "id": "network/ble_beacon_lua",
+        "title": "ble_beacon_lua",
+        "category": "network",
+        "events_used": [
+          "up",
+          "down",
+          "left",
+          "right",
+          "confirm",
+          "back",
+          "up_hold",
+          "down_hold"
+        ],
+        "issues": [
+          "up/down_hold: works physically but check if confirm_hold also needed",
+          "left+right: no physical mapping (remap needed)"
+        ],
+        "severity": "critical",
+        "notes": "Added device.input_mode(\"grid\"). Test on X4 Pro: verify cursor movement, confirm, back.",
+        "status": "patched - needs testing"
+      },
+      {
+        "id": "network/gatt_browser_lua",
+        "title": "gatt_browser_lua",
+        "category": "network",
+        "events_used": [
+          "up",
+          "down",
+          "right",
+          "confirm",
+          "back"
+        ],
+        "issues": [
+          "right: no physical mapping"
+        ],
+        "severity": "critical",
+        "notes": "Added device.input_mode(\"grid\"). Test on X4 Pro: verify cursor movement, confirm, back.",
+        "status": "patched - needs testing"
+      },
+      {
+        "id": "network/ha_frontend_lua",
+        "title": "ha_frontend_lua",
+        "category": "network",
+        "events_used": [
+          "up",
+          "down",
+          "left",
+          "right",
+          "confirm",
+          "back"
+        ],
+        "issues": [
+          "left+right: no physical mapping (remap needed)"
+        ],
+        "severity": "critical",
+        "notes": "Added device.input_mode(\"grid\"). Test on X4 Pro: verify cursor movement, confirm, back.",
+        "status": "patched - needs testing"
+      },
+      {
+        "id": "reading/cover_grid_lua",
+        "title": "cover_grid_lua",
+        "category": "reading",
+        "events_used": [
+          "up",
+          "down",
+          "left",
+          "right",
+          "confirm",
+          "back"
+        ],
+        "issues": [
+          "left+right: no physical mapping (remap needed)"
+        ],
+        "severity": "critical",
+        "notes": "Added device.input_mode(\"grid\"). Test on X4 Pro: verify cursor movement, confirm, back.",
+        "status": "patched - needs testing"
+      },
+      {
+        "id": "reading/hackernews_lua",
+        "title": "hackernews_lua",
+        "category": "reading",
+        "events_used": [
+          "up",
+          "down",
+          "left",
+          "right",
+          "confirm",
+          "back"
+        ],
+        "issues": [
+          "left+right: no physical mapping (remap needed)"
+        ],
+        "severity": "critical",
+        "notes": "Added device.input_mode(\"grid\"). Test on X4 Pro: verify cursor movement, confirm, back.",
+        "status": "patched - needs testing"
+      },
+      {
+        "id": "reading/koreader_sync_lua",
+        "title": "koreader_sync_lua",
+        "category": "reading",
+        "events_used": [
+          "up",
+          "down",
+          "left",
+          "right",
+          "confirm",
+          "back"
+        ],
+        "issues": [
+          "left+right: no physical mapping (remap needed)"
+        ],
+        "severity": "critical",
+        "notes": "Added device.input_mode(\"grid\"). Test on X4 Pro: verify cursor movement, confirm, back.",
+        "status": "patched - needs testing"
+      },
+      {
+        "id": "reading/library_grid_lua",
+        "title": "library_grid_lua",
+        "category": "reading",
+        "events_used": [
+          "up",
+          "down",
+          "left",
+          "right",
+          "confirm",
+          "back"
+        ],
+        "issues": [
+          "left+right: no physical mapping (remap needed)"
+        ],
+        "severity": "critical",
+        "notes": "Added device.input_mode(\"grid\"). Test on X4 Pro: verify cursor movement, confirm, back.",
+        "status": "patched - needs testing"
+      },
+      {
+        "id": "reading/notes_lua",
+        "title": "notes_lua",
+        "category": "reading",
+        "events_used": [
+          "up",
+          "down",
+          "left",
+          "right",
+          "confirm",
+          "back"
+        ],
+        "issues": [
+          "left+right: no physical mapping (remap needed)"
+        ],
+        "severity": "critical",
+        "notes": "Added device.input_mode(\"grid\"). Test on X4 Pro: verify cursor movement, confirm, back.",
+        "status": "patched - needs testing"
+      },
+      {
+        "id": "reading/opds_lua",
+        "title": "opds_lua",
+        "category": "reading",
+        "events_used": [
+          "up",
+          "down",
+          "left",
+          "right",
+          "confirm",
+          "back"
+        ],
+        "issues": [
+          "left+right: no physical mapping (remap needed)"
+        ],
+        "severity": "critical",
+        "notes": "Added device.input_mode(\"grid\"). Test on X4 Pro: verify cursor movement, confirm, back.",
+        "status": "patched - needs testing"
+      },
+      {
+        "id": "reading/study_lua",
+        "title": "study_lua",
+        "category": "reading",
+        "events_used": [
+          "up",
+          "down",
+          "left",
+          "right",
+          "confirm",
+          "back"
+        ],
+        "issues": [
+          "left+right: no physical mapping (remap needed)"
+        ],
+        "severity": "critical",
+        "notes": "Added device.input_mode(\"grid\"). Test on X4 Pro: verify cursor movement, confirm, back.",
+        "status": "patched - needs testing"
+      },
+      {
+        "id": "reading/trivia_lua",
+        "title": "trivia_lua",
+        "category": "reading",
+        "events_used": [
+          "up",
+          "down",
+          "left",
+          "right",
+          "confirm",
+          "back"
+        ],
+        "issues": [
+          "left+right: no physical mapping (remap needed)"
+        ],
+        "severity": "critical",
+        "notes": "Added device.input_mode(\"grid\"). Test on X4 Pro: verify cursor movement, confirm, back.",
+        "status": "patched - needs testing"
+      },
+      {
+        "id": "reading/txt_reader_lua",
+        "title": "txt_reader_lua",
+        "category": "reading",
+        "events_used": [
+          "up",
+          "down",
+          "left",
+          "right",
+          "confirm",
+          "back"
+        ],
+        "issues": [
+          "left+right: no physical mapping (remap needed)"
+        ],
+        "severity": "critical",
+        "notes": "Added device.input_mode(\"grid\"). Test on X4 Pro: verify cursor movement, confirm, back.",
+        "status": "patched - needs testing"
+      },
+      {
+        "id": "reading/xkcd_lua",
+        "title": "xkcd_lua",
+        "category": "reading",
+        "events_used": [
+          "up",
+          "down",
+          "left",
+          "right",
+          "confirm",
+          "back"
+        ],
+        "issues": [
+          "left+right: no physical mapping (remap needed)"
+        ],
+        "severity": "critical",
+        "notes": "Added device.input_mode(\"grid\"). Test on X4 Pro: verify cursor movement, confirm, back.",
+        "status": "patched - needs testing"
+      },
+      {
+        "id": "security/medical_id_lua",
+        "title": "medical_id_lua",
+        "category": "security",
+        "events_used": [
+          "up",
+          "down",
+          "right",
+          "confirm",
+          "back"
+        ],
+        "issues": [
+          "right: no physical mapping"
+        ],
+        "severity": "critical",
+        "notes": "Added device.input_mode(\"grid\"). Test on X4 Pro: verify cursor movement, confirm, back.",
+        "status": "patched - needs testing"
+      },
+      {
+        "id": "security/quick_wipe_lua",
+        "title": "quick_wipe_lua",
+        "category": "security",
+        "events_used": [
+          "up",
+          "down",
+          "left",
+          "confirm",
+          "back"
+        ],
+        "issues": [
+          "left: no physical mapping"
+        ],
+        "severity": "critical",
+        "notes": "Added device.input_mode(\"grid\"). Test on X4 Pro: verify cursor movement, confirm, back.",
+        "status": "patched - needs testing"
+      },
+      {
+        "id": "security/screen_decoy_lua",
+        "title": "screen_decoy_lua",
+        "category": "security",
+        "events_used": [
+          "up",
+          "down",
+          "left",
+          "right",
+          "confirm",
+          "back"
+        ],
+        "issues": [
+          "left+right: no physical mapping (remap needed)"
+        ],
+        "severity": "critical",
+        "notes": "Added device.input_mode(\"grid\"). Test on X4 Pro: verify cursor movement, confirm, back.",
+        "status": "patched - needs testing"
+      },
+      {
+        "id": "security/totp_lua",
+        "title": "totp_lua",
+        "category": "security",
+        "events_used": [
+          "up",
+          "down",
+          "left",
+          "right",
+          "confirm",
+          "back"
+        ],
+        "issues": [
+          "left+right: no physical mapping (remap needed)"
+        ],
+        "severity": "critical",
+        "notes": "Added device.input_mode(\"grid\"). Test on X4 Pro: verify cursor movement, confirm, back.",
+        "status": "patched - needs testing"
+      },
+      {
+        "id": "tools/calculator_lua",
+        "title": "calculator_lua",
+        "category": "tools",
+        "events_used": [
+          "up",
+          "down",
+          "left",
+          "right",
+          "confirm",
+          "back"
+        ],
+        "issues": [
+          "left+right: no physical mapping (remap needed)"
+        ],
+        "severity": "critical",
+        "notes": "Added device.input_mode(\"grid\"). Test on X4 Pro: verify cursor movement, confirm, back.",
+        "status": "patched - needs testing"
+      },
+      {
+        "id": "tools/counter_lua",
+        "title": "counter_lua",
+        "category": "tools",
+        "events_used": [
+          "up",
+          "left",
+          "right",
+          "confirm",
+          "back"
+        ],
+        "issues": [
+          "left+right: no physical mapping (remap needed)"
+        ],
+        "severity": "critical",
+        "notes": "Added device.input_mode(\"grid\"). Test on X4 Pro: verify cursor movement, confirm, back.",
+        "status": "patched - needs testing"
+      },
+      {
+        "id": "wifi/ap_picker_lua",
+        "title": "ap_picker_lua",
+        "category": "wifi",
+        "events_used": [
+          "up",
+          "down",
+          "left",
+          "right",
+          "confirm",
+          "back"
+        ],
+        "issues": [
+          "left+right: no physical mapping (remap needed)"
+        ],
+        "severity": "critical",
+        "notes": "Added device.input_mode(\"grid\"). Test on X4 Pro: verify cursor movement, confirm, back.",
+        "status": "patched - needs testing"
+      },
+      {
+        "id": "wifi/capture_sessions_lua",
+        "title": "capture_sessions_lua",
+        "category": "wifi",
+        "events_used": [
+          "up",
+          "down",
+          "left",
+          "right",
+          "confirm",
+          "back"
+        ],
+        "issues": [
+          "left+right: no physical mapping (remap needed)"
+        ],
+        "severity": "critical",
+        "notes": "Added device.input_mode(\"grid\"). Test on X4 Pro: verify cursor movement, confirm, back.",
+        "status": "patched - needs testing"
+      },
+      {
+        "id": "wifi/heat_map_lua",
+        "title": "heat_map_lua",
+        "category": "wifi",
+        "events_used": [
+          "up",
+          "down",
+          "left",
+          "right",
+          "confirm",
+          "back"
+        ],
+        "issues": [
+          "left+right: no physical mapping (remap needed)"
+        ],
+        "severity": "critical",
+        "notes": "Added device.input_mode(\"grid\"). Test on X4 Pro: verify cursor movement, confirm, back.",
+        "status": "patched - needs testing"
+      },
+      {
+        "id": "wifi/ruby_capture_browser_lua",
+        "title": "ruby_capture_browser_lua",
+        "category": "wifi",
+        "events_used": [
+          "up",
+          "down",
+          "left",
+          "right",
+          "confirm",
+          "back"
+        ],
+        "issues": [
+          "left+right: no physical mapping (remap needed)"
+        ],
+        "severity": "critical",
+        "notes": "Added device.input_mode(\"grid\"). Test on X4 Pro: verify cursor movement, confirm, back.",
+        "status": "patched - needs testing"
+      }
+    ],
+    "verifying": []
+  }
+}

@@ -123,8 +123,7 @@ def handle_vfs(dev, req):
                 f.seek(h["pos"])
                 data = f.read(n)
             h["pos"] += len(data)
-            send_line(dev, f"VFS OK {len(data)}".encode())
-            dev.write(data)
+            send_line(dev, f"VFS OK {data.hex()}".encode())
         else:
             send_line(dev, b"VFS ERR")
     elif op == "FSEEK" and len(parts) >= 3:
@@ -166,7 +165,7 @@ def handle_vfs(dev, req):
 
 
 def main():
-    dev = serial.Serial(PORT, 921600, timeout=0.05)
+    dev = serial.Serial(PORT, 921600, timeout=0.5)
 
     # The firmware's storage handshake ("VFS HELLO" + the 20 s wait) can start
     # before we attach. An unsolicited "VFS OK 1" satisfies it: hello() consumes

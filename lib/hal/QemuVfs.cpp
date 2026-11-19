@@ -9,7 +9,7 @@
 namespace qemuvfs {
 
 namespace {
-constexpr unsigned long RX_TIMEOUT_MS = 500;
+constexpr unsigned long RX_TIMEOUT_MS = 2000;
 constexpr unsigned long HELLO_TIMEOUT_MS = 120000;
 
 bool readLine(String& out) {
@@ -36,7 +36,11 @@ bool readPayload(void* out, size_t n) {
       dst[have++] = static_cast<uint8_t>(Serial1.read());
       if (have >= n) return true;
     }
-    if (millis() - start > RX_TIMEOUT_MS * 4) return false;
+    if (millis() - start > RX_TIMEOUT_MS * 4) {
+      LOG_ERR("VFS", "readPayload timeout: got %u of %u bytes", static_cast<unsigned>(have),
+              static_cast<unsigned>(n));
+      return false;
+    }
     delay(2);
   }
   return true;
@@ -181,15 +185,45 @@ int openRead(const char* path, bool* isDirOut) {
 
 int fileRead(int id, void* out, size_t n) {
   char idStr[24], nStr[24];
-  snprintf(idStr, sizeof(idStr), "%d", id);
-  snprintf(nStr, sizeof(nStr), "%u", static_cast<unsigned>(n));
-  String value;
-  const int r = exchange("FREAD", idStr, nStr, nullptr, value);
-  if (r != 1) return -1;
-  size_t len = static_cast<size_t>(value.toInt());
-  if (len > n) return -1;
-  if (len > 0 && !readPayload(out, len)) return -1;
-  return static_cast<int>(len);
+  auto* dst = static_cast<uint8_t*>(out);
+  size_t total = 0;
+  unsigned long stall = 0;
+  while (total < n) {
+    const size_t chunk = std::min<size_t>(n - total, 128);
+    snprintf(idStr, sizeof(idStr), "%d", id);
+    snprintf(nStr, sizeof(nStr), "%u", static_cast<unsigned>(chunk));
+    String value;
+    const int r = exchange("FREAD", idStr, nStr, nullptr, value);
+    if (r != 1) {
+      // Never return short: retry the same chunk. The caller (ZipFile etc.)
+      // expects exact-length reads; a partial return corrupts the stream.
+      const unsigned long now = millis();
+      if (stall == 0) stall = now;
+      if (now - stall > RX_TIMEOUT_MS * 6) {
+        LOG_ERR("VFS", "fileRead %d r=%d at %u giving up", id, r, static_cast<unsigned>(total));
+        return static_cast<int>(total > 0 ? total : -1);
+      }
+      fileSeek(id, total);  // the peer may have advanced its cursor; rewind
+      delay(10);
+      continue;
+    }
+    stall = 0;
+    // Response is hex-encoded (no separate payload stream).
+    const size_t hexLen = value.length();
+    const size_t decoded = std::min(hexLen / 2, n - total);
+    for (size_t i = 0; i < decoded; i++) {
+      const String hexPair = value.substring(2 * i, 2 * i + 2);
+      dst[total + i] = static_cast<uint8_t>(strtol(hexPair.c_str(), nullptr, 16));
+    }
+    if (decoded != chunk) {
+      LOG_ERR("VFS", "fileRead %d wanted %u got %u hex chars (%u bytes) retrying", id,
+              static_cast<unsigned>(chunk), static_cast<unsigned>(hexLen), static_cast<unsigned>(decoded));
+      delay(10);
+      continue;
+    }
+    total += decoded;
+  }
+  return static_cast<int>(total);
 }
 
 bool fileSeek(int id, size_t pos) {
