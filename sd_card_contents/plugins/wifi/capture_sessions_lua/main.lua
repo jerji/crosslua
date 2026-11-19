@@ -10,7 +10,7 @@ local REC_REFRESH_MS = 2000  -- status redraw period while recording (e-ink: kee
 local W, H = 0, 0
 
 local st = {
-  chan = 1,          -- channel for the next new session (left/right on the list)
+  chan = 1,          -- channel for the next new session (set on the record screen, left/right hops it)
   sel = 1,           -- list cursor: 1 = "New capture", 2.. = sessions
   rows = {},         -- { {name, n, size}, ... } newest first
   free = nil,        -- SD free bytes (fs.volume), or nil
@@ -126,6 +126,7 @@ local function record()
     if e == "left" or e == "right" then
       local d = (e == "right") and 1 or -1
       st.rec_chan = ((st.rec_chan - 1 + d) % MAX_CH) + 1
+      st.chan = st.rec_chan              -- next capture starts on the channel you left off on
       wifi.monitor_channel(st.rec_chan)
       draw_rec(); gfx.present()
       last_draw = system.millis()
@@ -177,20 +178,19 @@ local function draw_list()
   end
   local free = st.free and string.format("SD free %s", human(st.free)) or "SD free ?"
   footer(string.format("%d session(s)   %s", #st.rows, free))
+  gfx.text(14, H - 60, "Left/Right move, Confirm = start / delete", "small")
 end
 
 local function handle_list(e)
   local total = #st.rows + 1
-  if e == "up" then
+  -- X4 Pro grid mode sends left/right (not up/down) from the physical buttons: both pairs move the cursor.
+  -- Channel is chosen on the record screen (left/right hops it) and remembered for the next capture.
+  if e == "up" or e == "left" then
     st.sel = st.sel > 1 and st.sel - 1 or total
     st.confirm_del = nil
-  elseif e == "down" then
+  elseif e == "down" or e == "right" then
     st.sel = st.sel < total and st.sel + 1 or 1
     st.confirm_del = nil
-  elseif e == "left" or e == "right" then
-    local d = (e == "right") and 1 or -1
-    st.chan = ((st.chan - 1 + d) % MAX_CH) + 1
-    st.status = ""
   elseif e == "confirm" then
     if st.sel == 1 then
       st.confirm_del = nil
