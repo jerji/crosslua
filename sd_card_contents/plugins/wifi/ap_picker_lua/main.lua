@@ -6,7 +6,9 @@
 --   {"version":1, "whitelist":[{"bssid":"AA:BB:..","ssid":"..","channel":6}, ...], "blacklist":[...]}
 -- Marks survive rescans and relaunches. A rescan never drops a marked AP.
 --
--- Controls: up/down move, OK cycles none -> W -> B -> none, Left rescans, Right saves, Back saves and exits.
+-- Controls: Left/Right (or Up/Down) move the cursor, Confirm (or tap a row) cycles none -> W -> B -> none.
+-- Tap the bottom-left band = rescan, bottom-right = save. Left on the top row also rescans. Back saves and exits.
+-- (X4 Pro grid mode sends left/right from its two physical buttons; up/down never arrive from buttons there.)
 
 local OUT = "app:ap_list.json"
 local MAX_SCAN = 40
@@ -20,6 +22,8 @@ local order = {}   -- bssids, strongest first, marked-but-absent last
 local cur, top = 1, 1
 local dirty = false
 local status = ""
+-- layout from the last draw(), used to map touches back to rows and footer bands
+local row_y0, row_h, row_n, band_y = 0, 1, 0, 0
 
 local function clip(s, n)
   if #s > n then return s:sub(1, n - 2) .. ".." end
@@ -112,9 +116,11 @@ local function draw()
   local rowh = lh + 6
   local y0 = lh + 16
   local foot_y = H - lh - 8
-  local status_y = foot_y - lh - 4
+  local hint_y = foot_y - lh - 4
+  local status_y = hint_y - lh - 4
   local rows_bottom = status_y - 6
   local rows = math.max(1, math.floor((rows_bottom - y0) / rowh))
+  row_y0, row_h, row_n, band_y = y0, rowh, rows, hint_y - 4
 
   if cur < top then top = cur end
   if cur >= top + rows then top = cur - rows + 1 end
@@ -146,8 +152,22 @@ local function draw()
   end
 
   gfx.text(8, status_y, status, FONT)
-  gfx.text(8, foot_y, "OK mark  L scan  R save  Back exit", FONT)
+  gfx.text(8, hint_y, "Tap bottom-left = scan, bottom-right = save", FONT)
+  gfx.text(8, foot_y, "L/R move  OK mark  Back save+exit", FONT)
   gfx.present("fast")
+end
+
+-- row index under a touch point, or nil
+local function row_at(y)
+  if y < row_y0 or y >= row_y0 + row_n * row_h then return nil end
+  local i = top + (y - row_y0) // row_h
+  if i >= 1 and i <= #order then return i end
+  return nil
+end
+
+local function move(d)
+  if #order == 0 then return end
+  cur = math.max(1, math.min(#order, cur + d))
 end
 
 local function main()
@@ -157,12 +177,21 @@ local function main()
   draw()
   while true do
     local ev = input.wait()
-    if ev == "up" then
-      if cur > 1 then cur = cur - 1 end
-    elseif ev == "down" then
-      if cur < #order then cur = cur + 1 end
+    if ev == "up" or ev == "left" then
+      -- X4 Pro grid mode: left/right from the physical buttons. Left on the top row rescans.
+      if ev == "left" and cur == 1 then scan() else move(-1) end
+    elseif ev == "down" or ev == "right" then
+      move(1)
     elseif ev == "confirm" then
-      if #order > 0 then
+      local px, py = input.pos()
+      if px and py >= band_y then
+        -- bottom band is touch-only: left half rescans, right half saves
+        if px < W // 2 then scan() else save() end
+      elseif #order > 0 then
+        if px then                       -- a touch marks the row it landed on
+          local i = row_at(py)
+          if i then cur = i end
+        end
         local b = order[cur]
         local m = marks[b]
         if m == nil then marks[b] = "w"
@@ -171,10 +200,6 @@ local function main()
         dirty = true
         status = "marked (unsaved)"
       end
-    elseif ev == "left" then
-      scan()
-    elseif ev == "right" then
-      save()
     elseif ev == "back" then
       if dirty then save() end
       app.exit()
