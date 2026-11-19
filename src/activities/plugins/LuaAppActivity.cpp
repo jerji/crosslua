@@ -2013,12 +2013,7 @@ class LuaAppActivity::Backend final : public crosslua::Backend {
   bool saveScreenBmp(const char* path, char* err, size_t errCap) override {
     // The firmware's own screenshot writer: rotates to the panel's portrait orientation while streaming rows (68-byte
     // buffer).
-    const uint8_t* fb = r_.getFrameBuffer();
-    if (!fb) {
-      snprintf(err, errCap, "no frame buffer");
-      return false;
-    }
-    if (!ScreenshotUtil::saveFramebufferAsBmp(path, fb, r_.getDisplayWidth(), r_.getDisplayHeight())) {
+    if (!ScreenshotUtil::saveFramebufferAsBmp(path, r_)) {
       snprintf(err, errCap, "could not write the BMP (SD card full or not writable)");
       return false;
     }
@@ -3334,16 +3329,26 @@ void LuaAppActivity::collectInput() {
   if (mappedInput.wasLongPressed(B::Down, BUTTON_HOLD_MS)) push("down_hold");
   // Back has no "<name>_hold": holding Back past EXIT_HOLD_MS is the force-quit escape, not an app gesture.
 
-  // Touch tap: classify as confirm (main area) or back (header zone).
+  // Touch tap: classify as confirm (main area), or in grid mode, zone
+  // the screen into thirds for on-screen vertical cursor control.
   // This must come before the wasReleased(Back) check because back-gesture's
   // wasTouchTap() consumes every tap, starving the confirm path below it.
-  // The header-zone branch replaces the touch portion of wasBackGesture for
-  // Lua apps; the swipe-back check after it still works (edge swipe doesn't
-  // use wasTouchTap).
   {
     int tapX = 0, tapY = 0;
     if (mappedInput.wasScreenTapped(tapX, tapY)) {
-      push("confirm", tapX, tapY);
+      if (crosslua::g_inputGridMode) {
+        // Top/bottom third of the screen act as up/down for grid apps
+        // that have no physical vertical button.  Middle third = confirm.
+        const int h = renderer.getScreenHeight();
+        if (tapY < h / 3)
+          push("up", tapX, tapY);
+        else if (tapY >= 2 * h / 3)
+          push("down", tapX, tapY);
+        else
+          push("confirm", tapX, tapY);
+      } else {
+        push("confirm", tapX, tapY);
+      }
     }
   }
   if (mappedInput.wasReleased(B::Back)) push("back");

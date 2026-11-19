@@ -155,7 +155,7 @@ std::vector<String> HalStorage::listFiles(const char* path, int maxFiles) {
 }
 
 uint64_t HalStorage::sdTotalBytes() { HAL_STORAGE_WRAPPED_CALL(sdTotalBytes); }
-bool HalStorage::sdUsedBytes(uint64_t& usedBytes) { HAL_STORAGE_WRAPPED_CALL(sdUsedBytes, usedBytes); }
+uint64_t HalStorage::sdUsedBytes() { HAL_STORAGE_WRAPPED_CALL(sdUsedBytes); }
 
 String HalStorage::readFile(const char* path) {
 #ifdef QEMU_SIM
@@ -466,7 +466,6 @@ bool HalFile::seek64(uint64_t pos) { HAL_FILE_WRAPPED_CALL(seekSet, pos); }
 bool HalFile::seekCur(int64_t offset) { HAL_FILE_WRAPPED_CALL(seekCur, offset); }
 bool HalFile::seekSet(size_t offset) { HAL_FILE_WRAPPED_CALL(seekSet, offset); }
 bool HalFile::truncate(const uint64_t length) { HAL_FILE_WRAPPED_CALL(truncate, length); }
-<<<<<<< HEAD
 int HalFile::available() const {
 #ifdef QEMU_SIM
   if (qemuvfs::enabled() && impl) return static_cast<int>(impl->vfsSize - impl->vfsPos);

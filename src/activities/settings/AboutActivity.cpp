@@ -193,8 +193,8 @@ void AboutActivity::onEnter() {
   // The firmware does not boot without a card, so About always has one.
   const uint64_t sdTotal = Storage.sdTotalBytes();
   rowValues_[ITEM_SD_SIZE] = formatBytes(sdTotal);
-  uint64_t sdUsed = 0;
-  if (Storage.sdUsedBytes(sdUsed)) {
+  const uint64_t sdUsed = Storage.sdUsedBytes();
+  if (sdUsed > 0) {
     rowValues_[ITEM_SD_USED] = formatBytes(sdUsed);
     rowValues_[ITEM_SD_FREE] = formatBytes(sdUsed <= sdTotal ? sdTotal - sdUsed : 0);
   } else {

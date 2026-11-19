@@ -34,6 +34,11 @@
 //     ctx.reader.init(true);
 //     ctx.reader.setReadCallback(myCb);
 //
+// Returns Done on successful full read, Error on corruption, More on short
+// read when input is exhausted (caller should refill with setSource or
+// extend the source range and retry).
+enum class InflateStatus { Done, Error, More };
+
 class InflateReader {
  public:
   InflateReader() = default;
@@ -77,6 +82,8 @@ class InflateReader {
   // Decompress exactly len bytes into dest.
   // Returns false if the stream ends before producing len bytes, or on error.
   bool read(uint8_t* dest, size_t len);
+
+  InflateStatus readAtMost(uint8_t* dest, size_t maxLen, size_t* produced);
 
  private:
   uzlib_uncomp decomp = {};

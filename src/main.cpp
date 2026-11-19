@@ -144,6 +144,7 @@ enum class BootResume : uint8_t {
 // device back up against the user's sleep gesture. Never cleared:
 // startDeepSleep() does not return, so a set latch only ends at the wakeup reset.
 static bool deepSleepInProgress = false;
+static bool wakePowerReleasePending = false;
 static unsigned long lastInputTime = 0;
 
 // Screens that block auto-sleep can hold one static image for as long as they
@@ -955,7 +956,7 @@ void pollSerial() {
         if (target == "Home")
           activityManager.goHome();
         else if (target == "Plugins")
-          activityManager.goToPlugins(false);
+          activityManager.goToPlugins();
         else if (target == "Library")
           activityManager.goToLibrary();
         else if (target == "FileTransfer" || target == "FT")

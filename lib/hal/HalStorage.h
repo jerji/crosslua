@@ -23,6 +23,7 @@ class HalStorage {
  public:
   HalStorage();
   bool begin();
+  bool ready() const;
   // Stop the SD card for deep sleep: unmount, stop the SDMMC host, and release
   // the bus pads (no-op on SPI boards). Call only after all file users have
   // stopped; open HalFiles become invalid. A deep-sleep wake resets the MCU and
@@ -37,8 +38,7 @@ class HalStorage {
   bool usbDriveHostSuspended() const;
   // Card capacity and used space (the first used-space call scans the FAT; the SDK caches it ~20 s).
   uint64_t sdTotalBytes();
-  // False means unavailable, including a failed scan; zero can also be a valid result.
-  bool sdUsedBytes(uint64_t& usedBytes);
+  uint64_t sdUsedBytes();
   // Read the entire file at `path` into a String. Returns empty string on failure.
   String readFile(const char* path);
   // Low-memory helpers:
@@ -53,6 +53,10 @@ class HalStorage {
   bool writeFile(const char* path, const String& content);
   // Ensure a directory exists, creating it if necessary. Returns true on success.
   bool ensureDirectoryExists(const char* path);
+  // List files in a directory (up to maxFiles). Returns empty on failure.
+  std::vector<String> listFiles(const char* path, int maxFiles = 0);
+  // Read up to maxBytes into a buffer (null-terminated). Returns bytes read.
+  size_t readFileToBuffer(const char* path, char* buffer, size_t bufferSize, size_t maxBytes = 0);
 
   HalFile open(const char* path, const oflag_t oflag = O_RDONLY);
   bool mkdir(const char* path, const bool pFlag = true);
@@ -107,6 +111,7 @@ class HalFile : public Print {
   bool seekCur(int64_t offset);
   bool seekSet(size_t offset);
   bool truncate(uint64_t length);
+  bool rename(const char* newPath);
   int available() const;
   size_t position() const;
   int read(void* buf, size_t count);

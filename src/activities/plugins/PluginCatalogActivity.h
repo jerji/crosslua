@@ -145,6 +145,7 @@ class PluginCatalogActivity final : public CatalogActivity {
   bool showPluginHubInstallRow = false;
   bool storeAvailable = false;       // the CrossLua App Store app is on the card
   bool showStoreInstallRow = false;  // no store on the card: offer to bootstrap it from the repo
+  bool showOpds = false;            // OPDS browser row in the picker
   bool ignoreHubInstallerBackRelease = false;
   OptionPopup pluginHubPopup;
   bool rootMode = false;

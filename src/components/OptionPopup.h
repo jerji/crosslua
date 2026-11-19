@@ -120,7 +120,7 @@ class OptionPopup {
 
     const auto swipe = input.wasSwipe();
     if (swipe == MappedInputManager::SwipeDir::Up || swipe == MappedInputManager::SwipeDir::Down) {
-      const int rows = visibleOptions.load();
+      const int rows = 3;  // approximate page size; SDK scrolls per-option
       pendingScroll.fetch_add(swipe == MappedInputManager::SwipeDir::Up ? rows : -rows);
       requestUpdate();
       return true;
@@ -261,21 +261,27 @@ class OptionPopup {
                            fui::clampI16(safe.height)};
     const int16_t width =
         fui::clampI16(std::min<int>(screen.width * 3 / 4, screen.width - metrics.optionPopupDialogSideMargin * 2));
-    props.visibleOptions = 1;
-    const int singleOptionHeight = fui::optionDialogHeight(target, props, width);
-    const int maxHeight = screen.height - metrics.optionPopupDialogSideMargin * 2;
-    const int visibleCount =
-        std::clamp(1 + (maxHeight - singleOptionHeight) / (props.buttonHeight + props.gap), 1, static_cast<int>(count));
-    if (follow) {
-      firstOption = fui::listTopIndexFor(selected, firstOption, visibleCount, count);
+    props.visibleOptions = 0;  // 0 = show all; SDK clips vertically when > 0
+    const int16_t dialogH = fui::optionDialogHeight(target, props, width);
+    if (dialogH <= 0) return;
+    // Compute visible option count from the dialog height for swipe-page scrolling.
+    {
+      const int totalOpts = static_cast<int>(count);
+      const int maxH = screen.height - metrics.optionPopupDialogSideMargin * 2;
+      int visCount = totalOpts;
+      if (dialogH > maxH) {
+        visCount = std::max(1, 1 + (maxH - props.buttonHeight - props.gap) / (props.buttonHeight + props.gap));
+      }
+      props.visibleOptions = static_cast<uint8_t>(std::min(visCount, totalOpts));
+      if (follow) {
+        firstOption = fui::listTopIndexFor(selected, firstOption, visCount, totalOpts);
+      }
+      const int scroll = std::clamp(pendingScroll.exchange(0), -totalOpts, totalOpts);
+      firstOption = std::clamp(firstOption + scroll, 0, std::max(0, totalOpts - visCount));
+      props.firstOption = static_cast<uint8_t>(firstOption);
     }
-    const int scroll = std::clamp(pendingScroll.exchange(0), -static_cast<int>(count), static_cast<int>(count));
-    firstOption = std::clamp(firstOption + scroll, 0, count - visibleCount);
-    visibleOptions = visibleCount;
-    props.firstOption = static_cast<uint8_t>(firstOption);
-    props.visibleOptions = static_cast<uint8_t>(visibleCount);
-    const int16_t height = fui::optionDialogHeight(target, props, width);
-    const fui::Rect dialogRect = fui::centeredRect(screen, fui::Size{width, height});
+    const fui::Rect dialogRect = fui::centeredRect(screen, fui::Size{static_cast<int16_t>(width),
+                                      static_cast<int16_t>(fui::optionDialogHeight(target, props, width))});
 
     // Chrome guard first, options after: route() scans newest-first, so the
     // option buttons win inside the dialog and the guard absorbs the rest.
@@ -307,7 +313,6 @@ class OptionPopup {
     const int count = std::min<int>(ownedStrings.size(), MAX_OPTIONS);
     selectedIndex = currentIndex >= 0 && currentIndex < count ? currentIndex : 0;
     firstOption = 0;
-    visibleOptions = 1;
     pendingScroll = 0;
     followSelection = true;
     onSelectCallback = std::move(onSelect);
@@ -324,7 +329,6 @@ class OptionPopup {
   std::atomic<int> selectedIndex{0};
   // Only rendering moves the viewport; input queues scroll/follow requests.
   mutable int firstOption = 0;
-  mutable std::atomic<int> visibleOptions{1};
   mutable std::atomic<int> pendingScroll{0};
   mutable std::atomic<bool> followSelection{true};
   std::function<void(int)> onSelectCallback;
