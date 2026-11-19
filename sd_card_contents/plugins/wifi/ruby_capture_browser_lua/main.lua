@@ -66,8 +66,9 @@ local function list_view(title, n, label, hint)
     gfx.text(14, H - 34, hint, "small")
     gfx.present()
     local e = input.wait()
-    if e == "up" and n > 0 then cur = cur > 1 and cur - 1 or n
-    elseif e == "down" and n > 0 then cur = cur < n and cur + 1 or 1
+    -- X4 Pro grid mode sends left/right (not up/down) from the two physical buttons: accept both pairs.
+    if (e == "up" or e == "left") and n > 0 then cur = cur > 1 and cur - 1 or n
+    elseif (e == "down" or e == "right") and n > 0 then cur = cur < n and cur + 1 or 1
     elseif e == "confirm" and n > 0 then return cur
     elseif e == "back" then return nil end
   end
