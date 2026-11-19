@@ -808,7 +808,9 @@ end
 
 local __main
 __main = function()
-  device.input_mode("grid")
+  -- nav mode: every view here (deck, note, menu, confirm) moves its cursor with up/down.
+  -- The note cursor walks the blocks and the footer buttons and turns pages by itself (clampNote).
+  device.input_mode("nav")
   local ok, err = cores.begin()
   if not ok then
     S.entries = {}
