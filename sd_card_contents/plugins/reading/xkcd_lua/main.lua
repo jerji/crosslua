@@ -18,13 +18,13 @@
 -- Controls (7 buttons, no touch on the X4; the C++ tap targets are mapped
 -- to buttons):
 --   menu    up/down move, confirm open, back exits
---   list    up/down cursor, confirm open, left/right page, back to menu
---   number  up/down spin digit, right append, left backspace, confirm GO
+--   list    up/down cursor (runs off the top/bottom of a page = page turn), confirm open, back to menu
+--   number  up/down spin digit (0-9, then GO), confirm adds digit / runs GO, back erases (cancel when empty)
 --   reader  up/down pan (spilling into prev/next comic at the ends),
 --           left/right prev/next comic, confirm = reader menu
 --           (WHOLE COMIC / PAGE VIEW toggle, ALT TEXT), back to menu
 
-device.input_mode("grid")
+device.input_mode("nav")   -- nav: physical buttons = up/down only (no grid-mode vertical loss)
 local core = require("xkcd_core")
 
 local BASE = "sd:Xkcd"
@@ -292,7 +292,7 @@ local function drawList()
     end
     y = y + ROW_H
   end
-  gfx.text(MARGIN, 780, "left/right: page   back: menu", "ui12")
+  gfx.text(MARGIN, 780, "up/down: move, past the edge = page   back: menu", "ui12")
   gfx.present()
 end
 
@@ -300,13 +300,13 @@ local function drawNumber()
   gfx.clear()
   gfx.text(MARGIN, 24, "GO TO NUMBER", "sans18", "b")
   local shown = typed
-  if #typed < 5 then shown = shown .. digit end
+  if #typed < 5 then shown = shown .. (digit == 10 and " [GO]" or tostring(digit)) end
   gfx.text(0, 90, "#" .. shown, "sans18", "bc")
   local firstRec = arch.count > 0 and readRecord(0) or nil
   local first = firstRec and firstRec.num or 1
   gfx.text(0, 140, ("%d to %d   (%d comics on the card)"):format(first, arch.maxNum, arch.count), "ui12", "c")
-  gfx.text(0, 200, "up/down: digit   right: enter   left: erase", "ui12", "c")
-  gfx.text(0, 226, "confirm: go   back: cancel", "ui12", "c")
+  gfx.text(0, 200, "up/down: digit (past 9 is GO)", "ui12", "c")
+  gfx.text(0, 226, "confirm: add digit or GO   back: erase / cancel", "ui12", "c")
   gfx.present()
 end
 
@@ -603,7 +603,7 @@ local function menuAction(row)
     view = "list"
     drawList()
   elseif row == "number" then
-    typed, digit = "", 0
+    typed, digit = "", 1
     view = "number"
     drawNumber()
   elseif row == "random" then
@@ -614,6 +614,10 @@ end
 local function handleBack()
   if view == "menu" then
     exited = true
+  elseif view == "number" and #typed > 0 then
+    typed = typed:sub(1, -2)
+    if typed == "" then digit = 1 end
+    drawNumber()
   elseif view == "list" or view == "number" or view == "notice" then
     toMenu()
   elseif view == "reader" then
@@ -630,12 +634,17 @@ local function handleUp()
     if cursor < 0 then cursor = 3 end
     drawMenu()
   elseif view == "list" then
-    if listSel > 0 then listSel = listSel - 1 end
+    if listSel > 0 then
+      listSel = listSel - 1
+    elseif listFirst > 0 then
+      listFirst = math.max(0, listFirst - PAGE_ROWS)
+      listSel = PAGE_ROWS - 1
+    end
     drawList()
   elseif view == "number" then
     local lo = #typed == 0 and 1 or 0
     digit = digit - 1
-    if digit < lo then digit = 9 end
+    if digit < lo then digit = 10 end
     drawNumber()
   elseif view == "rmenu" then
     cursor = cursor - 1
@@ -650,12 +659,18 @@ local function handleDown()
     if cursor > 3 then cursor = 0 end
     drawMenu()
   elseif view == "list" then
-    if listSel < PAGE_ROWS - 1 then listSel = listSel + 1 end
+    local lastOnPage = math.min(PAGE_ROWS - 1, arch.count - listFirst - 1)
+    if listSel < lastOnPage then
+      listSel = listSel + 1
+    elseif listFirst + PAGE_ROWS < arch.count then
+      listFirst = listFirst + PAGE_ROWS
+      listSel = 0
+    end
     drawList()
   elseif view == "number" then
     local lo = #typed == 0 and 1 or 0
     digit = digit + 1
-    if digit > 9 then digit = lo end
+    if digit > 10 then digit = lo end
     drawNumber()
   elseif view == "rmenu" then
     cursor = cursor + 1
@@ -673,7 +688,10 @@ local function handleConfirm()
     local p = arch.count - 1 - (listFirst + listSel)
     if p >= 0 then openComicAt(p, false) end
   elseif view == "number" then
-    if typed ~= "" then
+    if digit ~= 10 then
+      if #typed < 5 and not (typed == "" and digit == 0) then typed = typed .. digit end
+      drawNumber()
+    elseif typed ~= "" then
       local n = tonumber(typed)
       local i = n and core.archiveFind(arch, n) or -1
       if i >= 0 then
