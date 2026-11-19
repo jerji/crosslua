@@ -1,5 +1,6 @@
 -- Home Assistant browser (network). Path: MAIN MENU > ROOMS (areas) or TYPES (domains) > list > entity > action.
--- Back goes up one level; Back at the top exits. Up/Down move, Confirm opens or runs, Left/Right page a long list.
+-- Back goes up one level; Back at the top exits. Prev/next move (left/right in grid mode, up/down also accepted),
+-- holding prev/next pages a long list, Confirm opens or runs.
 -- Setup (first run, or after the vault is reset): server URL and a long-lived token, stored in the vault (PIN).
 -- Homelab mode: http and https are both allowed. https is only verified if HomeAssistant/ca.pem is on the card; the
 -- screen shows a warning when it is not.
@@ -44,7 +45,7 @@ local function draw()
   if #f.items == 0 then gfx.text(16, y, "(nothing here)", "ui12") end
   gfx.text(14, H - 60, clip(note, 60), "small")
   if ha.warning then gfx.text(14, H - 84, clip(ha.warning, 60), "small", "b") end
-  gfx.text(14, H - 34, "Up/Down move, Confirm open, Back up", "small")
+  gfx.text(14, H - 34, "Prev/Next move, Confirm open, Back up", "small")
   gfx.present()
 end
 
@@ -218,10 +219,10 @@ local ok, err = pcall(function()
     if e == "back" then
       if #stack == 1 then break end
       table.remove(stack); note = ""
-    elseif e == "up" then f.sel = f.sel > 1 and f.sel - 1 or math.max(1, #f.items); note = ""
-    elseif e == "down" then f.sel = f.sel < #f.items and f.sel + 1 or 1; note = ""
-    elseif e == "left" then f.sel = math.max(1, f.sel - PAGE)
-    elseif e == "right" then f.sel = math.min(math.max(1, #f.items), f.sel + PAGE)
+    elseif e == "up" or e == "left" then f.sel = f.sel > 1 and f.sel - 1 or math.max(1, #f.items); note = ""
+    elseif e == "down" or e == "right" then f.sel = f.sel < #f.items and f.sel + 1 or 1; note = ""
+    elseif e == "up_hold" then f.sel = math.max(1, f.sel - PAGE)              -- hold prev: page back
+    elseif e == "down_hold" then f.sel = math.min(math.max(1, #f.items), f.sel + PAGE)  -- hold next: page forward
     elseif e == "confirm" then confirm()
     end
     draw()
