@@ -31,7 +31,17 @@
 --     lists. The clue is set in sans18 (the reading serif does not exist in
 --     the Lua font set) and wrapped by width.
 
-device.input_mode("grid")
+device.input_mode("nav")
+-- Physical buttons: nav mode (up/down) for menus, choice lists and reason lists;
+-- grid mode (left/right) for the views whose actions are horizontal: quizmaster,
+-- the notice footer, and a solo question after it is answered (no choice left to move).
+local function want_mode(view, chosen)
+  if view == "quizmaster" or view == "notice" or (view == "solo" and chosen and chosen >= 0) then
+    device.input_mode("grid")
+  else
+    device.input_mode("nav")
+  end
+end
 local function __main()
   local W, H = gfx.size()
   local M, ASIDE_W, ASIDE_GAP, CHROME_H, FOOTER_H = 16, 132, 12, 44, 62
@@ -512,6 +522,7 @@ local function __main()
   -- ---------------------------------------------------------------- events
   draw()
   while not done do
+    want_mode(view, chosen)
     local e = input.wait()
     if view == "menu" then
       if e == "up" then cursor = cursor > 1 and cursor - 1 or 4
